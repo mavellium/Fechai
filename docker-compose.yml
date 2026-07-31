@@ -1,0 +1,194 @@
+# Stack de produção do fechai (servidor Linux) — único docker-compose do projeto.
+#
+# "web" e "worker" usam a MESMA imagem (um único Dockerfile) — só o `command`
+# muda. O `image:` igual nos dois faz o Compose reaproveitar o build em vez de
+# compilar duas vezes.
+#
+# "evolution" + "evolution-postgres" são o gateway de WhatsApp (Evolution API v2,
+# self-hosted). Roda junto com a stack em produção; localmente use
+# `docker-compose.evolution.yml` para subir só ele sem o resto.
+#
+# Uso (deploy completo, servidor):
+#   cp .env.example .env      # preencha os valores reais
+#   docker compose build
+#   docker compose up -d
+#
+# Uso (dev local — só a infra, app roda via `next dev` fora do Docker):
+#   npm run db:up             # == docker compose up -d postgres redis
+#
+# Detalhes e passo a passo completo em README.docker.md.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
+      POSTGRES_DB: ${POSTGRES_DB:-saas}
+    ports:
+      # Só em loopback: dá pra rodar `npm run dev` local (fora do Docker) e pra
+      # inspecionar o banco no próprio servidor (psql/DBeaver via túnel SSH), mas
+      # não fica alcançável de fora da máquina.
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - fechai_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-saas}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redisdata:/data
+    networks:
+      - fechai_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  web:
+    image: fechai-app:prod
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY}
+    command: ["npm", "run", "start"]
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Dentro da rede do compose o Postgres/Redis são acessados pelo nome do
+      # serviço — sobrescreve o que estiver em .env (pensado pra rodar fora do Docker).
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-saas}?schema=public
+      REDIS_URL: redis://redis:6379
+      NODE_ENV: production
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - fechai_net
+    healthcheck:
+      test: ["CMD", "node", "docker/healthcheck-web.js"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  worker:
+    image: fechai-app:prod
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY}
+    command: ["npm", "run", "worker"]
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-saas}?schema=public
+      REDIS_URL: redis://redis:6379
+      NODE_ENV: production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - fechai_net
+    healthcheck:
+      test: ["CMD", "node", "docker/healthcheck-worker.js"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # Gateway de WhatsApp (Evolution API v2). O app (evolution.ts) fala com ele
+  # via HTTP na porta EVOLUTION_PORT. Banco próprio isolado (evolution-postgres)
+  # e cache Redis reutilizando o redis da stack.
+  evolution-postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${EVOLUTION_DB_USER:-evolution}
+      POSTGRES_PASSWORD: ${EVOLUTION_DB_PASSWORD:-evolution}
+      POSTGRES_DB: ${EVOLUTION_DB_NAME:-evolution}
+    volumes:
+      - evolutionpgdata:/var/lib/postgresql/data
+    networks:
+      - fechai_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${EVOLUTION_DB_USER:-evolution} -d ${EVOLUTION_DB_NAME:-evolution}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  evolution:
+    image: evoapicloud/evolution-api:v2.3.7
+    restart: unless-stopped
+    environment:
+      # URL pública da própria Evolution (aparece no painel dela). Sem valor
+      # real, usa localhost.
+      SERVER_URL: ${EVOLUTION_PUBLIC_URL:-http://localhost:8080}
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:?defina EVOLUTION_API_KEY no .env}
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: "postgresql"
+      DATABASE_CONNECTION_URI: postgresql://${EVOLUTION_DB_USER:-evolution}:${EVOLUTION_DB_PASSWORD:-evolution}@evolution-postgres:5432/${EVOLUTION_DB_NAME:-evolution}
+      DATABASE_SAVE_DATA_INSTANCE: "true"
+      DATABASE_SAVE_DATA_NEW_MESSAGE: "true"
+      DATABASE_SAVE_MESSAGE_UPDATE: "true"
+      DATABASE_SAVE_DATA_CONTACTS: "true"
+      DATABASE_SAVE_DATA_CHATS: "true"
+      DATABASE_SAVE_DATA_LABELS: "true"
+      DATABASE_SAVE_DATA_HISTORIC: "true"
+      DATABASE_CONNECTION_CLIENT_NAME: fechai_evolution
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: "redis://redis:6379/6"
+      CACHE_REDIS_PREFIX_KEY: evolution
+      CACHE_REDIS_SAVE_INSTANCES: "false"
+      CACHE_LOCAL_ENABLED: "false"
+      # Webhook para o app receber mensagens reais. Em produção aponte para o
+      # fechai (ex.: https://seu-dominio.com/api/webhooks/whatsapp) e ligue.
+      WEBHOOK_GLOBAL_ENABLED: ${EVOLUTION_WEBHOOK_ENABLED:-false}
+      WEBHOOK_GLOBAL_URL: ${EVOLUTION_WEBHOOK_URL:-}
+      WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS: "false"
+      WEBHOOK_EVENTS_QRCODE_UPDATED: "true"
+      WEBHOOK_EVENTS_MESSAGES_UPSERT: "true"
+      WEBHOOK_EVENTS_CONNECTION_UPDATE: "true"
+      LANGUAGE: pt-BR
+    ports:
+      - "${EVOLUTION_PORT:-8080}:8080"
+    depends_on:
+      evolution-postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - fechai_net
+
+networks:
+  fechai_net:
+    driver: bridge
+
+volumes:
+  pgdata:
+  redisdata:
+  evolutionpgdata:

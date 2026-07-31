@@ -1,0 +1,32 @@
+# Dependências e build (reconstruídos dentro da imagem)
+node_modules
+.next
+out
+build
+coverage
+
+# Controle de versão e ferramentas locais
+.git
+.gitignore
+.vscode
+.idea
+.claude
+
+# Segredos e arquivos locais — NUNCA devem entrar no contexto/imagem
+.env
+.env.*
+!.env.example
+contas.txt
+
+# Docker e docs (não fazem parte do runtime)
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+docs
+*.md
+README.docker.md
+
+# Diversos
+.DS_Store
+npm-debug.log*
+*.tsbuildinfo

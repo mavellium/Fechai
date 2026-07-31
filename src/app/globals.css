@@ -1,26 +1,154 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/*
+ * Tokens de marca — ver docs/brand-guide.md e docs/CONVENTIONS.md (Tokens de marca).
+ * Tailwind v4: tokens ficam no @theme (não há tailwind.config.ts).
+ */
+@theme {
+  --color-ink: #14171f;
+  --color-paper: #f7f8fb;
+  --color-iris: #4b3cf0; /* primária de marca */
+  --color-signal: #ff6b4a; /* CTA/conversão — só em botões de ação */
+  --color-success: #1fc8a3;
+  --color-neutral: #6b7280;
+
+  /* Cores semânticas funcionais (fora da paleta de marca, uso restrito): */
+  --color-warn: #f59e0b; /* avisos/pendências */
+  --color-danger: #dc2626; /* erros/destrutivo */
+
+  /*
+   * As fontes de marca (Clash Display / Satoshi) ainda não foram adicionadas.
+   * O fallback PRECISA estar dentro do var() — `var(--nao-definida), outra` é
+   * inválido em tempo de computação (IACVT) e derruba a declaração inteira,
+   * fazendo o navegador cair no serif padrão. Com `var(--a, var(--b))` a cadeia
+   * degrada para a fonte do next/font sem quebrar nada.
+   */
+  --font-display: var(--font-clash-display, var(--font-space-grotesk)), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-satoshi, var(--font-jakarta)), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono, ui-monospace), monospace;
+
+  /*
+   * Degrau "micro" da escala tipográfica: rótulos, metadados e eyebrows em
+   * font-mono. Existe como token porque estava espalhado como valor solto
+   * (`text-[9px]`, `text-[10px]`, `text-[11px]` — três tamanhos para o mesmo
+   * papel). Um passo só, nomeado: `text-micro`. Abaixo disto, nada.
+   */
+  --text-micro: 0.6875rem; /* 11px */
+  --text-micro--line-height: 1.45;
+
+  /*
+   * Raios por família de elemento. A regra é "um raio por papel, nunca valor
+   * solto": controle e superfície não se misturam, e nada mais é inventado.
+   */
+  --radius-control: 0.5rem; /* 8px  — botão, campo, select, switch */
+  --radius-surface: 0.75rem; /* 12px — card, diálogo, item de lista, bolha */
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+/*
+ * Superfície escura dos painéis (dashboard + admin).
+ *
+ * O produto tem duas superfícies: `paper` (marketing, auth, onboarding) e `ink`
+ * (painel logado). Antes cada tela do painel reescrevia à mão o mesmo override
+ * (`className="border-white/20 bg-transparent text-white/70 ..."`) em cada
+ * botão/input — três implementações divergentes do mesmo elemento.
+ *
+ * Agora o layout do painel marca `data-surface="dark"` e os primitivos de
+ * `src/components/ui/` trazem a variante `panel:` embutida. Nenhuma tela
+ * precisa saber a cor da superfície em que está.
+ */
+@custom-variant panel (&:where([data-surface="dark"] *));
+
+/*
+ * Seta do <select> (components/ui/select.tsx).
+ *
+ * É desenhada como background-image, e não como um <svg> irmão dentro de um
+ * wrapper posicionado: com wrapper, a seta se ancora no wrapper (sempre 100% de
+ * largura) enquanto a largura passada por className vai para o <select> — então
+ * em qualquer select mais estreito que o container a seta descolava do campo.
+ * Sem wrapper, o <select> é um elemento só e `className` se comporta como em
+ * qualquer outro campo.
+ */
+.ui-select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  background-size: 0.875rem;
+}
+[data-surface="dark"] .ui-select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-opacity='0.6' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* Âncoras do menu: rolagem suave nativa + offset do header fixo (nada de lib de scroll). */
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 76px;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}
+
+/* Assinatura da marca: "digitando → check" (TypingToCheck.tsx). */
+.ttc-dot {
+  animation: ttc-bounce 1s ease-in-out infinite;
+}
+@keyframes ttc-bounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  30% {
+    transform: translateY(-25%);
+    opacity: 1;
+  }
+}
+.ttc-draw {
+  stroke-dasharray: 26;
+  stroke-dashoffset: 26;
+  animation: ttc-draw 0.35s ease-out forwards;
+}
+@keyframes ttc-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.ttc-pop {
+  animation: ttc-pop 0.25s ease-out;
+}
+@keyframes ttc-pop {
+  from {
+    transform: scale(0.6);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+
+/* Reveals de scroll da landing (LandingMotion.tsx). Só escondem quando o JS ativa. */
+[data-animate="on"] .reveal {
+  opacity: 0;
+  transform: translateY(24px);
+  transition:
+    opacity 0.55s ease-out,
+    transform 0.55s ease-out;
+}
+[data-animate="on"] .reveal.is-revealed {
+  opacity: 1;
+  transform: none;
+}
+
+/* Respeita a preferência do usuário por menos movimento (Parte B). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
 }

@@ -1,0 +1,56 @@
+# Evolution API — gateway de WhatsApp, rodando só ela na máquina local.
+#
+# Subir apenas este serviço (não a stack de produção):
+#   docker compose -f docker-compose.evolution.yml up -d
+#
+# Reaproveita o Redis local do projeto (saas_redis, localhost:6379) via
+# host.docker.internal — não cria Redis nem Postgres do app. O Postgres aqui é
+# exclusivo da Evolution (evolution-postgres), com volume próprio.
+services:
+  evolution-postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: evolution
+      POSTGRES_PASSWORD: evolution
+      POSTGRES_DB: evolution
+    volumes:
+      - evolutionpgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U evolution -d evolution"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  evolution:
+    image: evoapicloud/evolution-api:v2.3.7
+    restart: unless-stopped
+    environment:
+      SERVER_URL: http://localhost:8080
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:?defina EVOLUTION_API_KEY no .env}
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: "postgresql"
+      DATABASE_CONNECTION_URI: postgresql://evolution:evolution@evolution-postgres:5432/evolution
+      DATABASE_SAVE_DATA_INSTANCE: "true"
+      DATABASE_SAVE_DATA_NEW_MESSAGE: "true"
+      DATABASE_SAVE_MESSAGE_UPDATE: "true"
+      DATABASE_SAVE_DATA_CONTACTS: "true"
+      DATABASE_SAVE_DATA_CHATS: "true"
+      DATABASE_SAVE_DATA_LABELS: "true"
+      DATABASE_SAVE_DATA_HISTORIC: "true"
+      DATABASE_CONNECTION_CLIENT_NAME: fechai_evolution_local
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: "redis://host.docker.internal:6379/6"
+      CACHE_REDIS_PREFIX_KEY: evolution
+      CACHE_REDIS_SAVE_INSTANCES: "false"
+      CACHE_LOCAL_ENABLED: "false"
+      LANGUAGE: pt-BR
+    ports:
+      - "${EVOLUTION_PORT:-8080}:8080"
+    depends_on:
+      evolution-postgres:
+        condition: service_healthy
+
+volumes:
+  evolutionpgdata:

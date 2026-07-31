@@ -1,0 +1,217 @@
+// Prisma schema — fechai: SaaS de agente de WhatsApp com IA (MVP)
+// Regra multi-tenant: TODA query filtra por tenantId (ver src/lib/prisma + repositórios).
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [pgvector(map: "vector")]
+}
+
+enum UserRole {
+  OWNER // dono do tenant (usuário comum do SaaS)
+  SUPERADMIN // admin do painel (admin)/
+}
+
+enum PlanKey {
+  FREE
+  STARTER
+  PRO
+  BUSINESS
+}
+
+model Tenant {
+  id               String            @id @default(cuid())
+  name             String
+  planKey          PlanKey           @default(FREE)
+  status           String            @default("active") // active | suspended
+  createdAt        DateTime          @default(now())
+
+  // Onboarding guiado (/onboarding). Enquanto `onboardingCompleted` for false, o
+  // dashboard redireciona para o wizard; `onboardingStep` + `onboardingDraft`
+  // permitem retomar de onde o usuário parou.
+  onboardingCompleted Boolean @default(false)
+  onboardingStep      Int     @default(1)
+  onboardingDraft     Json?
+
+  users            User[]
+  agents           Agent[]
+  knowledgeDocs    KnowledgeDocument[]
+  actions          TenantAction[]
+  whatsappInstance WhatsappInstance?
+  leads            Lead[]
+  conversations    Conversation[]
+  feedbacks        Feedback[]
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String?
+  passwordHash String?
+  role         UserRole  @default(OWNER)
+  tenantId     String
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt    DateTime  @default(now())
+
+  @@index([tenantId])
+}
+
+model Feedback {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  message   String
+  rating    Int? // 1-5, opcional
+  status    String   @default("new") // new | read | resolved
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+}
+
+/// Um agente configurável. Era `AgentConfig` com `tenantId @unique` (um por
+/// conta); virou `Agent` (vários por conta, limitado por `maxAgents` do plano).
+/// Base de conhecimento e ações passaram a pendurar aqui, não no Tenant: dois
+/// agentes da mesma conta atendem contextos diferentes e não podem se
+/// contaminar (o de vendas respondendo com documento do suporte).
+model Agent {
+  id           String   @id @default(cuid())
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name         String   @default("Meu agente")
+  systemPrompt String   @default("")
+  objective    String   @default("")
+  personaDraft Json? // respostas cruas do wizard, para reeditar
+  /// Agente que atende o número de WhatsApp da conta. Enquanto o WhatsApp for
+  /// um por conta (ver CHANGELOG), exatamente um agente é o principal.
+  isPrimary    Boolean  @default(false)
+  archived     Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  knowledgeDocs KnowledgeDocument[]
+  actions       TenantAction[]
+  conversations Conversation[]
+
+  @@index([tenantId])
+}
+
+model KnowledgeDocument {
+  id        String            @id @default(cuid())
+  tenantId  String
+  tenant    Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // Documento pertence a UM agente. `tenantId` segue aqui porque a regra de
+  // ouro do multi-tenant é toda query filtrar por ele (ver topo do arquivo).
+  agentId   String
+  agent     Agent             @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  title     String
+  content   String
+  status    String            @default("pending") // pending | ready | failed | no_embeddings
+  chunks    KnowledgeChunk[]
+  createdAt DateTime          @default(now())
+
+  @@index([tenantId])
+  @@index([agentId])
+}
+
+model KnowledgeChunk {
+  id         String            @id @default(cuid())
+  tenantId   String
+  // Desnormalizado do documento para o RAG filtrar por agente direto no SQL
+  // cru do pgvector, sem join (ver searchSimilarChunks).
+  agentId    String
+  documentId String
+  document   KnowledgeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  content    String
+  // embedding via pgvector (text-embedding-3-small = 1536 dims).
+  // Unsupported: gravado/consultado via $queryRaw (ver módulo knowledge-base).
+  embedding  Unsupported("vector(1536)")?
+  createdAt  DateTime          @default(now())
+
+  @@index([documentId])
+  @@index([tenantId])
+  @@index([agentId])
+}
+
+/// Ação habilitada para um agente. O nome segue `TenantAction` por compat, mas
+/// o escopo agora é o agente: cada um liga as suas dentro do teto do plano.
+model TenantAction {
+  id       String  @id @default(cuid())
+  tenantId String
+  tenant   Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agentId  String
+  agent    Agent   @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  key      String // schedule_meeting | mark_hot_lead | register_lead | follow_up | handoff_human
+  enabled  Boolean @default(false)
+  config   Json?
+
+  @@unique([agentId, key])
+  @@index([tenantId])
+  @@index([agentId])
+}
+
+model WhatsappInstance {
+  id         String   @id @default(cuid())
+  tenantId   String   @unique
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  status     String   @default("disconnected") // disconnected | pending_qr | connected
+  externalId String? // id da instância na Evolution API
+  updatedAt  DateTime @updatedAt
+}
+
+model Lead {
+  id           String        @id @default(cuid())
+  tenantId     String
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name         String?
+  phone        String
+  status       String        @default("new") // new | warm | hot | scheduled | lost
+  createdAt    DateTime      @default(now())
+  conversation Conversation?
+
+  @@index([tenantId])
+}
+
+model Conversation {
+  id         String    @id @default(cuid())
+  tenantId   String
+  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // Qual agente atendeu. `SetNull` (e não Cascade): excluir um agente não pode
+  // apagar o histórico de conversas nem os leads que ele gerou.
+  agentId    String?
+  agent      Agent?    @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  leadId     String    @unique
+  lead       Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  messages   Message[]
+  needsHuman Boolean   @default(false)
+  lastInboundAt DateTime?
+  followUpSentAt DateTime?
+  updatedAt  DateTime  @updatedAt
+
+  @@index([tenantId])
+  @@index([agentId])
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String // user | assistant | system
+  content        String
+  createdAt      DateTime     @default(now())
+
+  @@index([conversationId])
+}
+
+/// Configuração de IA da PLATAFORMA (não é por tenant) — linha única.
+/// Trocada pelo superadmin em /admin/ia; lida por src/modules/ai/settings.ts.
+model AiSetting {
+  id        String   @id @default("singleton")
+  modelId   String // id do modelo no catálogo (src/modules/ai/catalog.ts)
+  updatedAt DateTime @updatedAt
+  updatedBy String? // e-mail do superadmin que trocou
+}
