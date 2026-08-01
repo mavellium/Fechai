@@ -34,7 +34,6 @@ type SaveState = "idle" | "saving" | "saved";
 export function OnboardingWizard({
   businessName,
   tenantId,
-  origin,
   planLabel,
   actionLimit,
   whatsappStatus,
@@ -43,7 +42,6 @@ export function OnboardingWizard({
 }: {
   businessName: string;
   tenantId: string;
-  origin: string;
   planLabel: string;
   actionLimit: number;
   whatsappStatus: string;
@@ -172,7 +170,6 @@ export function OnboardingWizard({
               <StepIntegration
                 draft={draft}
                 tenantId={tenantId}
-                origin={origin}
                 whatsappStatus={whatsappStatus}
               />
             )}
@@ -524,12 +521,10 @@ function StepProcesses({
 function StepIntegration({
   draft,
   tenantId,
-  origin,
   whatsappStatus,
 }: {
   draft: OnboardingDraft;
   tenantId: string;
-  origin: string;
   whatsappStatus: string;
 }) {
   return (
@@ -545,7 +540,6 @@ function StepIntegration({
 
       <IntegrationPanel
         tenantId={tenantId}
-        origin={origin}
         initialWhatsappStatus={whatsappStatus}
       />
     </div>

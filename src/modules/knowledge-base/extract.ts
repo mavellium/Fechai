@@ -1,3 +1,6 @@
+import { pathToFileURL } from "node:url";
+import path from "node:path";
+
 // Extrai texto de um arquivo enviado. Suporta texto puro (.txt/.md) e PDF.
 export async function extractTextFromFile(file: File): Promise<string> {
   const name = file.name.toLowerCase();
@@ -12,6 +15,22 @@ export async function extractTextFromFile(file: File): Promise<string> {
   const data = new Uint8Array(await file.arrayBuffer());
   try {
     const { PDFParse } = await import("pdf-parse");
+
+    // pdfjs-dist (usado por baixo do pdf-parse) tenta um `import("./pdf.worker.mjs")`
+    // relativo ao próprio chunk bundlado — em dev/prod isso resolve pra dentro de
+    // .next/.../chunks/ssr, onde o worker nunca é copiado, e quebra com "Setting up
+    // fake worker failed". Apontar pro arquivo real (fora do bundle) evita essa
+    // resolução relativa quebrada.
+    const workerPath = path.join(
+      process.cwd(),
+      "node_modules",
+      "pdfjs-dist",
+      "legacy",
+      "build",
+      "pdf.worker.mjs",
+    );
+    PDFParse.setWorker(pathToFileURL(workerPath).href);
+
     const parser = new PDFParse({ data });
     const result = await parser.getText();
     return result.text.trim();

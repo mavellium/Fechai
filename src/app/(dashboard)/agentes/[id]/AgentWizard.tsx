@@ -10,7 +10,14 @@ import { PersonaForm } from "../PersonaForm";
 import { KnowledgeManager } from "../KnowledgeManager";
 import { ActionsToggles } from "../ActionsToggles";
 
-type Doc = { id: string; title: string; status: string; createdAt: Date };
+type Doc = {
+  id: string;
+  title: string;
+  status: string;
+  createdAt: Date;
+  fileUrl: string | null;
+  fileName: string | null;
+};
 
 const STEPS = [
   {

@@ -11,6 +11,7 @@ import { ACTION_BY_KEY, type ActionKey } from "@/modules/agent-engine/actions";
 import { createAgent, getAgentOwned, getAgentUsage } from "@/modules/agent-engine/agents";
 import { ingestDocument, deleteDocument } from "@/modules/knowledge-base/repository";
 import { extractTextFromFile } from "@/modules/knowledge-base/extract";
+import { uploadToBunny } from "@/lib/bunny";
 
 type Result = { ok: boolean; error?: string; info?: string };
 
@@ -190,6 +191,11 @@ export async function setActionEnabled(
 
 // ----------------------------------------------------------- conhecimento
 
+// Mantenha em sincronia com serverActions.bodySizeLimit em next.config.ts —
+// aquele é o teto duro do Next.js (a requisição nem chega aqui se estourar);
+// este é o que dá pro usuário uma mensagem legível em vez de um crash 413.
+const MAX_KB_FILE_BYTES = 50 * 1024 * 1024;
+
 export async function addDocument(_prev: Result | null, formData: FormData): Promise<Result> {
   const agentId = String(formData.get("agentId") ?? "");
   const { tenantId, agent } = await requireAgent(agentId);
@@ -201,10 +207,32 @@ export async function addDocument(_prev: Result | null, formData: FormData): Pro
 
   if (!title) return { ok: false, error: "Dê um título ao documento" };
 
+  if (file instanceof File && file.size > MAX_KB_FILE_BYTES) {
+    return { ok: false, error: "Arquivo muito grande. O tamanho máximo é 50MB." };
+  }
+
   let content = pasted;
+  let fileUrl: string | undefined;
+  let fileName: string | undefined;
   try {
     if (file instanceof File && file.size > 0) {
       content = await extractTextFromFile(file);
+
+      // Guarda o arquivo original na CDN — antes ele era descartado depois de
+      // extrair o texto, e o cliente não tinha como baixar de volta o que enviou.
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const path = `knowledge/${tenantId}/${agent.id}/${Date.now()}-${safeName}`;
+      const uploaded = await uploadToBunny(
+        path,
+        Buffer.from(await file.arrayBuffer()),
+        file.type || "application/octet-stream",
+      );
+      if (uploaded.ok) {
+        fileUrl = uploaded.url;
+        fileName = file.name;
+      } else {
+        console.error("[knowledge-base] falha ao guardar arquivo original na CDN", uploaded.error);
+      }
     }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Falha ao ler arquivo" };
@@ -212,7 +240,7 @@ export async function addDocument(_prev: Result | null, formData: FormData): Pro
 
   if (!content) return { ok: false, error: "Cole um texto ou envie um arquivo" };
 
-  const doc = await ingestDocument({ tenantId, agentId: agent.id, title, content });
+  const doc = await ingestDocument({ tenantId, agentId: agent.id, title, content, fileUrl, fileName });
   revalidateAgent(agent.id);
   const info =
     doc.status === "no_embeddings"

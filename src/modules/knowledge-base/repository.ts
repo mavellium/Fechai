@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { deleteFromBunny } from "@/lib/bunny";
 import { chunkText } from "./chunk";
 import { embedTexts, isEmbeddingConfigured } from "./embeddings";
 
@@ -16,6 +17,8 @@ export async function ingestDocument(input: {
   agentId: string;
   title: string;
   content: string;
+  fileUrl?: string;
+  fileName?: string;
 }) {
   const doc = await prisma.knowledgeDocument.create({
     data: {
@@ -23,6 +26,8 @@ export async function ingestDocument(input: {
       agentId: input.agentId,
       title: input.title,
       content: input.content,
+      fileUrl: input.fileUrl,
+      fileName: input.fileName,
       status: "pending",
     },
   });
@@ -65,13 +70,23 @@ export async function listDocuments(tenantId: string, agentId: string) {
   return prisma.knowledgeDocument.findMany({
     where: { tenantId, agentId },
     orderBy: { createdAt: "desc" },
-    select: { id: true, title: true, status: true, createdAt: true },
+    select: { id: true, title: true, status: true, createdAt: true, fileUrl: true, fileName: true },
   });
 }
 
 export async function deleteDocument(tenantId: string, documentId: string) {
+  // Busca antes de apagar: é o único jeito de saber o fileUrl pra limpar a CDN.
+  const doc = await prisma.knowledgeDocument.findFirst({
+    where: { id: documentId, tenantId },
+    select: { fileUrl: true },
+  });
   // deleteMany com tenantId garante isolamento (não apaga doc de outro tenant).
   await prisma.knowledgeDocument.deleteMany({ where: { id: documentId, tenantId } });
+
+  if (doc?.fileUrl) {
+    const path = new URL(doc.fileUrl).pathname.replace(/^\//, "");
+    await deleteFromBunny(path);
+  }
 }
 
 // Busca semântica para o motor (Milestone 5). Retorna os trechos mais próximos

@@ -1,7 +1,7 @@
 "use client";
 
-import { useActionState, useEffect, useRef, useState, useTransition } from "react";
-import { FileText, Trash2 } from "lucide-react";
+import { useActionState, useEffect, useRef, useState, useTransition, type ChangeEvent } from "react";
+import { Download, FileText, Trash2 } from "lucide-react";
 import { Alert, FormFeedback } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,7 +12,18 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { addDocument, removeDocument } from "./actions";
 
-type Doc = { id: string; title: string; status: string; createdAt: Date };
+type Doc = {
+  id: string;
+  title: string;
+  status: string;
+  createdAt: Date;
+  fileUrl: string | null;
+  fileName: string | null;
+};
+
+// Mesmo teto de agentes/actions.ts (MAX_KB_FILE_BYTES) — checar aqui evita que
+// o usuário só descubra o limite depois de esperar o upload falhar.
+const MAX_FILE_BYTES = 50 * 1024 * 1024;
 
 const STATUS: Record<string, { label: string; tone: "success" | "warn" | "danger" | "neutral" }> = {
   ready: { label: "Pronto", tone: "success" },
@@ -26,7 +37,21 @@ export function KnowledgeManager({ agentId, documents }: { agentId: string; docu
   const [, startRemove] = useTransition();
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [removeError, setRemoveError] = useState<string | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
+
+  // O limite do Next.js (next.config.ts) é aplicado antes da action rodar — um
+  // arquivo grande demais derruba a requisição com um 413 cru. Bloquear aqui,
+  // no input, evita esse crash e explica o motivo na hora.
+  function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (file && file.size > MAX_FILE_BYTES) {
+      setFileError(`"${file.name}" tem ${(file.size / (1024 * 1024)).toFixed(1)}MB — o máximo é 50MB.`);
+      event.target.value = "";
+      return;
+    }
+    setFileError(null);
+  }
 
   // Antes o reset era chamado direto no corpo do render enquanto `state.ok`
   // fosse verdadeiro — ou seja, a cada re-render, apagando o que o usuário
@@ -70,15 +95,18 @@ export function KnowledgeManager({ agentId, documents }: { agentId: string; docu
           />
         </Field>
 
-        <Field label="Arquivo" htmlFor="kb-file" hint="Aceita .txt, .md ou .pdf." optional>
+        <Field label="Arquivo" htmlFor="kb-file" hint="Aceita .txt, .md ou .pdf. Tamanho máximo: 50MB." optional>
           <input
             {...fieldProps("kb-file", { hint: true })}
             type="file"
             name="file"
             accept=".txt,.md,.pdf"
+            onChange={handleFileChange}
             className="w-full text-sm text-white/70 file:mr-3 file:rounded-control file:border-0 file:bg-white/10 file:px-3 file:py-2 file:text-sm file:text-white file:transition-colors hover:file:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris"
           />
         </Field>
+
+        {fileError && <Alert tone="warn">{fileError}</Alert>}
 
         <FormFeedback error={state?.error} info={state?.info} />
 
@@ -115,9 +143,20 @@ export function KnowledgeManager({ agentId, documents }: { agentId: string; docu
                 >
                   <div className="min-w-0">
                     <p className="truncate text-sm font-medium text-white">{d.title}</p>
-                    <Badge tone={s.tone} className="mt-1">
-                      {s.label}
-                    </Badge>
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                      <Badge tone={s.tone}>{s.label}</Badge>
+                      {d.fileUrl && (
+                        <a
+                          href={d.fileUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-xs text-white/60 underline-offset-2 hover:text-white hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris"
+                        >
+                          <Download size={12} aria-hidden />
+                          {d.fileName ?? "arquivo original"}
+                        </a>
+                      )}
+                    </div>
                   </div>
 
                   <ConfirmButton

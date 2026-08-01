@@ -1,9 +1,9 @@
 import { redirect } from "next/navigation";
-import { headers } from "next/headers";
 import { requireOwner } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { PLAN_BY_KEY } from "@/modules/billing/plans";
 import { isStepNumber, parseDraft, FIRST_STEP } from "@/modules/tenants/onboarding-wizard";
+import { ensureTenantWidgetDeployed } from "@/lib/widget/deploy";
 import { OnboardingWizard } from "./OnboardingWizard";
 
 /**
@@ -35,17 +35,14 @@ export default async function OnboardingPage() {
   // Conta suspensa não configura nada — o painel mostra o aviso e o suporte.
   if (tenant.status === "suspended") redirect("/inicio");
 
-  // Origem real da requisição — usada para montar o snippet de instalação no
-  // site do cliente sem depender de env var extra.
-  const headerList = await headers();
-  const host = headerList.get("host") ?? "localhost:3000";
-  const protocol = headerList.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
+  // Publica o widget.js do tenant na CDN sozinho — o snippet do passo 4 já
+  // funciona sem precisar visitar /whatsapp antes.
+  await ensureTenantWidgetDeployed(session.user.tenantId);
 
   return (
     <OnboardingWizard
       businessName={tenant.name}
       tenantId={session.user.tenantId}
-      origin={`${protocol}://${host}`}
       planLabel={PLAN_BY_KEY[tenant.planKey].name}
       actionLimit={PLAN_BY_KEY[tenant.planKey].maxActiveActions}
       whatsappStatus={tenant.whatsappInstance?.status ?? "disconnected"}

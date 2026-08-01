@@ -10,6 +10,7 @@ import { ButtonLink } from "@/components/ui/button";
 import { Card, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { dateLabel } from "@/lib/format";
+import { ensureTenantWidgetDeployed } from "@/lib/widget/deploy";
 import { WhatsappConnect } from "./WhatsappConnect";
 import { SnippetBox } from "./SnippetBox";
 
@@ -23,12 +24,28 @@ export default async function WhatsappPage() {
   const { tenantId } = await requireTenant();
 
   const since = new Date(new Date().getTime() - 7 * 86_400_000);
-  const [instance, inboundLast7] = await Promise.all([
+  const [instance, inboundLast7, tenant] = await Promise.all([
     prisma.whatsappInstance.findUnique({ where: { tenantId } }),
     prisma.message.count({
       where: { role: "user", createdAt: { gte: since }, conversation: { tenantId } },
     }),
+    prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: {
+        widgetColor: true,
+        widgetGreeting: true,
+        widgetIconType: true,
+        widgetIconEmoji: true,
+        widgetIconUrl: true,
+        widgetShape: true,
+        widgetBorderColor: true,
+      },
+    }),
   ]);
+
+  // Publica o widget.js do tenant na CDN na primeira visita — sem comando
+  // manual. No-op se já foi publicado (ver ensureTenantWidgetDeployed).
+  await ensureTenantWidgetDeployed(tenantId);
 
   const configured = getWhatsAppProvider().isConfigured();
   const status = instance?.status ?? "disconnected";
@@ -96,8 +113,9 @@ export default async function WhatsappPage() {
 
         <Card className="p-0">
           {/* `<details>` nativo: abre sem JS, é navegável por teclado e não
-              precisa de estado nem de biblioteca de acordeão. */}
-          <details className="group">
+              precisa de estado nem de biblioteca de acordeão. Aberto por padrão
+              — fechado, o código (e a personalização) "sumia" a cada reload. */}
+          <details className="group" open>
             <summary className="flex cursor-pointer flex-wrap items-center gap-3 rounded-surface p-4 transition-colors hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris">
               <Globe size={18} aria-hidden className="text-iris" />
               <span className="min-w-0 flex-1">
@@ -115,7 +133,16 @@ export default async function WhatsappPage() {
               </span>
             </summary>
             <div className="border-t border-white/10 p-4">
-              <SnippetBox tenantId={tenantId} />
+              <SnippetBox
+                tenantId={tenantId}
+                widgetColor={tenant?.widgetColor ?? "#6d5ef8"}
+                widgetGreeting={tenant?.widgetGreeting ?? "Olá! Como posso ajudar?"}
+                widgetIconType={tenant?.widgetIconType ?? "emoji"}
+                widgetIconEmoji={tenant?.widgetIconEmoji ?? "💬"}
+                widgetIconUrl={tenant?.widgetIconUrl ?? null}
+                widgetShape={tenant?.widgetShape ?? "circle"}
+                widgetBorderColor={tenant?.widgetBorderColor ?? null}
+              />
             </div>
           </details>
         </Card>

@@ -38,6 +38,19 @@ model Tenant {
   onboardingStep      Int     @default(1)
   onboardingDraft     Json?
 
+  // Personalização do widget de chat instalado no site do cliente. Cada tenant
+  // tem seu próprio widget.js publicado na CDN (ver src/lib/widget/deploy.ts),
+  // gerado automaticamente — sem comando manual. `widgetDeployedAt` marca se
+  // esse arquivo já existe; null = ainda não foi publicado nenhuma vez.
+  widgetColor       String    @default("#6d5ef8")
+  widgetGreeting    String    @default("Olá! Como posso ajudar?")
+  widgetIconType    String    @default("emoji") // "emoji" | "image"
+  widgetIconEmoji   String    @default("💬")
+  widgetIconUrl     String? // usado quando widgetIconType == "image" (upload via Bunny)
+  widgetShape       String    @default("circle") // "circle" | "rounded" | "square"
+  widgetBorderColor String? // null = sem borda
+  widgetDeployedAt  DateTime?
+
   users            User[]
   agents           Agent[]
   knowledgeDocs    KnowledgeDocument[]
@@ -111,6 +124,11 @@ model KnowledgeDocument {
   title     String
   content   String
   status    String            @default("pending") // pending | ready | failed | no_embeddings
+  // Arquivo original enviado pelo cliente, guardado na BunnyCDN (ver
+  // src/lib/bunny.ts). `content` continua sendo o texto extraído — o
+  // arquivo em si só existia em memória até aqui e nunca era persistido.
+  fileUrl   String?
+  fileName  String?
   chunks    KnowledgeChunk[]
   createdAt DateTime          @default(now())
 

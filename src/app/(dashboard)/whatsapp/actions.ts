@@ -1,9 +1,12 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { z } from "zod";
 import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { getWhatsAppProvider } from "@/modules/whatsapp";
+import { deployTenantWidget } from "@/lib/widget/deploy";
+import { uploadToBunny } from "@/lib/bunny";
 
 type ConnectResult = {
   ok: boolean;
@@ -56,4 +59,109 @@ export async function refreshWhatsappStatus(): Promise<ConnectResult> {
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Falha ao atualizar" };
   }
+}
+
+// --------------------------------------------------------- widget do site
+
+type WidgetConfigResult = { ok: boolean; error?: string; info?: string };
+
+const MAX_ICON_BYTES = 5 * 1024 * 1024;
+
+const widgetConfigSchema = z.object({
+  widgetColor: z
+    .string()
+    .trim()
+    .regex(/^#[0-9a-fA-F]{6}$/, "Cor inválida — use o seletor ao lado."),
+  widgetGreeting: z.string().trim().min(1, "Escreva uma saudação").max(200, "Saudação muito longa"),
+  widgetIconType: z.enum(["emoji", "image"], { message: "Tipo de ícone inválido" }),
+  widgetIconEmoji: z.string().trim().min(1, "Escolha um emoji").max(8, "Use só um emoji"),
+  widgetShape: z.enum(["circle", "rounded", "square"], { message: "Formato inválido" }),
+  widgetBorderColor: z
+    .string()
+    .trim()
+    .transform((v) => (v === "" ? null : v))
+    .refine((v) => v === null || /^#[0-9a-fA-F]{6}$/.test(v), "Cor de borda inválida"),
+});
+
+/**
+ * Salva a personalização do widget (cor, saudação, ícone, formato, borda) e
+ * republica o widget.js daquele tenant na CDN com os novos valores já
+ * embutidos — automático, sem comando manual. O snippet no site do cliente
+ * não muda.
+ */
+export async function updateWidgetConfig(
+  _prev: WidgetConfigResult | null,
+  formData: FormData,
+): Promise<WidgetConfigResult> {
+  const { tenantId } = await requireTenant();
+
+  const parsed = widgetConfigSchema.safeParse({
+    widgetColor: formData.get("widgetColor"),
+    widgetGreeting: formData.get("widgetGreeting"),
+    widgetIconType: formData.get("widgetIconType"),
+    widgetIconEmoji: formData.get("widgetIconEmoji"),
+    widgetShape: formData.get("widgetShape"),
+    widgetBorderColor: formData.get("widgetBorderColor"),
+  });
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Dados inválidos" };
+  }
+
+  let widgetIconUrl: string | null = null;
+  if (parsed.data.widgetIconType === "image") {
+    const iconImage = formData.get("widgetIconImage");
+    if (iconImage instanceof File && iconImage.size > 0) {
+      if (iconImage.size > MAX_ICON_BYTES) {
+        return { ok: false, error: "Imagem do ícone muito grande. O máximo é 5MB." };
+      }
+      const safeName = iconImage.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const uploaded = await uploadToBunny(
+        `widget-icons/${tenantId}/${Date.now()}-${safeName}`,
+        Buffer.from(await iconImage.arrayBuffer()),
+        iconImage.type || "application/octet-stream",
+      );
+      if (!uploaded.ok) {
+        return { ok: false, error: `Falha ao enviar ícone: ${uploaded.error}` };
+      }
+      widgetIconUrl = uploaded.url;
+    } else {
+      // Sem arquivo novo: mantém o ícone já salvo, se houver.
+      const current = await prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { widgetIconUrl: true },
+      });
+      widgetIconUrl = current?.widgetIconUrl ?? null;
+      if (!widgetIconUrl) return { ok: false, error: "Envie uma imagem para o ícone." };
+    }
+  }
+
+  const deployed = await deployTenantWidget({
+    tenantId,
+    color: parsed.data.widgetColor,
+    greeting: parsed.data.widgetGreeting,
+    iconType: parsed.data.widgetIconType,
+    iconEmoji: parsed.data.widgetIconEmoji,
+    iconUrl: widgetIconUrl,
+    shape: parsed.data.widgetShape,
+    borderColor: parsed.data.widgetBorderColor,
+  });
+  if (!deployed.ok) {
+    return { ok: false, error: `Não consegui publicar o widget na CDN: ${deployed.error}` };
+  }
+
+  await prisma.tenant.update({
+    where: { id: tenantId },
+    data: {
+      widgetColor: parsed.data.widgetColor,
+      widgetGreeting: parsed.data.widgetGreeting,
+      widgetIconType: parsed.data.widgetIconType,
+      widgetIconEmoji: parsed.data.widgetIconEmoji,
+      widgetIconUrl,
+      widgetShape: parsed.data.widgetShape,
+      widgetBorderColor: parsed.data.widgetBorderColor,
+      widgetDeployedAt: new Date(),
+    },
+  });
+  revalidatePath("/whatsapp");
+  return { ok: true, info: "Personalização salva e publicada." };
 }

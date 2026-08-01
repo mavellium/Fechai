@@ -14,15 +14,16 @@ Ingesta documentos do tenant (texto/PDF), quebra em chunks, gera embeddings (Ope
 ## Contratos expostos
 
 ```ts
-ingestDocument({ tenantId, title, content }) -> doc (status: ready|failed|no_embeddings)
-listDocuments(tenantId); deleteDocument(tenantId, documentId)
-searchSimilarChunks(tenantId, queryEmbedding, limit?) -> {content, distance}[]
+ingestDocument({ tenantId, agentId, title, content, fileUrl?, fileName? }) -> doc (status: ready|failed|no_embeddings)
+listDocuments(tenantId, agentId); deleteDocument(tenantId, documentId)
+searchSimilarChunks(agentId, queryEmbedding, limit?) -> {content, distance}[]
 ```
 
 ## Detalhes
 
 - Coluna `embedding vector(1536)` é `Unsupported` no Prisma → gravada/consultada via `$executeRaw`/`$queryRaw`. Distância por cosseno (`<=>`).
 - **Toda** query filtra por `tenantId`.
+- `fileUrl`/`fileName`: o arquivo original enviado pelo cliente (`addDocument` em `agentes/actions.ts`) é guardado na BunnyCDN via `@/lib/bunny` — `content` continua sendo só o texto extraído para o RAG. `deleteDocument` apaga o arquivo da CDN junto com a linha.
 
 ## O que NÃO faz
 

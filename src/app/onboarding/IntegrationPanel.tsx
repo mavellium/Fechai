@@ -22,14 +22,13 @@ const STATUS: Record<string, { label: string; tone: "success" | "warn" | "neutra
 
 export function IntegrationPanel({
   tenantId,
-  origin,
   initialWhatsappStatus,
 }: {
   tenantId: string;
-  origin: string;
   initialWhatsappStatus: string;
 }) {
-  const snippet = `<script src="${origin}/widget.js" data-agente="${tenantId}" defer></script>`;
+  const pullZone = process.env.NEXT_PUBLIC_BUNNY_PULL_ZONE;
+  const snippet = pullZone ? `<script src="https://${pullZone}/widget/${tenantId}/widget.js" defer></script>` : null;
 
   const [status, setStatus] = useState(initialWhatsappStatus);
   const [qr, setQr] = useState<string | null>(null);
@@ -66,16 +65,24 @@ export function IntegrationPanel({
           </div>
         </div>
 
-        <div className="mt-4 overflow-x-auto rounded-lg bg-ink px-4 py-3">
-          <code className="font-mono text-xs whitespace-pre text-white/80">{snippet}</code>
-        </div>
+        {snippet ? (
+          <>
+            <div className="mt-4 overflow-x-auto rounded-lg bg-ink px-4 py-3">
+              <code className="font-mono text-xs whitespace-pre text-white/80">{snippet}</code>
+            </div>
 
-        <div className="mt-3 flex flex-wrap items-center gap-3">
-          <CopyButton value={snippet} label="Copiar código" onCopyError={setError} />
-          <span className="text-xs text-neutral">
-            Não sabe onde colar? Envie para quem cuida do seu site.
-          </span>
-        </div>
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <CopyButton value={snippet} label="Copiar código" onCopyError={setError} />
+              <span className="text-xs text-neutral">
+                Não sabe onde colar? Envie para quem cuida do seu site.
+              </span>
+            </div>
+          </>
+        ) : (
+          <Alert tone="warn" className="mt-4">
+            A CDN do widget ainda não está configurada nesta conta.
+          </Alert>
+        )}
       </section>
 
       {/* ------------------------------------------------------- no whatsapp */}

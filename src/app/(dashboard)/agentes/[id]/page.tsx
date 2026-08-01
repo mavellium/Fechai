@@ -23,7 +23,7 @@ export default async function AgentePage({ params }: { params: Promise<{ id: str
     prisma.knowledgeDocument.findMany({
       where: { tenantId, agentId: agent.id },
       orderBy: { createdAt: "desc" },
-      select: { id: true, title: true, status: true, createdAt: true },
+      select: { id: true, title: true, status: true, createdAt: true, fileUrl: true, fileName: true },
     }),
     prisma.tenantAction.findMany({
       where: { agentId: agent.id, enabled: true },
