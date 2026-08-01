@@ -114,7 +114,14 @@ export default async function ConversasPage({
         actions={<SandboxDialog />}
       />
 
-      <div className="grid min-h-[30rem] flex-1 gap-4 lg:grid-cols-[19rem_minmax(0,1fr)] xl:grid-cols-[19rem_minmax(0,1fr)_17rem]">
+      {/* `grid-rows-[minmax(0,1fr)]`: sem `grid-template-rows`, a única linha
+          implícita é `auto` — em vez de esticar pra ocupar a altura que o
+          `flex-1` reservou, ela pode ficar do tamanho do conteúdo (mesmo
+          "trap" do `min-height:auto`, só que na trilha do grid, não no item).
+          Declarando a linha como `minmax(0, 1fr)` ela vira exatamente a altura
+          disponível, com piso 0 — os Cards (cada um já com `min-h-0`) então
+          recebem uma altura real pra rolar dentro. */}
+      <div className="grid min-h-[30rem] flex-1 grid-rows-[minmax(0,1fr)] gap-4 lg:grid-cols-[19rem_minmax(0,1fr)] xl:grid-cols-[19rem_minmax(0,1fr)_17rem]">
         <Card className={`flex min-h-0 flex-col p-0 ${id ? "hidden lg:flex" : "flex"}`}>
           <h2 className="sr-only">Lista de conversas</h2>
 

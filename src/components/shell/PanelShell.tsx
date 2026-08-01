@@ -56,7 +56,12 @@ export function PanelShell({
         footerLabel={footerLabel}
       />
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      {/* `min-h-0` nos dois: sem isso, a altura mínima "auto" de um item flex
+          (o próprio conteúdo) vence o `flex-1`, e este bloco cresce pra caber
+          tudo em vez de ficar preso na altura da tela — daí o `main` nunca
+          precisa rolar e as áreas internas com scroll próprio (ex.: o chat de
+          /conversas) nunca ganham uma altura travada pra rolar dentro dela. */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3 md:px-6">
           <div className="flex min-w-0 items-center gap-2">
             <MobileNav items={navItems} title="fechai" subtitle={brandSubtitle} />
@@ -71,7 +76,10 @@ export function PanelShell({
           </form>
         </header>
 
-        <main id="conteudo" className="relative flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-8">
+        <main
+          id="conteudo"
+          className="relative flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden p-4 md:p-8"
+        >
           <div
             aria-hidden
             className={`pointer-events-none absolute -right-40 -top-40 h-[360px] w-[360px] rounded-full blur-[120px] ${
@@ -79,13 +87,16 @@ export function PanelShell({
             }`}
           />
           {/*
-            `flex min-h-full flex-col`: telas normais continuam com altura de
-            conteúdo (um único filho em coluna se comporta como bloco), mas uma
-            tela que precise ocupar a viewport inteira — /conversas, que é uma
-            caixa de entrada com scroll por painel — só precisa pedir `flex-1`.
-            Sem isso, `h-full` no filho não resolve: falta altura definida aqui.
+            `flex-1`, não `min-h-full`: `min-height` é só um piso, não dá altura
+            definida — e sem altura definida, o filho de baixo (`flex-1` do
+            `min-h-0` da página) não tem "espaço disponível" real pra calcular,
+            e cai no tamanho do conteúdo (por isso o `main` ficava rolando o
+            pacote inteiro em vez de só a área interna, ex.: /conversas). Com
+            `main` agora `flex flex-col` e este filho em `flex-1`, ele recebe a
+            altura exata que sobra do cabeçalho — telas normais (conteúdo mais
+            curto) só ganham espaço vazio embaixo, sem quebrar nada.
           */}
-          <div className="relative flex min-h-full flex-col">{children}</div>
+          <div className="relative flex flex-1 flex-col">{children}</div>
         </main>
       </div>
     </div>

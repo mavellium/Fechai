@@ -1,4 +1,4 @@
-// Healthcheck do container "worker" (ver Dockerfile.worker e docker-compose.prod.yml).
+// Healthcheck do container "worker" (ver Dockerfile e docker-compose.yml).
 // O worker não expõe HTTP; a única dependência externa dele em runtime é o Redis (BullMQ),
 // então validamos a conexão com ele diretamente.
 const Redis = require("ioredis");

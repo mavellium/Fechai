@@ -8,10 +8,18 @@
 # self-hosted). Roda junto com a stack em produção; localmente use
 # `docker-compose.evolution.yml` para subir só ele sem o resto.
 #
+# HTTPS via Traefik (proxy reverso externo, mesmo padrão do projeto janus):
+# o "web" entra na rede externa `traefik-public` e expõe as rotas por labels —
+# nada de porta mapeada no host para o app. O Traefik (rodando fora deste
+# compose) publica 80/443 e emite o certificado via `myresolver` para
+# `fechai.januscms.com.br`. Pré-requisito: a rede `traefik-public` já existe
+# (`docker network create traefik-public`) e o DNS do domínio aponta pra VPS.
+#
 # Uso (deploy completo, servidor):
 #   cp .env.example .env      # preencha os valores reais
 #   docker compose build
-#   docker compose up -d
+#   docker compose up -d --wait
+#   ./deploy.sh               # deploys incrementais (build + restart do web)
 #
 # Uso (dev local — só a infra, app roda via `next dev` fora do Docker):
 #   npm run db:up             # == docker compose up -d postgres redis
@@ -70,13 +78,12 @@ services:
     env_file:
       - .env
     environment:
-      # Dentro da rede do compose o Postgres/Redis são acessados pelo nome do
-      # serviço — sobrescreve o que estiver em .env (pensado pra rodar fora do Docker).
+      # Dentro da rede do compose os serviços são acessados pelo nome — sobrescreve
+      # o que estiver em .env (pensado pra rodar fora do Docker).
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-saas}?schema=public
       REDIS_URL: redis://redis:6379
+      EVOLUTION_API_URL: http://evolution:8080
       NODE_ENV: production
-    ports:
-      - "${WEB_PORT:-3000}:3000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -84,6 +91,16 @@ services:
         condition: service_healthy
     networks:
       - fechai_net
+      - traefik-public
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-public"
+      - "traefik.http.routers.fechai-prod.rule=Host(`fechai.januscms.com.br`)"
+      - "traefik.http.routers.fechai-prod.entrypoints=websecure"
+      - "traefik.http.routers.fechai-prod.tls.certresolver=myresolver"
+      - "traefik.http.services.fechai-prod.loadbalancer.server.port=3000"
+      - "traefik.http.services.fechai-prod.loadbalancer.healthcheck.path=/api/health"
+      - "traefik.http.services.fechai-prod.loadbalancer.healthcheck.interval=30s"
     healthcheck:
       test: ["CMD", "node", "docker/healthcheck-web.js"]
       interval: 30s
@@ -105,6 +122,7 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-saas}?schema=public
       REDIS_URL: redis://redis:6379
+      EVOLUTION_API_URL: http://evolution:8080
       NODE_ENV: production
     depends_on:
       postgres:
@@ -166,7 +184,7 @@ services:
       CACHE_REDIS_SAVE_INSTANCES: "false"
       CACHE_LOCAL_ENABLED: "false"
       # Webhook para o app receber mensagens reais. Em produção aponte para o
-      # fechai (ex.: https://seu-dominio.com/api/webhooks/whatsapp) e ligue.
+      # fechai (ex.: https://fechai.januscms.com.br/api/webhooks/whatsapp) e ligue.
       WEBHOOK_GLOBAL_ENABLED: ${EVOLUTION_WEBHOOK_ENABLED:-false}
       WEBHOOK_GLOBAL_URL: ${EVOLUTION_WEBHOOK_URL:-}
       WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS: "false"
@@ -175,7 +193,10 @@ services:
       WEBHOOK_EVENTS_CONNECTION_UPDATE: "true"
       LANGUAGE: pt-BR
     ports:
-      - "${EVOLUTION_PORT:-8080}:8080"
+      # Só em loopback: a Evolution é alcançada pelo app pela rede interna
+      # (http://evolution:8080). A porta aberta no host é pra admin/debug via
+      # túnel SSH no próprio servidor — não fica exposta pra internet.
+      - "127.0.0.1:${EVOLUTION_PORT:-8080}:8080"
     depends_on:
       evolution-postgres:
         condition: service_healthy
@@ -187,6 +208,12 @@ services:
 networks:
   fechai_net:
     driver: bridge
+  # Rede externa do Traefik (proxy reverso + HTTPS). Precisa já existir no host:
+  #   docker network create traefik-public
+  # O container do Traefik e o "web" entram nela; o Traefik roteia
+  # fechai.januscms.com.br → web:3000 via os labels acima.
+  traefik-public:
+    external: true
 
 volumes:
   pgdata:

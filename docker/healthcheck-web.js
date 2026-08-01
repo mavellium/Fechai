@@ -1,4 +1,4 @@
-// Healthcheck do container "web" (ver Dockerfile e docker-compose.prod.yml).
+// Healthcheck do container "web" (ver Dockerfile e docker-compose.yml).
 // Bate em /api/health (já checa a conexão com o banco) sem depender de curl/wget na imagem.
 const port = process.env.PORT || 3000;
 

@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 #
 # Imagem única de produção do fechai — usada pelos serviços "web" e "worker" do
-# docker-compose.prod.yml (mesmo código, comandos diferentes: `npm run start` e
+# docker-compose.yml (mesmo código, comandos diferentes: `npm run start` e
 # `npm run worker`). Build multi-stage: deps -> builder -> runner.
 #
 # Node 22 (LTS): next@16 exige >=20.9, mas a linha 20 entra em EOL em 2026-04.
@@ -63,6 +63,6 @@ EXPOSE 3000
 USER app
 
 # Sem HEALTHCHECK fixo aqui: a mesma imagem serve "web" (HTTP) e "worker" (Redis),
-# cada um com o teste certo definido no docker-compose.prod.yml.
+# cada um com o teste certo definido no docker-compose.yml.
 
 CMD ["npm", "run", "start"]

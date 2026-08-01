@@ -42,8 +42,10 @@ Todas degradam com graça quando a env não está configurada (respostas canned 
 
 - **Self-hosted via Docker** (implementado) — `web` e `worker` na mesma imagem, Postgres+Redis
   em containers, e a **Evolution API (WhatsApp)** também roda no compose (`evolution` +
-  `evolution-postgres`, gateway self-hosted). Ver [README.docker.md](./README.docker.md). Localmente,
-  só a Evolution pode subir isolada via `docker-compose.evolution.yml`.
+  `evolution-postgres`, gateway self-hosted). O HTTPS de `fechai.januscms.com.br` é feito pelo
+  **Traefik** do servidor (rede externa `traefik-public` + labels no `web`; mesmo padrão do projeto
+  janus). Ver [README.docker.md](./README.docker.md). Localmente, só a Evolution pode subir isolada
+  via `docker-compose.evolution.yml`.
 - **Vercel (app) + Railway/Fly.io (worker + Redis)** (compatível, não implementado) — alternativa
   gerenciada; o worker roda com `npm run worker` em qualquer um dos dois casos. Neste cenário a
   Evolution continua externa: use um host gerenciado da Evolution API e aponte
