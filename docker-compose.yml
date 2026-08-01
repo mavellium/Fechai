@@ -37,8 +37,9 @@ services:
     ports:
       # Só em loopback: dá pra rodar `npm run dev` local (fora do Docker) e pra
       # inspecionar o banco no próprio servidor (psql/DBeaver via túnel SSH), mas
-      # não fica alcançável de fora da máquina.
-      - "127.0.0.1:5433:5432"
+      # não fica alcançável de fora da máquina. Se a 5433 já estiver ocupada na
+      # VPS (outro Postgres), defina POSTGRES_HOST_PORT no .env para uma livre.
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5433}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks:
@@ -54,7 +55,7 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     ports:
-      - "127.0.0.1:6379:6379"
+      - "127.0.0.1:${REDIS_HOST_PORT:-6379}:6379"
     volumes:
       - redisdata:/data
     networks:
