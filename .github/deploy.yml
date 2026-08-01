@@ -1,0 +1,26 @@
+name: Deploy Automatico Hostinger
+
+on:
+  push:
+    branches:
+      - main 
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Executando deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST_IP }}
+          username: ${{ secrets.HOST_USERNAME }}
+          key: ${{ secrets.HOST_SSH_KEY }}
+          port: 22
+          script: |
+            cd /var/www/Fechai
+            
+            git pull origin main
+            
+            docker compose down
+            docker compose up -d --build
