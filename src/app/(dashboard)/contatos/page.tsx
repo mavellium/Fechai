@@ -1,9 +1,10 @@
 import type { Prisma } from "@prisma/client";
-import { UsersRound, UserPlus } from "lucide-react";
+import { UsersRound, UserPlus, MessageSquare } from "lucide-react";
 import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { getWhatsAppProvider } from "@/modules/whatsapp";
 import { Card } from "@/components/ui/card";
+import { ButtonLink } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { Badge } from "@/components/ui/badge";
@@ -51,7 +52,7 @@ export default async function ContatosPage({
     ];
   }
 
-  const [leads, whatsapp] = await Promise.all([
+  const [leads, whatsapp, recentConvs] = await Promise.all([
     prisma.lead.findMany({
       where,
       orderBy: { conversation: { updatedAt: "desc" } },
@@ -62,6 +63,16 @@ export default async function ContatosPage({
       },
     }),
     prisma.whatsappInstance.findUnique({ where: { tenantId } }),
+    // Sugestões: as 3 conversas mais recentes (com número real) para continuar.
+    prisma.conversation.findMany({
+      where: { tenantId, lead: { phone: { not: "sandbox" } } },
+      orderBy: { updatedAt: "desc" },
+      take: 3,
+      include: {
+        lead: true,
+        messages: { orderBy: { createdAt: "desc" }, take: 1 },
+      },
+    }),
   ]);
 
   const provider = getWhatsAppProvider();
@@ -81,6 +92,53 @@ export default async function ContatosPage({
           WhatsApp não conectado. Conecte na tela{" "}
           <span className="font-mono uppercase">WhatsApp</span> para enviar mensagens.
         </Alert>
+      )}
+
+      {recentConvs.length > 0 && (
+        <section aria-label="Conversas recentes">
+          <h2 className="font-display text-lg font-semibold text-ink panel:text-white">
+            Continuar conversa
+          </h2>
+          <p className="mt-1 text-sm text-neutral panel:text-white/55">
+            Os últimos contatos que conversaram com você — mande uma mensagem ou abra a conversa.
+          </p>
+          <div className="mt-3 grid gap-4 md:grid-cols-3">
+            {recentConvs.map((conv) => {
+              const lead = conv.lead;
+              const last = conv.messages[0];
+              const contact: ContactRef = {
+                id: lead.id,
+                name: lead.name ?? "",
+                phone: lead.phone,
+                isSandbox: lead.phone === "sandbox",
+              };
+              return (
+                <Card key={conv.id} className="flex flex-col gap-3 p-4">
+                  <div className="min-w-0">
+                    <p className="font-display text-sm font-semibold text-ink panel:text-white">
+                      {lead.name || "Sem nome"}
+                    </p>
+                    <p className="mt-0.5 font-mono text-micro text-neutral panel:text-white/50">
+                      {lead.phone}
+                    </p>
+                  </div>
+                  {last && (
+                    <p className="line-clamp-2 text-sm leading-snug text-neutral panel:text-white/60">
+                      {last.content}
+                    </p>
+                  )}
+                  <div className="mt-auto flex flex-wrap items-center gap-2">
+                    <ButtonLink variant="outline" size="sm" href={`/conversas?id=${conv.id}`}>
+                      <MessageSquare size={14} aria-hidden />
+                      Conversar
+                    </ButtonLink>
+                    <SendMessageDialog contact={contact} canSend={connected} />
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+        </section>
       )}
 
       <Card className="flex min-h-0 flex-col p-0">
