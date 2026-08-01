@@ -1,0 +1,152 @@
+import type { Prisma } from "@prisma/client";
+import { UsersRound, UserPlus } from "lucide-react";
+import { requireTenant } from "@/lib/session";
+import { prisma } from "@/lib/prisma";
+import { getWhatsAppProvider } from "@/modules/whatsapp";
+import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { PageHeader } from "@/components/ui/page-header";
+import { Badge } from "@/components/ui/badge";
+import { Alert } from "@/components/ui/alert";
+import { ContatoSearch } from "./ContatoSearch";
+import { AddContactDialog } from "./AddContactDialog";
+import { SendMessageDialog, type ContactRef } from "./SendMessageDialog";
+
+type StatusTone = "neutral" | "iris" | "signal" | "success" | "warn" | "danger";
+
+const STATUS_LABEL: Record<string, { label: string; tone: StatusTone }> = {
+  new: { label: "novo", tone: "neutral" },
+  warm: { label: "morno", tone: "iris" },
+  hot: { label: "quente", tone: "signal" },
+  scheduled: { label: "agendado", tone: "success" },
+  lost: { label: "perdido", tone: "neutral" },
+};
+
+function relativeTime(date: Date): string {
+  const diff = Date.now() - date.getTime();
+  const min = Math.floor(diff / 60_000);
+  if (min < 1) return "agora";
+  if (min < 60) return `${min} min`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `${h} h`;
+  const d = Math.floor(h / 24);
+  if (d < 7) return `${d} d`;
+  return date.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
+}
+
+export default async function ContatosPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ q?: string }>;
+}) {
+  const { tenantId } = await requireTenant();
+  const { q = "" } = await searchParams;
+  const search = q.trim();
+
+  const where: Prisma.LeadWhereInput = { tenantId };
+  if (search) {
+    where.OR = [
+      { name: { contains: search, mode: "insensitive" } },
+      { phone: { contains: search } },
+    ];
+  }
+
+  const [leads, whatsapp] = await Promise.all([
+    prisma.lead.findMany({
+      where,
+      orderBy: { conversation: { updatedAt: "desc" } },
+      include: {
+        conversation: {
+          include: { messages: { orderBy: { createdAt: "desc" }, take: 1 } },
+        },
+      },
+    }),
+    prisma.whatsappInstance.findUnique({ where: { tenantId } }),
+  ]);
+
+  const provider = getWhatsAppProvider();
+  const connected = provider.isConfigured() && whatsapp?.status === "connected";
+
+  return (
+    <div className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col gap-4">
+      <PageHeader
+        eyebrow="contatos"
+        title="Contatos"
+        description="Quem já falou com seu agente — e qualquer número que você quiser adicionar para mandar uma mensagem."
+        actions={<AddContactDialog />}
+      />
+
+      {!connected && (
+        <Alert tone="warn">
+          WhatsApp não conectado. Conecte na tela{" "}
+          <span className="font-mono uppercase">WhatsApp</span> para enviar mensagens.
+        </Alert>
+      )}
+
+      <Card className="flex min-h-0 flex-col p-0">
+        <div className="space-y-3 border-b border-ink/10 p-4 panel:border-white/10">
+          <ContatoSearch q={search} />
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-2">
+          {leads.length === 0 ? (
+            <EmptyState
+              icon={search ? UsersRound : UserPlus}
+              title={search ? "Ninguém com esse nome ou número" : "Nenhum contato ainda"}
+              description={
+                search
+                  ? "Ajuste a busca para achar o contato, ou adicione um número novo."
+                  : "Quando um cliente falar com seu agente, ele aparece aqui. Você também pode adicionar um número para mandar a primeira mensagem."
+              }
+              action={search ? undefined : <AddContactDialog label="Adicionar o primeiro contato" />}
+              className="py-10"
+            />
+          ) : (
+            <ul className="divide-y divide-ink/5 panel:divide-white/10">
+              {leads.map((lead) => {
+                const status = STATUS_LABEL[lead.status] ?? { label: lead.status, tone: "neutral" as const };
+                const last = lead.conversation?.messages[0];
+                const contact: ContactRef = {
+                  id: lead.id,
+                  name: lead.name ?? "",
+                  phone: lead.phone,
+                  isSandbox: lead.phone === "sandbox",
+                };
+                return (
+                  <li
+                    key={lead.id}
+                    className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-control px-2 py-3 transition-colors hover:bg-ink/[0.03] panel:hover:bg-white/5"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <p className="font-display text-sm font-semibold text-ink panel:text-white">
+                          {lead.name || "Sem nome"}
+                        </p>
+                        <Badge tone={status.tone}>{status.label}</Badge>
+                      </div>
+                      <p className="mt-0.5 font-mono text-micro text-neutral panel:text-white/50">
+                        {lead.phone}
+                      </p>
+                      {last && (
+                        <p className="mt-1 truncate text-sm text-neutral panel:text-white/60">
+                          {last.content}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <span className="font-mono text-micro text-neutral panel:text-white/40">
+                        {lead.conversation ? relativeTime(lead.conversation.updatedAt) : "—"}
+                      </span>
+                      <SendMessageDialog contact={contact} canSend={connected} />
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      </Card>
+    </div>
+  );
+}

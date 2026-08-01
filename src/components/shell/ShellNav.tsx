@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BarChart3, Bot, Building2, Cpu, Home, MessageCircle, MessagesSquare, Settings, Star } from "lucide-react";
+import { BarChart3, Bot, Building2, Cpu, Home, MessageCircle, MessagesSquare, Settings, Star, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -21,6 +21,7 @@ const ICONS = {
   Building2,
   Cpu,
   Star,
+  Users,
 };
 
 export type NavItem = { href: string; label: string; icon: keyof typeof ICONS };

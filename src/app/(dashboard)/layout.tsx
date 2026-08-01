@@ -10,6 +10,7 @@ const NAV: NavItem[] = [
   { href: "/inicio", label: "Início", icon: "Home" },
   { href: "/agentes", label: "Agentes", icon: "Bot" },
   { href: "/whatsapp", label: "WhatsApp", icon: "MessageCircle" },
+  { href: "/contatos", label: "Contatos", icon: "Users" },
   { href: "/conversas", label: "Conversas", icon: "MessagesSquare" },
   { href: "/relatorios", label: "Relatórios", icon: "BarChart3" },
   { href: "/configuracoes", label: "Configurações", icon: "Settings" },
