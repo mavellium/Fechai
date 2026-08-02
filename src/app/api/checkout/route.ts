@@ -23,7 +23,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Plano inválido" }, { status: 400 });
   }
 
-  const origin = new URL(req.url).origin;
+  // URL canônica do app (NEXTAUTH_URL) para os redirects de retorno do Stripe.
+  // `new URL(req.url).origin` não serve: no dev do Next ele volta como
+  // "https://localhost:3000" mesmo rodando em outra porta.
+  const origin = process.env.NEXTAUTH_URL
+    ? new URL(process.env.NEXTAUTH_URL).origin
+    : new URL(req.url).origin;
   try {
     const checkout = await createCheckoutSession({
       tenantId: session.user.tenantId,
