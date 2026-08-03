@@ -38,6 +38,8 @@ COPY . .
 # não só como env de runtime do container final.
 ARG NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY
 ENV NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=${NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY}
+ARG NEXT_PUBLIC_BUNNY_PULL_ZONE
+ENV NEXT_PUBLIC_BUNNY_PULL_ZONE=${NEXT_PUBLIC_BUNNY_PULL_ZONE}
 RUN npm run build
 
 # ---------- runner: imagem final, usuário não-root ----------
