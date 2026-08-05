@@ -74,6 +74,10 @@ export default async function AgentesPage() {
                       <p className="flex flex-wrap items-center gap-2 font-display text-lg font-semibold text-white">
                         <span className="truncate">{agent.name}</span>
                         {agent.isPrimary && <Badge tone="iris">whatsapp</Badge>}
+                        {/* Desligado é o estado mais importante da linha: sem
+                            isto a lista mostrava "pronto" para um agente que
+                            não responde a ninguém. */}
+                        {!agent.enabled && <Badge tone="danger">desligado</Badge>}
                         {ready ? (
                           <Badge tone="success" icon={<Check size={11} aria-hidden />}>
                             pronto

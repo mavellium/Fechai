@@ -2,27 +2,42 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Check, Pencil, Star, Trash2, X } from "lucide-react";
+import { Check, Pencil, Power, Star, Trash2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmButton } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { Alert } from "@/components/ui/alert";
-import { deleteAgent, renameAgent, setPrimaryAgent } from "../actions";
+import { deleteAgent, renameAgent, setAgentEnabled, setPrimaryAgent } from "../actions";
 
-/** Nome do agente (edição no lugar) + gestão: principal do WhatsApp e exclusão. */
+/** Nome do agente (edição no lugar) + gestão: liga/desliga, principal e exclusão. */
 export function AgentHeader({
   agent,
   canDelete,
 }: {
-  agent: { id: string; name: string; isPrimary: boolean };
+  agent: { id: string; name: string; isPrimary: boolean; enabled: boolean };
   canDelete: boolean;
 }) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(agent.name);
+  const [enabled, setEnabled] = useState(agent.enabled);
+  const [togglingPower, setTogglingPower] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+
+  function togglePower(next: boolean) {
+    setError(null);
+    setTogglingPower(true);
+    startTransition(async () => {
+      const res = await setAgentEnabled(agent.id, next);
+      if (res.ok) setEnabled(next);
+      else setError(res.error ?? "Não foi possível mudar o estado do agente.");
+      setTogglingPower(false);
+      router.refresh();
+    });
+  }
 
   function save() {
     setError(null);
@@ -77,6 +92,7 @@ export function AgentHeader({
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <h1 className="font-display truncate text-3xl font-bold text-white">{agent.name}</h1>
             {agent.isPrimary && <Badge tone="iris">atende o whatsapp</Badge>}
+            {!enabled && <Badge tone="danger">desligado</Badge>}
             <Button
               size="icon"
               variant="ghost"
@@ -127,6 +143,44 @@ export function AgentHeader({
             </ConfirmButton>
           )}
         </div>
+      </div>
+
+      {/* Chave geral, acima de tudo que se configura: é a primeira coisa que
+          alguém procura quando o agente respondeu algo que não devia. */}
+      <div
+        className={`flex flex-wrap items-center justify-between gap-4 rounded-surface border p-4 transition-colors ${
+          enabled ? "border-success/40 bg-success/10" : "border-danger/40 bg-danger/10"
+        }`}
+      >
+        <div className="flex min-w-0 items-start gap-3">
+          <span
+            aria-hidden
+            className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
+              enabled ? "bg-success/20 text-success" : "bg-danger/20 text-danger"
+            }`}
+          >
+            <Power size={18} />
+          </span>
+          <div className="min-w-0">
+            <p className="font-medium text-white">
+              {enabled ? "Agente ligado — respondendo" : "Agente desligado — em silêncio"}
+            </p>
+            <p id="agente-power-desc" className="mt-0.5 max-w-prose text-sm text-white/65">
+              {enabled
+                ? "Ele responde no WhatsApp, no chat do site e no teste. Desligue para calar o agente sem perder nada do que você configurou."
+                : "Ele não responde em nenhum canal. As mensagens recebidas continuam chegando em Conversas, marcadas como “precisa de você”."}
+            </p>
+          </div>
+        </div>
+
+        <Switch
+          checked={enabled}
+          onCheckedChange={togglePower}
+          loading={togglingPower}
+          disabled={pending}
+          label={`Agente ${enabled ? "ligado" : "desligado"}`}
+          describedBy="agente-power-desc"
+        />
       </div>
 
       {error && <Alert tone="danger">{error}</Alert>}

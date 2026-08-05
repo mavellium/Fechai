@@ -27,12 +27,20 @@ export async function POST(req: Request) {
   );
 
   try {
-    const { reply } = await runAgentTurn({
+    const { reply, status } = await runAgentTurn({
       tenantId,
       conversationId: conversation.id,
       leadId: lead.id,
       userMessage: incoming.text,
     });
+
+    // Agente desligado (ou conta sem agente): a mensagem fica registrada em
+    // Conversas marcada como "precisa de você", mas nada é respondido — é
+    // exatamente o que a chave de desligar promete.
+    if (status !== "ok" || !reply) {
+      return NextResponse.json({ ok: true, silent: status });
+    }
+
     await provider.sendMessage(incoming.instanceExternalId, incoming.fromPhone, reply);
   } catch (err) {
     console.error("[whatsapp webhook] falha ao processar turno", err);

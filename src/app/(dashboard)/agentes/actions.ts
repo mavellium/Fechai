@@ -9,6 +9,7 @@ import { planOf } from "@/modules/billing/plans";
 import { composeSystemPrompt, type PersonaAnswers } from "@/modules/agent-engine/persona";
 import { ACTION_BY_KEY, type ActionKey } from "@/modules/agent-engine/actions";
 import { createAgent, getAgentOwned, getAgentUsage } from "@/modules/agent-engine/agents";
+import { saveScheduleConfig } from "@/modules/scheduling/repository";
 import { ingestDocument, deleteDocument } from "@/modules/knowledge-base/repository";
 import { extractTextFromFile } from "@/modules/knowledge-base/extract";
 import { uploadToBunny } from "@/lib/bunny";
@@ -85,6 +86,27 @@ export async function setPrimaryAgent(agentId: string): Promise<Result> {
   ]);
   revalidateAgent(agent.id);
   return { ok: true, info: `${agent.name} agora atende o WhatsApp.` };
+}
+
+/**
+ * Liga/desliga o agente. Desligado ele para de responder em todos os canais
+ * (WhatsApp, widget e chat de teste) sem perder nada do que foi configurado —
+ * a alternativa que existia era excluir o agente ou desconectar o WhatsApp da
+ * conta inteira.
+ */
+export async function setAgentEnabled(agentId: string, enabled: boolean): Promise<Result> {
+  const { agent } = await requireAgent(agentId);
+  if (!agent) return { ok: false, error: "Agente não encontrado" };
+
+  await prisma.agent.update({ where: { id: agent.id }, data: { enabled } });
+  revalidateAgent(agent.id);
+  revalidatePath("/conversas");
+  return {
+    ok: true,
+    info: enabled
+      ? `${agent.name} voltou a responder.`
+      : `${agent.name} está desligado e não responde mais até você ligar de novo.`,
+  };
 }
 
 /**
@@ -187,6 +209,56 @@ export async function setActionEnabled(
   });
   revalidateAgent(agent.id);
   return { ok: true };
+}
+
+// ------------------------------------------------- configuração da agenda
+
+const scheduleConfigSchema = z.object({
+  durationMinutes: z.coerce.number().int().min(5).max(480),
+  timezone: z.string().trim().min(1),
+  startTime: z.string().regex(/^\d{1,2}:\d{2}$/, "Horário inválido"),
+  endTime: z.string().regex(/^\d{1,2}:\d{2}$/, "Horário inválido"),
+  location: z.string().trim().max(200).default(""),
+  minNoticeHours: z.coerce.number().int().min(0).max(168),
+});
+
+/**
+ * Horário de atendimento usado pela ação "Agendar horário". Fica em
+ * `TenantAction.config` (ver módulo scheduling) — é configuração da ação, não
+ * do agente.
+ */
+export async function saveScheduleConfigAction(
+  _prev: Result | null,
+  formData: FormData,
+): Promise<Result> {
+  const agentId = String(formData.get("agentId") ?? "");
+  const { tenantId, agent } = await requireAgent(agentId);
+  if (!agent) return { ok: false, error: "Agente não encontrado" };
+
+  const parsed = scheduleConfigSchema.safeParse(Object.fromEntries(formData));
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Dados inválidos" };
+  }
+
+  // Checkboxes: `getAll` porque um <input name="workdays"> por dia marcado.
+  const workdays = formData
+    .getAll("workdays")
+    .map((v) => Number(v))
+    .filter((n) => Number.isInteger(n) && n >= 0 && n <= 6);
+  if (workdays.length === 0) {
+    return { ok: false, error: "Escolha pelo menos um dia de atendimento." };
+  }
+
+  const [startH, startM] = parsed.data.startTime.split(":").map(Number);
+  const [endH, endM] = parsed.data.endTime.split(":").map(Number);
+  if (startH * 60 + startM >= endH * 60 + endM) {
+    return { ok: false, error: "O fim do expediente precisa ser depois do início." };
+  }
+
+  await saveScheduleConfig(tenantId, agent.id, { ...parsed.data, workdays });
+  revalidateAgent(agent.id);
+  revalidatePath("/agenda");
+  return { ok: true, info: "Horário de atendimento salvo." };
 }
 
 // ----------------------------------------------------------- conhecimento

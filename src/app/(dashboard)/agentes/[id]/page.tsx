@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { planOf } from "@/modules/billing/plans";
 import { getAgentOwned } from "@/modules/agent-engine/agents";
 import { isActionAvailable } from "@/modules/agent-engine/actions";
+import { getScheduleConfig } from "@/modules/scheduling/repository";
 import type { PersonaAnswers } from "@/modules/agent-engine/persona";
 import { AgentWizard } from "./AgentWizard";
 import { AgentHeader } from "./AgentHeader";
@@ -18,7 +19,7 @@ export default async function AgentePage({ params }: { params: Promise<{ id: str
   // 404 e não "acesso negado": para quem não é dono, o agente não existe.
   if (!agent) notFound();
 
-  const [tenant, documents, tenantActions, agentCount] = await Promise.all([
+  const [tenant, documents, tenantActions, agentCount, scheduleConfig] = await Promise.all([
     prisma.tenant.findUnique({ where: { id: tenantId }, select: { planKey: true } }),
     prisma.knowledgeDocument.findMany({
       where: { tenantId, agentId: agent.id },
@@ -30,6 +31,7 @@ export default async function AgentePage({ params }: { params: Promise<{ id: str
       select: { key: true },
     }),
     prisma.agent.count({ where: { tenantId, archived: false } }),
+    getScheduleConfig(agent.id),
   ]);
 
   // Desativadas temporariamente não contam como "ação ativa" no checklist.
@@ -56,7 +58,12 @@ export default async function AgentePage({ params }: { params: Promise<{ id: str
       </Link>
 
       <AgentHeader
-        agent={{ id: agent.id, name: agent.name, isPrimary: agent.isPrimary }}
+        agent={{
+          id: agent.id,
+          name: agent.name,
+          isPrimary: agent.isPrimary,
+          enabled: agent.enabled,
+        }}
         canDelete={agentCount > 1}
       />
 
@@ -67,6 +74,8 @@ export default async function AgentePage({ params }: { params: Promise<{ id: str
         documents={documents}
         enabledKeys={actions.map((a) => a.key)}
         planLimit={planOf(tenant?.planKey).maxActiveActions}
+        scheduleConfig={scheduleConfig}
+        enabled={agent.enabled}
         done={done}
       />
     </div>

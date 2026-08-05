@@ -52,8 +52,9 @@ export async function sendMessageToContact(leadId: string, text: string): Promis
     include: { conversation: true },
   });
   if (!lead) return { ok: false, error: "Contato não encontrado." };
-  if (lead.phone === "sandbox") {
-    return { ok: false, error: "O contato Sandbox é um teste — envie para um WhatsApp real." };
+  // `isTest` em vez do telefone literal: o sandbox agora tem um por agente.
+  if (lead.isTest) {
+    return { ok: false, error: "Este contato é do chat de teste — envie para um WhatsApp real." };
   }
 
   const provider = getWhatsAppProvider();

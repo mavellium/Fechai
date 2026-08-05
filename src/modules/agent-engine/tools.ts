@@ -1,8 +1,21 @@
 import { prisma } from "@/lib/prisma";
 import type { LlmToolSchema } from "@/modules/ai";
+import { isWithinBusinessHours } from "@/modules/scheduling/config";
+import {
+  createAppointment,
+  getScheduleConfig,
+  hasConflict,
+} from "@/modules/scheduling/repository";
+import { formatInZone, parseLocalDateTime } from "@/modules/scheduling/time";
 import { ACTION_BY_KEY, type ActionKey } from "./actions";
 
-export type ToolContext = { tenantId: string; leadId: string; conversationId: string };
+export type ToolContext = {
+  tenantId: string;
+  leadId: string;
+  conversationId: string;
+  /** Quem está atendendo — a agenda e a config de horário são por agente. */
+  agentId: string | null;
+};
 type Handler = (ctx: ToolContext, args: Record<string, unknown>) => Promise<string>;
 
 type ToolDef = { schema: LlmToolSchema; handler: Handler };
@@ -82,19 +95,76 @@ const TOOLS: Record<ActionKey, ToolDef> = {
   schedule_meeting: {
     schema: {
       name: "schedule_meeting",
-      description: "Agenda um horário com o contato (mock — sem calendário real ainda).",
+      description:
+        "Marca um horário com o contato na agenda do negócio. Use somente depois de ter uma data e uma hora exatas — converta você mesmo expressões como 'amanhã de tarde' antes de chamar.",
       parameters: {
         type: "object",
         properties: {
-          datetime: { type: "string", description: "Data/hora combinada (texto livre)" },
+          date: { type: "string", description: "Data no formato AAAA-MM-DD" },
+          time: { type: "string", description: "Hora de início no formato HH:MM (24h)" },
+          title: { type: "string", description: "Assunto do horário. Ex: 'Aula experimental'" },
+          notes: { type: "string", description: "Observações combinadas na conversa" },
         },
-        required: ["datetime"],
+        required: ["date", "time"],
       },
     },
+    /**
+     * Antes isto era um mock: trocava o status do lead e devolvia "(mock)" — a
+     * data combinada não ia para lugar nenhum. Agora grava um `Appointment` de
+     * verdade, respeita o expediente configurado na ação e espelha no Google
+     * Agenda quando a conta está conectada.
+     *
+     * As recusas voltam como texto para o LLM de propósito: ele reaproveita o
+     * motivo para propor outro horário ao contato no mesmo turno.
+     */
     handler: async (ctx, args) => {
-      await prisma.lead.update({ where: { id: ctx.leadId }, data: { status: "scheduled" } });
-      const when = str(args.datetime) ?? "horário combinado";
-      return `Agendamento registrado para ${when} (mock).`;
+      if (!ctx.agentId) return "Não foi possível agendar agora. Ofereça falar com um atendente.";
+
+      const cfg = await getScheduleConfig(ctx.agentId);
+      const date = str(args.date);
+      const time = str(args.time);
+      if (!date || !time) return "Faltou a data ou a hora. Pergunte ao contato e tente de novo.";
+
+      const startsAt = parseLocalDateTime(date, time, cfg.timezone);
+      if (!startsAt) return "Data ou hora inválida. Use AAAA-MM-DD e HH:MM.";
+
+      const noticeMs = cfg.minNoticeHours * 3_600_000;
+      if (startsAt.getTime() < Date.now() + noticeMs) {
+        return cfg.minNoticeHours > 0
+          ? `Esse horário é cedo demais: precisamos de ${cfg.minNoticeHours}h de antecedência. Proponha um horário mais para frente.`
+          : "Esse horário já passou. Proponha um horário futuro.";
+      }
+
+      if (!isWithinBusinessHours(startsAt, cfg)) {
+        return `Fora do horário de atendimento (${cfg.startTime} às ${cfg.endTime}). Proponha outro horário dentro do expediente.`;
+      }
+
+      const endsAt = new Date(startsAt.getTime() + cfg.durationMinutes * 60_000);
+      if (await hasConflict(ctx.tenantId, startsAt, endsAt)) {
+        return "Já existe um compromisso nesse horário. Ofereça outro horário ao contato.";
+      }
+
+      const lead = await prisma.lead.findUnique({
+        where: { id: ctx.leadId },
+        select: { name: true, phone: true },
+      });
+      const who = lead?.name || lead?.phone || "contato";
+
+      await createAppointment({
+        tenantId: ctx.tenantId,
+        agentId: ctx.agentId,
+        leadId: ctx.leadId,
+        conversationId: ctx.conversationId,
+        title: str(args.title) ?? `Atendimento — ${who}`,
+        notes: str(args.notes) ?? null,
+        startsAt,
+        durationMinutes: cfg.durationMinutes,
+        source: "agent",
+        timezone: cfg.timezone,
+      });
+
+      const when = formatInZone(startsAt, cfg.timezone);
+      return `Agendado para ${when}${cfg.location ? ` (${cfg.location})` : ""}. Confirme esse horário com o contato.`;
     },
   },
 

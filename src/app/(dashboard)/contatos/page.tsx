@@ -44,7 +44,9 @@ export default async function ContatosPage({
   const { q = "" } = await searchParams;
   const search = q.trim();
 
-  const where: Prisma.LeadWhereInput = { tenantId };
+  // O contato "Sandbox" aparecia na lista como se fosse cliente — e podia até
+  // receber mensagem. Contatos de teste ficam de fora daqui.
+  const where: Prisma.LeadWhereInput = { tenantId, isTest: false };
   if (search) {
     where.OR = [
       { name: { contains: search, mode: "insensitive" } },
@@ -65,7 +67,7 @@ export default async function ContatosPage({
     prisma.whatsappInstance.findUnique({ where: { tenantId } }),
     // Sugestões: as 3 conversas mais recentes (com número real) para continuar.
     prisma.conversation.findMany({
-      where: { tenantId, lead: { phone: { not: "sandbox" } } },
+      where: { tenantId, isTest: false },
       orderBy: { updatedAt: "desc" },
       take: 3,
       include: {
@@ -110,7 +112,7 @@ export default async function ContatosPage({
                 id: lead.id,
                 name: lead.name ?? "",
                 phone: lead.phone,
-                isSandbox: lead.phone === "sandbox",
+                isSandbox: lead.isTest,
               };
               return (
                 <Card key={conv.id} className="flex flex-col gap-3 p-4">
@@ -168,7 +170,7 @@ export default async function ContatosPage({
                   id: lead.id,
                   name: lead.name ?? "",
                   phone: lead.phone,
-                  isSandbox: lead.phone === "sandbox",
+                  isSandbox: lead.isTest,
                 };
                 return (
                   <li

@@ -15,6 +15,10 @@ export type ActionDef = {
   // ready = integrada; stub = mock por enquanto (sem integração real);
   // disabled = fora do ar temporariamente (não aparece na UI nem no motor).
   status: "ready" | "stub" | "disabled";
+  /** O que o cliente vê acontecer quando o agente usa isto. */
+  outcome?: string;
+  /** Ação com configuração própria: a UI mostra o painel junto do toggle. */
+  configurable?: boolean;
 };
 
 export const ACTION_CATALOG: ActionDef[] = [
@@ -33,19 +37,24 @@ export const ACTION_CATALOG: ActionDef[] = [
   {
     key: "schedule_meeting",
     label: "Agendar horário",
-    description: "Agenda um horário para o contato (mock, sem calendário real ainda).",
-    status: "disabled",
+    description:
+      "O agente combina data e hora com o contato, dentro do seu horário de atendimento.",
+    outcome: "O horário aparece na sua Agenda e o contato vira “agendado”.",
+    status: "ready",
+    configurable: true,
   },
   {
     key: "follow_up",
     label: "Follow-up automático",
     description: "Reengaja o contato após X horas sem resposta.",
+    outcome: "O agente manda uma mensagem sozinho se o contato sumir.",
     status: "ready",
   },
   {
     key: "handoff_human",
     label: "Transferir para humano",
     description: "Marca a conversa como 'precisa atenção' para um humano assumir.",
+    outcome: "A conversa aparece em Conversas › “Precisa de você”.",
     status: "ready",
   },
 ];

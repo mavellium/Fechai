@@ -38,8 +38,8 @@ export function SandboxDialog({ label = "Testar agente" }: { label?: string }) {
               Testar seu agente
             </h2>
             <p className="mt-1 text-sm text-white/55">
-              Converse como um cliente conversaria, sem precisar do WhatsApp. O teste fica salvo
-              na lista como o contato “Sandbox”.
+              Converse como um cliente conversaria, sem precisar do WhatsApp. O teste não vira
+              contato nem entra nos seus números.
             </p>
           </div>
           <button

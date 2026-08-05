@@ -1,0 +1,172 @@
+import { prisma } from "@/lib/prisma";
+import { parseScheduleConfig, type ScheduleConfig } from "./config";
+import { deleteEventFromGoogle, pushEventToGoogle } from "./google";
+import { dayKeyInZone, monthRangeUtc } from "./time";
+
+/**
+ * Leitura e escrita da agenda. Toda query filtra por tenantId (regra do
+ * multi-tenant) e passa por aqui — a tela /agenda, as server actions e a tool
+ * `schedule_meeting` compartilham exatamente estas regras.
+ */
+
+export type CreateAppointmentInput = {
+  tenantId: string;
+  agentId?: string | null;
+  leadId?: string | null;
+  conversationId?: string | null;
+  title: string;
+  notes?: string | null;
+  startsAt: Date;
+  durationMinutes: number;
+  source: "agent" | "manual";
+  timezone: string;
+};
+
+/** Config de agendamento do agente (ou o padrão, se a ação nunca foi tocada). */
+export async function getScheduleConfig(agentId: string): Promise<ScheduleConfig> {
+  const action = await prisma.tenantAction.findUnique({
+    where: { agentId_key: { agentId, key: "schedule_meeting" } },
+    select: { config: true },
+  });
+  return parseScheduleConfig(action?.config);
+}
+
+export async function saveScheduleConfig(
+  tenantId: string,
+  agentId: string,
+  config: ScheduleConfig,
+): Promise<void> {
+  await prisma.tenantAction.upsert({
+    where: { agentId_key: { agentId, key: "schedule_meeting" } },
+    // Salvar horário de atendimento não liga a ação sozinha — quem liga é o
+    // toggle. Daí `enabled: false` na criação.
+    create: { tenantId, agentId, key: "schedule_meeting", enabled: false, config },
+    update: { config },
+  });
+}
+
+/**
+ * Existe algo marcado que encoste neste intervalo?
+ *
+ * Sobreposição é `início < fimExistente && fim > inícioExistente` — comparar só
+ * o início deixaria passar um horário que começa no meio de outro.
+ */
+export async function hasConflict(
+  tenantId: string,
+  startsAt: Date,
+  endsAt: Date,
+  ignoreId?: string,
+): Promise<boolean> {
+  const clash = await prisma.appointment.findFirst({
+    where: {
+      tenantId,
+      status: "scheduled",
+      ...(ignoreId ? { id: { not: ignoreId } } : {}),
+      startsAt: { lt: endsAt },
+      endsAt: { gt: startsAt },
+    },
+    select: { id: true },
+  });
+  return Boolean(clash);
+}
+
+export async function createAppointment(input: CreateAppointmentInput) {
+  const endsAt = new Date(input.startsAt.getTime() + input.durationMinutes * 60_000);
+
+  const appointment = await prisma.appointment.create({
+    data: {
+      tenantId: input.tenantId,
+      agentId: input.agentId ?? null,
+      leadId: input.leadId ?? null,
+      conversationId: input.conversationId ?? null,
+      title: input.title,
+      notes: input.notes ?? null,
+      startsAt: input.startsAt,
+      endsAt,
+      source: input.source,
+    },
+  });
+
+  // O lead agendado é o resultado que o produto promete — o status acompanha.
+  if (input.leadId) {
+    await prisma.lead
+      .update({ where: { id: input.leadId }, data: { status: "scheduled" } })
+      .catch(() => {});
+  }
+
+  const googleEventId = await pushEventToGoogle(input.tenantId, {
+    title: input.title,
+    description: input.notes ?? undefined,
+    startsAt: input.startsAt,
+    endsAt,
+    timeZone: input.timezone,
+  });
+  if (googleEventId) {
+    await prisma.appointment.update({ where: { id: appointment.id }, data: { googleEventId } });
+  }
+
+  return { ...appointment, googleEventId };
+}
+
+export async function cancelAppointment(tenantId: string, id: string) {
+  const appointment = await prisma.appointment.findFirst({ where: { id, tenantId } });
+  if (!appointment) return null;
+
+  await prisma.appointment.update({ where: { id }, data: { status: "canceled" } });
+  if (appointment.googleEventId) {
+    await deleteEventFromGoogle(tenantId, appointment.googleEventId);
+  }
+  return appointment;
+}
+
+export async function markAppointmentDone(tenantId: string, id: string) {
+  const { count } = await prisma.appointment.updateMany({
+    where: { id, tenantId },
+    data: { status: "done" },
+  });
+  return count > 0;
+}
+
+const withLead = {
+  lead: { select: { id: true, name: true, phone: true, status: true } },
+  agent: { select: { id: true, name: true } },
+} as const;
+
+/** Compromissos de um mês (do fuso do tenant), já agrupados por dia local. */
+export async function listMonthAppointments(
+  tenantId: string,
+  year: number,
+  month: number,
+  timezone: string,
+) {
+  const { start, end } = monthRangeUtc(year, month, timezone);
+  const rows = await prisma.appointment.findMany({
+    where: { tenantId, startsAt: { gte: start, lt: end } },
+    orderBy: { startsAt: "asc" },
+    include: withLead,
+  });
+
+  const byDay = new Map<string, typeof rows>();
+  for (const row of rows) {
+    const key = dayKeyInZone(row.startsAt, timezone);
+    byDay.set(key, [...(byDay.get(key) ?? []), row]);
+  }
+  return { rows, byDay };
+}
+
+/** Próximos compromissos ainda de pé — usado na home e na lateral da agenda. */
+export async function listUpcomingAppointments(tenantId: string, take = 5) {
+  return prisma.appointment.findMany({
+    where: { tenantId, status: "scheduled", startsAt: { gte: new Date() } },
+    orderBy: { startsAt: "asc" },
+    take,
+    include: withLead,
+  });
+}
+
+export async function listLeadAppointments(tenantId: string, leadId: string) {
+  return prisma.appointment.findMany({
+    where: { tenantId, leadId },
+    orderBy: { startsAt: "asc" },
+  });
+}

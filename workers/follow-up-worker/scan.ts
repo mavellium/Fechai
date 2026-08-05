@@ -37,6 +37,9 @@ export async function scanAndSendFollowUps(now: Date = new Date()) {
   const convos = await prisma.conversation.findMany({
     where: {
       tenantId: { in: tenantIds },
+      // Conversa de teste não recebe follow-up: ninguém do outro lado para
+      // reengajar (antes o filtro era pelo telefone "sandbox", mais abaixo).
+      isTest: false,
       needsHuman: false,
       followUpSentAt: null,
       lastInboundAt: { not: null, lt: cutoff },
@@ -50,7 +53,7 @@ export async function scanAndSendFollowUps(now: Date = new Date()) {
   for (const c of convos) {
     if (!isEligible({ ...c, lastRole: c.messages[0]?.role }, cutoff)) continue;
 
-    if (provider.isConfigured() && c.lead.phone !== "sandbox") {
+    if (provider.isConfigured() && !c.lead.isTest) {
       const instance = await prisma.whatsappInstance.findUnique({ where: { tenantId: c.tenantId } });
       if (instance?.externalId && instance.status === "connected") {
         try {

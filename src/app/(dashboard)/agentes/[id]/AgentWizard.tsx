@@ -2,10 +2,12 @@
 
 import { useState } from "react";
 import { Check, MessageSquareText, FileText, Zap, Rocket } from "lucide-react";
-import Link from "next/link";
 import { cn } from "@/lib/utils";
 import type { PersonaAnswers } from "@/modules/agent-engine/persona";
+import type { ScheduleConfig } from "@/modules/scheduling/config";
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Sandbox } from "@/app/(dashboard)/conversas/Sandbox";
 import { PersonaForm } from "../PersonaForm";
 import { KnowledgeManager } from "../KnowledgeManager";
 import { ActionsToggles } from "../ActionsToggles";
@@ -39,14 +41,14 @@ const STEPS = [
     label: "Ações",
     icon: Zap,
     title: "O que ele pode fazer",
-    help: "Além de responder, o agente pode registrar o lead, agendar e passar para um humano.",
+    help: "Além de responder, o agente pode marcar horário na sua agenda, avisar quando um contato está quente e chamar você. Ligue só o que você quer que ele faça sozinho.",
   },
   {
     key: "testar",
     label: "Testar",
     icon: Rocket,
     title: "Converse com ele",
-    help: "Fale com o agente como se fosse um cliente. Nada aqui vai para o WhatsApp.",
+    help: "Fale como um cliente falaria. Nada aqui vai para o WhatsApp e nada vira contato ou número no relatório.",
   },
 ] as const;
 
@@ -66,6 +68,8 @@ export function AgentWizard({
   documents,
   enabledKeys,
   planLimit,
+  scheduleConfig,
+  enabled,
   done,
 }: {
   agentId: string;
@@ -74,6 +78,9 @@ export function AgentWizard({
   documents: Doc[];
   enabledKeys: string[];
   planLimit: number;
+  scheduleConfig: ScheduleConfig;
+  /** Agente ligado? Desligado, o teste não responde — a tela avisa antes. */
+  enabled: boolean;
   done: Record<string, boolean>;
 }) {
   const [step, setStep] = useState(initialStep);
@@ -137,17 +144,25 @@ export function AgentWizard({
           <KnowledgeManager agentId={agentId} documents={documents} />
         )}
         {current.key === "acoes" && (
-          <ActionsToggles agentId={agentId} enabledKeys={enabledKeys} planLimit={planLimit} />
+          <ActionsToggles
+            agentId={agentId}
+            enabledKeys={enabledKeys}
+            planLimit={planLimit}
+            scheduleConfig={scheduleConfig}
+          />
         )}
+        {/* O teste passou a acontecer aqui dentro. Mandar para /conversas
+            testava o agente PRINCIPAL da conta, não este — quem tinha dois
+            agentes conversava com o errado e achava que a persona não salvou. */}
         {current.key === "testar" && (
           <div className="space-y-4">
-            <p className="text-sm text-white/70">
-              O sandbox fica em Conversas — ele usa a persona, a base e as ações que você acabou de
-              configurar aqui.
-            </p>
-            <Link href="/conversas">
-              <Button variant="cta">Abrir o sandbox</Button>
-            </Link>
+            {!enabled && (
+              <Alert tone="warn">
+                Este agente está desligado, então ele não responde nem aqui. Ligue a chave no topo
+                da página para testar.
+              </Alert>
+            )}
+            <Sandbox agentId={agentId} />
           </div>
         )}
       </section>

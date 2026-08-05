@@ -30,18 +30,18 @@ export const AI_MODELS: AiModelInfo[] = [
     provider: "gemini",
     label: "Gemini 2.5 Flash",
     tier: "free",
-    description: "Equilíbrio entre qualidade e cota. Padrão recomendado para o agente.",
-    limits: "10 RPM · 250 req/dia · 250k TPM",
-    pricing: "Grátis no free tier (pago: US$ 0,30 / US$ 2,50)",
+    description: "Modelo mais rápido e versátil. Padrão recomendado.",
+    limits: "Sem limite específico no free tier",
+    pricing: "Grátis no free tier",
     envKey: "GEMINI_API_KEY",
   },
   {
-    id: "gemini-2.5-flash-lite",
+    id: "gemini-2.0-flash-lite",
     provider: "gemini",
-    label: "Gemini 2.5 Flash-Lite",
+    label: "Gemini 2.0 Flash Lite",
     tier: "free",
-    description: "Maior cota diária do free tier. Use se bater o limite do Flash.",
-    limits: "15 RPM · 1.000 req/dia · 250k TPM",
+    description: "Versão mais leve, ideal para processos em cadeia.",
+    limits: "Sem limite específico no free tier",
     pricing: "Grátis no free tier",
     envKey: "GEMINI_API_KEY",
   },
@@ -50,8 +50,18 @@ export const AI_MODELS: AiModelInfo[] = [
     provider: "gemini",
     label: "Gemini 2.5 Pro",
     tier: "free",
-    description: "Melhor raciocínio, cota bem menor. Só para testes pontuais.",
-    limits: "5 RPM · 100 req/dia · 250k TPM",
+    description: "Melhor raciocínio e análise. Use quando precisar de mais qualidade.",
+    limits: "Sem limite específico no free tier",
+    pricing: "Grátis no free tier",
+    envKey: "GEMINI_API_KEY",
+  },
+  {
+    id: "gemini-3.5-flash",
+    provider: "gemini",
+    label: "Gemini 3.5 Flash",
+    tier: "free",
+    description: "Modelo mais recente com melhorias de qualidade e velocidade.",
+    limits: "Sem limite específico no free tier",
     pricing: "Grátis no free tier",
     envKey: "GEMINI_API_KEY",
   },
@@ -79,6 +89,9 @@ export const AI_MODELS: AiModelInfo[] = [
 
 /** Modelo usado quando não há nada salvo no banco. */
 export const DEFAULT_MODEL_ID = "gemini-2.5-flash";
+
+/** Fallback chain: lista de modelos para tentar caso o principal falhe. */
+export const GEMINI_FALLBACK_CHAIN = ["gemini-2.5-flash", "gemini-2.0-flash-lite", "gemini-2.5-pro"];
 
 export function findModel(id: string): AiModelInfo | undefined {
   return AI_MODELS.find((m) => m.id === id);

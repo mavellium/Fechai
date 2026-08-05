@@ -61,12 +61,25 @@ export async function POST(
     // Visitante do site vira um Lead como outro qualquer — só o "telefone" é
     // sintético (não é WhatsApp). Mesmo padrão que o sandbox usa (ver /api/sandbox).
     const { lead, conversation } = await getOrCreateConversation(tenantId, `web:${visitorId}`);
-    const { reply } = await runAgentTurn({
+    const { reply, status } = await runAgentTurn({
       tenantId,
       conversationId: conversation.id,
       leadId: lead.id,
       userMessage: message,
     });
+
+    // Agente desligado: o visitante não pode ficar olhando para o vazio, então
+    // aqui (diferente do WhatsApp) o widget diz que ninguém está atendendo. A
+    // mensagem dele já foi registrada e a conversa está marcada para um humano.
+    if (status !== "ok" || !reply) {
+      return NextResponse.json(
+        {
+          reply:
+            "Nosso atendimento automático está pausado no momento. Sua mensagem foi registrada e alguém responde em breve.",
+        },
+        { headers: CORS_HEADERS },
+      );
+    }
 
     return NextResponse.json({ reply }, { headers: CORS_HEADERS });
   } catch (err) {

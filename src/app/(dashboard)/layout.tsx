@@ -12,6 +12,7 @@ const NAV: NavItem[] = [
   { href: "/whatsapp", label: "WhatsApp", icon: "MessageCircle" },
   { href: "/contatos", label: "Contatos", icon: "Users" },
   { href: "/conversas", label: "Conversas", icon: "MessagesSquare" },
+  { href: "/agenda", label: "Agenda", icon: "CalendarDays" },
   { href: "/relatorios", label: "Relatórios", icon: "BarChart3" },
   { href: "/configuracoes", label: "Configurações", icon: "Settings" },
 ];

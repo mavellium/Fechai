@@ -59,6 +59,8 @@ model Tenant {
   leads            Lead[]
   conversations    Conversation[]
   feedbacks        Feedback[]
+  appointments     Appointment[]
+  calendar         CalendarIntegration?
 }
 
 model User {
@@ -102,6 +104,11 @@ model Agent {
   /// Agente que atende o número de WhatsApp da conta. Enquanto o WhatsApp for
   /// um por conta (ver CHANGELOG), exatamente um agente é o principal.
   isPrimary    Boolean  @default(false)
+  /// Chave geral do agente. `false` = ele para de responder em qualquer canal
+  /// (WhatsApp, widget do site e sandbox) sem perder persona, base nem ações.
+  /// Existe porque a única forma de calar um agente era excluí-lo ou desligar
+  /// o WhatsApp inteiro — as duas destrutivas demais para uma pausa.
+  enabled      Boolean  @default(true)
   archived     Boolean  @default(false)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -109,6 +116,7 @@ model Agent {
   knowledgeDocs KnowledgeDocument[]
   actions       TenantAction[]
   conversations Conversation[]
+  appointments  Appointment[]
 
   @@index([tenantId])
 }
@@ -188,10 +196,17 @@ model Lead {
   name         String?
   phone        String
   status       String        @default("new") // new | warm | hot | scheduled | lost
+  /// Contato criado pelo chat de teste (sandbox), não por um cliente real.
+  /// Fica no banco para o teste ter histórico, mas TODA contagem de negócio
+  /// (contatos, conversas, relatórios, home) filtra `isTest: false` — antes o
+  /// sandbox inflava o número de leads da conta.
+  isTest       Boolean       @default(false)
   createdAt    DateTime      @default(now())
   conversation Conversation?
+  appointments Appointment[]
 
   @@index([tenantId])
+  @@index([tenantId, isTest])
 }
 
 model Conversation {
@@ -206,12 +221,17 @@ model Conversation {
   lead       Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
   messages   Message[]
   needsHuman Boolean   @default(false)
+  /// Espelha `Lead.isTest` para as consultas de conversa não precisarem de join.
+  isTest     Boolean   @default(false)
   lastInboundAt DateTime?
   followUpSentAt DateTime?
   updatedAt  DateTime  @updatedAt
 
+  appointments Appointment[]
+
   @@index([tenantId])
   @@index([agentId])
+  @@index([tenantId, isTest])
 }
 
 model Message {
@@ -223,6 +243,61 @@ model Message {
   createdAt      DateTime     @default(now())
 
   @@index([conversationId])
+}
+
+/// Um horário marcado com um lead. Nasce de duas formas: o agente usando a
+/// ação `schedule_meeting` durante a conversa, ou o usuário marcando à mão em
+/// /agenda. Antes `schedule_meeting` era um mock que só trocava o status do
+/// lead para "scheduled" — a data combinada não era guardada em lugar nenhum.
+model Appointment {
+  id             String        @id @default(cuid())
+  tenantId       String
+  tenant         Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// `SetNull` como em Conversation: apagar o agente não apaga a agenda.
+  agentId        String?
+  agent          Agent?        @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  leadId         String?
+  lead           Lead?         @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  conversationId String?
+  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  title     String
+  notes     String?
+  startsAt  DateTime
+  endsAt    DateTime
+  status    String   @default("scheduled") // scheduled | done | canceled
+  source    String   @default("agent") // agent | manual
+  /// Id do evento espelhado no Google Agenda, quando a conta está integrada.
+  /// Null = só existe aqui (integração desligada ou sincronização falhou).
+  googleEventId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, startsAt])
+  @@index([leadId])
+  @@index([agentId])
+}
+
+/// Conexão OAuth da conta com o Google Agenda (opcional). Uma por tenant.
+/// Os tokens ficam aqui e não em env: são credenciais DO CLIENTE, emitidas no
+/// consentimento dele, e cada conta tem as suas.
+model CalendarIntegration {
+  id           String   @id @default(cuid())
+  tenantId     String   @unique
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  provider     String   @default("google")
+  /// Conta Google conectada — mostrada na tela para a pessoa saber qual é.
+  accountEmail String?
+  calendarId   String   @default("primary")
+  accessToken  String
+  /// Só vem no primeiro consentimento; sem ele a conexão morre em 1h.
+  refreshToken String?
+  expiresAt    DateTime
+  /// Espelhar novos agendamentos no Google pode ser desligado sem desconectar.
+  syncEnabled  Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 }
 
 /// Configuração de IA da PLATAFORMA (não é por tenant) — linha única.

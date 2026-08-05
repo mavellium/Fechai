@@ -39,7 +39,9 @@ export default async function ConversasPage({
     ];
   }
 
-  const where: Prisma.ConversationWhereInput = { tenantId };
+  // `isTest: false` em todas as consultas desta tela: o chat de teste tem a
+  // própria janela e não pode disputar espaço com conversas de clientes reais.
+  const where: Prisma.ConversationWhereInput = { tenantId, isTest: false };
   if (status === "needs_human") where.needsHuman = true;
   if (Object.keys(leadWhere).length > 0) where.lead = leadWhere;
 
@@ -55,11 +57,11 @@ export default async function ConversasPage({
       },
     }),
     prisma.conversation.count({ where }),
-    prisma.conversation.count({ where: { tenantId } }),
-    prisma.conversation.count({ where: { tenantId, needsHuman: true } }),
+    prisma.conversation.count({ where: { tenantId, isTest: false } }),
+    prisma.conversation.count({ where: { tenantId, isTest: false, needsHuman: true } }),
     id
       ? prisma.conversation.findFirst({
-          where: { id, tenantId },
+          where: { id, tenantId, isTest: false },
           include: {
             lead: true,
             agent: { select: { name: true } },

@@ -59,12 +59,13 @@ export function dayLabel(date: Date, now: Date = new Date()) {
 }
 
 /**
- * O sandbox cria um lead com telefone literal "sandbox" (ver
- * `api/sandbox/route.ts`), que não é um número — não dá para ligar nem abrir no
- * WhatsApp, e a interface precisa saber disso antes de oferecer a ação.
+ * O chat de teste cria um lead com telefone sintético — "sandbox" nas contas
+ * antigas, "sandbox:<agentId>" desde que o teste passou a ser por agente (ver
+ * `api/sandbox/route.ts`). Nenhum dos dois é um número: não dá para ligar nem
+ * abrir no WhatsApp, e a interface precisa saber antes de oferecer a ação.
  */
 export function isSandboxPhone(phone: string) {
-  return phone === "sandbox";
+  return phone === "sandbox" || phone.startsWith("sandbox:");
 }
 
 /** Telefone formatado para leitura: "(11) 98765-4321" quando reconhecível. */

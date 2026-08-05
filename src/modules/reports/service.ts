@@ -10,20 +10,28 @@ export type TenantReport = {
   responseRate: number; // 0..1 — conversas em que o lead respondeu ao menos 1x após o início
 };
 
-// Métricas do tenant. Sempre filtrado por tenantId.
+/**
+ * Métricas do tenant. Sempre filtrado por tenantId — e por `isTest: false`.
+ *
+ * O chat de teste criava lead e conversa como qualquer canal, então três
+ * mensagens experimentando a persona viravam "1 lead, 1 conversa" no relatório
+ * que a pessoa usa para decidir se o produto está funcionando.
+ */
 export async function computeTenantReport(tenantId: string): Promise<TenantReport> {
   const [conversations, leads, hotLeads, scheduled, needsHuman, followUpsSent, userMsgGroups] =
     await Promise.all([
-      prisma.conversation.count({ where: { tenantId } }),
-      prisma.lead.count({ where: { tenantId } }),
-      prisma.lead.count({ where: { tenantId, status: "hot" } }),
-      prisma.lead.count({ where: { tenantId, status: "scheduled" } }),
-      prisma.conversation.count({ where: { tenantId, needsHuman: true } }),
-      prisma.conversation.count({ where: { tenantId, followUpSentAt: { not: null } } }),
+      prisma.conversation.count({ where: { tenantId, isTest: false } }),
+      prisma.lead.count({ where: { tenantId, isTest: false } }),
+      prisma.lead.count({ where: { tenantId, isTest: false, status: "hot" } }),
+      prisma.lead.count({ where: { tenantId, isTest: false, status: "scheduled" } }),
+      prisma.conversation.count({ where: { tenantId, isTest: false, needsHuman: true } }),
+      prisma.conversation.count({
+        where: { tenantId, isTest: false, followUpSentAt: { not: null } },
+      }),
       // mensagens do lead agrupadas por conversa → "engajada" = 2+ mensagens dele
       prisma.message.groupBy({
         by: ["conversationId"],
-        where: { role: "user", conversation: { tenantId } },
+        where: { role: "user", conversation: { tenantId, isTest: false } },
         _count: { _all: true },
       }),
     ]);
@@ -69,19 +77,25 @@ export async function computeHomeSummary(tenantId: string, days: number): Promis
 
   const [activeConversations, prevConversations, newLeads, prevLeads, hotLeads, needsHuman, inbound] =
     await Promise.all([
-      prisma.conversation.count({ where: { tenantId, updatedAt: { gte: since } } }),
+      prisma.conversation.count({ where: { tenantId, isTest: false, updatedAt: { gte: since } } }),
       prisma.conversation.count({
-        where: { tenantId, updatedAt: { gte: prevSince, lt: since } },
+        where: { tenantId, isTest: false, updatedAt: { gte: prevSince, lt: since } },
       }),
-      prisma.lead.count({ where: { tenantId, createdAt: { gte: since } } }),
-      prisma.lead.count({ where: { tenantId, createdAt: { gte: prevSince, lt: since } } }),
-      prisma.lead.count({ where: { tenantId, status: "hot" } }),
-      prisma.conversation.count({ where: { tenantId, needsHuman: true } }),
+      prisma.lead.count({ where: { tenantId, isTest: false, createdAt: { gte: since } } }),
+      prisma.lead.count({
+        where: { tenantId, isTest: false, createdAt: { gte: prevSince, lt: since } },
+      }),
+      prisma.lead.count({ where: { tenantId, isTest: false, status: "hot" } }),
+      prisma.conversation.count({ where: { tenantId, isTest: false, needsHuman: true } }),
       // Agrupar por dia no banco exigiria SQL cru (`date_trunc`) e amarraria o
       // relatório ao Postgres. Na janela máxima daqui (30 dias de mensagens de
       // uma conta), trazer só os timestamps e contar em memória é barato.
       prisma.message.findMany({
-        where: { role: "user", createdAt: { gte: since }, conversation: { tenantId } },
+        where: {
+          role: "user",
+          createdAt: { gte: since },
+          conversation: { tenantId, isTest: false },
+        },
         select: { createdAt: true },
       }),
     ]);

@@ -140,14 +140,16 @@ export default async function InicioPage({
   const [summary, needsHuman, recent, whatsapp, agentReady, conversationsThisMonth] =
     await Promise.all([
       computeHomeSummary(tenantId, days),
+      // `isTest: false` em toda a home: o chat de teste não é atendimento e
+      // não pode ocupar as listas de "precisa de você" e "conversas recentes".
       prisma.conversation.findMany({
-        where: { tenantId, needsHuman: true },
+        where: { tenantId, isTest: false, needsHuman: true },
         orderBy: { updatedAt: "desc" },
         take: 4,
         include: { lead: true, messages: { orderBy: { createdAt: "desc" }, take: 1 } },
       }),
       prisma.conversation.findMany({
-        where: { tenantId },
+        where: { tenantId, isTest: false },
         orderBy: { updatedAt: "desc" },
         take: 5,
         include: { lead: true, messages: { orderBy: { createdAt: "desc" }, take: 1 } },
@@ -157,7 +159,9 @@ export default async function InicioPage({
         where: { tenantId, archived: false, NOT: { systemPrompt: "" } },
         select: { id: true },
       }),
-      prisma.conversation.count({ where: { tenantId, updatedAt: { gte: monthStart } } }),
+      prisma.conversation.count({
+        where: { tenantId, isTest: false, updatedAt: { gte: monthStart } },
+      }),
     ]);
 
   const plan = planOf(tenant?.planKey);
