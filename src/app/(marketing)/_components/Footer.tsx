@@ -11,6 +11,12 @@ export function Footer() {
           © {new Date().getFullYear()} fechai · agente de whatsapp com ia
         </p>
         <div className="flex gap-5 text-sm text-white/50">
+          <Link href="/privacidade" className="hover:text-white">
+            Privacidade
+          </Link>
+          <Link href="/termos" className="hover:text-white">
+            Termos
+          </Link>
           <Link href="/login" className="hover:text-white">
             Entrar
           </Link>

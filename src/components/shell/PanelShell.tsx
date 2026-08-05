@@ -95,8 +95,14 @@ export function PanelShell({
             `main` agora `flex flex-col` e este filho em `flex-1`, ele recebe a
             altura exata que sobra do cabeçalho — telas normais (conteúdo mais
             curto) só ganham espaço vazio embaixo, sem quebrar nada.
+
+            `min-h-0` também é obrigatório aqui: item flex sem isso tem
+            min-height "auto" (baseado no conteúdo), então mesmo com `flex-1`
+            ele ainda estoura pro tamanho do conteúdo e quebra o cascade —
+            era exatamente esse o motivo do `main` voltar a rolar as três
+            colunas de /conversas juntas em vez de só a coluna da conversa.
           */}
-          <div className="relative flex flex-1 flex-col">{children}</div>
+          <div className="relative flex min-h-0 flex-1 flex-col">{children}</div>
         </main>
       </div>
     </div>
