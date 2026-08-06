@@ -86,7 +86,11 @@ export function CalendarMonth({
               aria-current={isSelected ? "date" : undefined}
               aria-label={`${day} de ${monthLabel}${count > 0 ? `, ${count} compromisso(s)` : ", sem compromissos"}`}
               className={cn(
-                "flex aspect-square flex-col items-center justify-center gap-1 rounded-control border text-sm transition-colors",
+                // Altura fixa, não `aspect-square`: em telas largas a coluna do
+                // calendário passou a dividir espaço com o painel de contatos —
+                // células quadradas (~110px+) faziam a grade sozinha estourar a
+                // tela. Altura fixa mantém o mês compacto em qualquer largura.
+                "flex h-10 flex-col items-center justify-center gap-0.5 rounded-control border text-sm transition-colors",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris focus-visible:ring-offset-2 focus-visible:ring-offset-ink",
                 isSelected
                   ? "border-iris bg-iris/20 text-white"

@@ -1,16 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import { Check, MessageSquareText, FileText, Zap, Rocket } from "lucide-react";
+import { Check, MessageSquareText, Ban, FileText, Zap, Rocket } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { PersonaAnswers } from "@/modules/agent-engine/persona";
 import type { ScheduleConfig } from "@/modules/scheduling/config";
+import type { FollowUpConfig } from "@/modules/follow-up/config";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Sandbox } from "@/app/(dashboard)/conversas/Sandbox";
 import { PersonaForm } from "../PersonaForm";
+import { RulesForm } from "../RulesForm";
 import { KnowledgeManager } from "../KnowledgeManager";
 import { ActionsToggles } from "../ActionsToggles";
+import { StepTabs } from "../StepTabs";
 
 type Doc = {
   id: string;
@@ -28,6 +31,13 @@ const STEPS = [
     icon: MessageSquareText,
     title: "Quem é o seu agente",
     help: "Responda como se estivesse treinando um funcionário novo. É isso que define o jeito dele falar.",
+  },
+  {
+    key: "regras",
+    label: "Regras",
+    icon: Ban,
+    title: "O que ele nunca deve fazer",
+    help: "Limites diretos — coisas que o agente nunca deve prometer, dizer ou fazer. Fatos que mudam (preço, horário) ficam no passo Conhecimento.",
   },
   {
     key: "conhecimento",
@@ -65,20 +75,25 @@ export function AgentWizard({
   agentId,
   initialStep,
   persona,
+  rules,
   documents,
   enabledKeys,
   planLimit,
   scheduleConfig,
+  followUpConfig,
   enabled,
   done,
 }: {
   agentId: string;
   initialStep: number;
   persona: Partial<PersonaAnswers>;
+  /** `avoid` cru do personaDraft — uma regra por linha (ver RulesForm). */
+  rules: string;
   documents: Doc[];
   enabledKeys: string[];
   planLimit: number;
   scheduleConfig: ScheduleConfig;
+  followUpConfig: FollowUpConfig;
   /** Agente ligado? Desligado, o teste não responde — a tela avisa antes. */
   enabled: boolean;
   done: Record<string, boolean>;
@@ -140,30 +155,58 @@ export function AgentWizard({
         </div>
 
         {current.key === "persona" && <PersonaForm agentId={agentId} initial={persona} />}
+        {/* Regras/Ações/Testar não têm seção interna para dividir — a sub-aba
+            única existe só pela consistência visual com os outros passos. */}
+        {current.key === "regras" && (
+          <StepTabs
+            tabs={[{ key: "regras", label: "Regras", content: <RulesForm agentId={agentId} initial={rules} /> }]}
+          />
+        )}
         {current.key === "conhecimento" && (
           <KnowledgeManager agentId={agentId} documents={documents} />
         )}
         {current.key === "acoes" && (
-          <ActionsToggles
-            agentId={agentId}
-            enabledKeys={enabledKeys}
-            planLimit={planLimit}
-            scheduleConfig={scheduleConfig}
+          <StepTabs
+            tabs={[
+              {
+                key: "acoes",
+                label: "Ações",
+                content: (
+                  <ActionsToggles
+                    agentId={agentId}
+                    enabledKeys={enabledKeys}
+                    planLimit={planLimit}
+                    scheduleConfig={scheduleConfig}
+                    followUpConfig={followUpConfig}
+                  />
+                ),
+              },
+            ]}
           />
         )}
         {/* O teste passou a acontecer aqui dentro. Mandar para /conversas
             testava o agente PRINCIPAL da conta, não este — quem tinha dois
             agentes conversava com o errado e achava que a persona não salvou. */}
         {current.key === "testar" && (
-          <div className="space-y-4">
-            {!enabled && (
-              <Alert tone="warn">
-                Este agente está desligado, então ele não responde nem aqui. Ligue a chave no topo
-                da página para testar.
-              </Alert>
-            )}
-            <Sandbox agentId={agentId} />
-          </div>
+          <StepTabs
+            tabs={[
+              {
+                key: "conversar",
+                label: "Conversar",
+                content: (
+                  <div className="space-y-4">
+                    {!enabled && (
+                      <Alert tone="warn">
+                        Este agente está desligado, então ele não responde nem aqui. Ligue a chave
+                        no topo da página para testar.
+                      </Alert>
+                    )}
+                    <Sandbox agentId={agentId} />
+                  </div>
+                ),
+              },
+            ]}
+          />
         )}
       </section>
 

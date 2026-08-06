@@ -1,13 +1,6 @@
 import { prisma } from "../../src/lib/prisma";
 import { getWhatsAppProvider } from "../../src/modules/whatsapp";
-
-export const FOLLOWUP_TEXT =
-  "Oi! Vi que nossa conversa ficou pela metade 😊 Posso te ajudar em mais alguma coisa?";
-
-export function followUpDelayMs(): number {
-  const minutes = Number(process.env.FOLLOWUP_DELAY_MINUTES ?? 1440); // 24h padrão
-  return minutes * 60_000;
-}
+import { parseFollowUpConfig, type FollowUpConfig } from "../../src/modules/follow-up/config";
 
 // Regra pura de elegibilidade — fácil de testar sem banco.
 export function isEligible(
@@ -23,16 +16,21 @@ export function isEligible(
   return true;
 }
 
-// Varre as conversas elegíveis dos tenants com a ação follow_up ativa e dispara.
+// Varre as conversas elegíveis dos agentes com a ação follow_up ativa e dispara.
 export async function scanAndSendFollowUps(now: Date = new Date()) {
-  const cutoff = new Date(now.getTime() - followUpDelayMs());
-
+  // O intervalo é por agente (TenantAction.config, ver módulo follow-up) —
+  // cada agente da conta pode ter o dele. Por isso não dá mais para filtrar
+  // por um `cutoff` só na query: busca sem filtro de data e decide na volta.
   const enabled = await prisma.tenantAction.findMany({
     where: { key: "follow_up", enabled: true },
-    select: { tenantId: true },
+    select: { tenantId: true, agentId: true, config: true },
   });
-  const tenantIds = enabled.map((t) => t.tenantId);
-  if (tenantIds.length === 0) return { scanned: 0, sent: 0 };
+  if (enabled.length === 0) return { scanned: 0, sent: 0 };
+
+  const configByAgent = new Map<string, FollowUpConfig>(
+    enabled.map((a) => [a.agentId, parseFollowUpConfig(a.config)]),
+  );
+  const tenantIds = [...new Set(enabled.map((a) => a.tenantId))];
 
   const convos = await prisma.conversation.findMany({
     where: {
@@ -42,7 +40,7 @@ export async function scanAndSendFollowUps(now: Date = new Date()) {
       isTest: false,
       needsHuman: false,
       followUpSentAt: null,
-      lastInboundAt: { not: null, lt: cutoff },
+      lastInboundAt: { not: null },
     },
     include: { lead: true, messages: { orderBy: { createdAt: "desc" }, take: 1 } },
   });
@@ -51,13 +49,19 @@ export async function scanAndSendFollowUps(now: Date = new Date()) {
   let sent = 0;
 
   for (const c of convos) {
+    // Conversa de um agente que não tem follow_up ligado (mesmo que outro
+    // agente da mesma conta tenha) não entra — a ação é por agente.
+    const config = c.agentId ? configByAgent.get(c.agentId) : undefined;
+    if (!config) continue;
+
+    const cutoff = new Date(now.getTime() - config.delayHours * 60 * 60_000);
     if (!isEligible({ ...c, lastRole: c.messages[0]?.role }, cutoff)) continue;
 
     if (provider.isConfigured() && !c.lead.isTest) {
       const instance = await prisma.whatsappInstance.findUnique({ where: { tenantId: c.tenantId } });
       if (instance?.externalId && instance.status === "connected") {
         try {
-          await provider.sendMessage(instance.externalId, c.lead.phone, FOLLOWUP_TEXT);
+          await provider.sendMessage(instance.externalId, c.lead.phone, config.message);
         } catch (err) {
           console.error("[follow-up] falha ao enviar", c.id, err);
         }
@@ -65,7 +69,7 @@ export async function scanAndSendFollowUps(now: Date = new Date()) {
     }
 
     await prisma.message.create({
-      data: { conversationId: c.id, role: "assistant", content: FOLLOWUP_TEXT },
+      data: { conversationId: c.id, role: "assistant", content: config.message },
     });
     await prisma.conversation.update({ where: { id: c.id }, data: { followUpSentAt: now } });
     sent++;

@@ -13,6 +13,7 @@ import { Field, fieldProps } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
+import { StepTabs, type StepTab } from "./StepTabs";
 import { savePersona } from "./actions";
 
 const EMPTY: PersonaAnswers = {
@@ -49,6 +50,42 @@ export function PersonaForm({
 
   const preview = composeSystemPrompt(answers);
 
+  // Um grupo por sub-aba. Todas ficam sempre montadas (ver StepTabs) — os
+  // três grupos continuam sendo UM `<form>` só, com UM botão salvar.
+  const tabs: StepTab[] = PERSONA_GROUPS.map((group) => ({
+    key: group.key,
+    label: group.legend.replace(/^\d+\.\s*/, ""),
+    content: (
+      <fieldset className="min-w-0 space-y-5">
+        <legend className="font-display text-base font-semibold text-white">{group.legend}</legend>
+        <p className="-mt-3 max-w-prose text-sm text-white/55">{group.hint}</p>
+
+        {PERSONA_FIELDS.filter((f) => f.group === group.key).map((f) => {
+          // `name` já é único e estável — serve de id sem precisar de useId().
+          const id = `persona-${f.name}`;
+          // O schema do servidor só exige o nome do negócio; o resto é opcional.
+          const required = f.name === "businessName";
+          const Control = f.type === "textarea" ? Textarea : Input;
+
+          return (
+            <Field key={f.name} label={f.label} htmlFor={id} hint={f.hint} optional={!required}>
+              <Control
+                {...fieldProps(id, { hint: true })}
+                name={f.name}
+                placeholder={f.placeholder}
+                value={answers[f.name]}
+                onChange={(e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+                  setAnswers((prev) => ({ ...prev, [f.name]: e.target.value }))
+                }
+                required={required}
+              />
+            </Field>
+          );
+        })}
+      </fieldset>
+    ),
+  }));
+
   return (
     <form action={formAction} className="space-y-8">
       <input type="hidden" name="agentId" value={agentId} />
@@ -59,37 +96,7 @@ export function PersonaForm({
         <strong className="font-medium"> Base de conhecimento</strong>, no próximo passo.
       </Alert>
 
-      {PERSONA_GROUPS.map((group) => (
-        <fieldset key={group.key} className="min-w-0 space-y-5">
-          <legend className="font-display text-base font-semibold text-white">
-            {group.legend}
-          </legend>
-          <p className="-mt-3 max-w-prose text-sm text-white/55">{group.hint}</p>
-
-          {PERSONA_FIELDS.filter((f) => f.group === group.key).map((f) => {
-            // `name` já é único e estável — serve de id sem precisar de useId().
-            const id = `persona-${f.name}`;
-            // O schema do servidor só exige o nome do negócio; o resto é opcional.
-            const required = f.name === "businessName";
-            const Control = f.type === "textarea" ? Textarea : Input;
-
-            return (
-              <Field key={f.name} label={f.label} htmlFor={id} hint={f.hint} optional={!required}>
-                <Control
-                  {...fieldProps(id, { hint: true })}
-                  name={f.name}
-                  placeholder={f.placeholder}
-                  value={answers[f.name]}
-                  onChange={(e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
-                    setAnswers((prev) => ({ ...prev, [f.name]: e.target.value }))
-                  }
-                  required={required}
-                />
-              </Field>
-            );
-          })}
-        </fieldset>
-      ))}
+      <StepTabs tabs={tabs} />
 
       {/* Prévia fechada por padrão: é para conferir, não para editar — quem
           quiser ajustar volta nos campos, que é onde o texto é gerado. */}

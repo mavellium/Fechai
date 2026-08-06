@@ -75,6 +75,7 @@ services:
       args:
         NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY}
         NEXT_PUBLIC_BUNNY_PULL_ZONE: ${NEXT_PUBLIC_BUNNY_PULL_ZONE}
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL}
     command: ["npm", "run", "start"]
     restart: unless-stopped
     env_file:
@@ -118,6 +119,7 @@ services:
       args:
         NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY}
         NEXT_PUBLIC_BUNNY_PULL_ZONE: ${NEXT_PUBLIC_BUNNY_PULL_ZONE}
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL}
     command: ["npm", "run", "worker"]
     restart: unless-stopped
     env_file:

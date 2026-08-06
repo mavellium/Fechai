@@ -7,6 +7,7 @@ import { planOf } from "@/modules/billing/plans";
 import { getAgentOwned } from "@/modules/agent-engine/agents";
 import { isActionAvailable } from "@/modules/agent-engine/actions";
 import { getScheduleConfig } from "@/modules/scheduling/repository";
+import { getFollowUpConfig } from "@/modules/follow-up/config";
 import type { PersonaAnswers } from "@/modules/agent-engine/persona";
 import { AgentWizard } from "./AgentWizard";
 import { AgentHeader } from "./AgentHeader";
@@ -19,33 +20,42 @@ export default async function AgentePage({ params }: { params: Promise<{ id: str
   // 404 e não "acesso negado": para quem não é dono, o agente não existe.
   if (!agent) notFound();
 
-  const [tenant, documents, tenantActions, agentCount, scheduleConfig] = await Promise.all([
-    prisma.tenant.findUnique({ where: { id: tenantId }, select: { planKey: true } }),
-    prisma.knowledgeDocument.findMany({
-      where: { tenantId, agentId: agent.id },
-      orderBy: { createdAt: "desc" },
-      select: { id: true, title: true, status: true, createdAt: true, fileUrl: true, fileName: true },
-    }),
-    prisma.tenantAction.findMany({
-      where: { agentId: agent.id, enabled: true },
-      select: { key: true },
-    }),
-    prisma.agent.count({ where: { tenantId, archived: false } }),
-    getScheduleConfig(agent.id),
-  ]);
+  const [tenant, documents, tenantActions, agentCount, scheduleConfig, followUpConfig] =
+    await Promise.all([
+      prisma.tenant.findUnique({ where: { id: tenantId }, select: { planKey: true } }),
+      prisma.knowledgeDocument.findMany({
+        where: { tenantId, agentId: agent.id },
+        orderBy: { createdAt: "desc" },
+        select: { id: true, title: true, status: true, createdAt: true, fileUrl: true, fileName: true },
+      }),
+      prisma.tenantAction.findMany({
+        where: { agentId: agent.id, enabled: true },
+        select: { key: true },
+      }),
+      prisma.agent.count({ where: { tenantId, archived: false } }),
+      getScheduleConfig(agent.id),
+      getFollowUpConfig(agent.id),
+    ]);
 
   // Desativadas temporariamente não contam como "ação ativa" no checklist.
   const actions = tenantActions.filter((a) => isActionAvailable(a.key));
 
+  const rules = (agent.personaDraft as Partial<PersonaAnswers> | null)?.avoid ?? "";
+
   const done = {
     persona: agent.systemPrompt.length > 0,
+    // Regras é complementar (o agente funciona sem nenhuma) — o check aqui é
+    // só informativo, não bloqueia nada; ver decisão em agentSteps().
+    regras: Boolean(rules),
     conhecimento: documents.length > 0,
     acoes: actions.length > 0,
     testar: false,
   };
   // Abre no primeiro passo pendente — quem volta continua de onde parou em vez
   // de cair sempre na persona já preenchida.
-  const firstPending = ["persona", "conhecimento", "acoes"].findIndex((k) => !done[k as keyof typeof done]);
+  const firstPending = ["persona", "regras", "conhecimento", "acoes"].findIndex(
+    (k) => !done[k as keyof typeof done],
+  );
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -69,12 +79,15 @@ export default async function AgentePage({ params }: { params: Promise<{ id: str
 
       <AgentWizard
         agentId={agent.id}
-        initialStep={firstPending === -1 ? 3 : firstPending}
+        // -1 (tudo pronto) cai no último passo (Testar) — 5 passos agora, com Regras.
+        initialStep={firstPending === -1 ? 4 : firstPending}
         persona={(agent.personaDraft as Partial<PersonaAnswers> | null) ?? {}}
+        rules={rules}
         documents={documents}
         enabledKeys={actions.map((a) => a.key)}
         planLimit={planOf(tenant?.planKey).maxActiveActions}
         scheduleConfig={scheduleConfig}
+        followUpConfig={followUpConfig}
         enabled={agent.enabled}
         done={done}
       />

@@ -1,9 +1,12 @@
 import { Check, X } from "lucide-react";
 import { requireTenant } from "@/lib/session";
+import { prisma } from "@/lib/prisma";
 import { tenantChecks, type Check as HealthCheck } from "@/lib/health";
 import { ButtonLink } from "@/components/ui/button";
 import { Card, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { ProfileForm } from "./ProfileForm";
+import { PasswordForm } from "./PasswordForm";
 import { FeedbackForm } from "./FeedbackForm";
 
 /** Traduz o status cru do provedor que vem no `detail` do check de WhatsApp. */
@@ -49,41 +52,71 @@ function CheckRow({ c }: { c: HealthCheck }) {
 }
 
 export default async function ConfiguracoesPage() {
-  const { tenantId } = await requireTenant();
-  const checks = await tenantChecks(tenantId);
+  const { session, tenantId } = await requireTenant();
+
+  // Direto do banco, não da sessão: o nome no JWT só atualiza no próximo
+  // login, então relendo aqui o formulário sempre mostra o valor salvo.
+  const [user, checks] = await Promise.all([
+    prisma.user.findUniqueOrThrow({
+      where: { id: session.user.id },
+      select: { name: true, email: true },
+    }),
+    tenantChecks(tenantId),
+  ]);
   const pending = checks.filter((c) => !c.ok).length;
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
+    <div className="mx-auto w-full max-w-6xl space-y-6">
       <PageHeader
         eyebrow="configurações"
         title="Configurações"
-        description="Status da conta e envio de feedback."
+        description="Sua conta, status da configuração e envio de feedback."
         className="mb-2"
       />
 
-      <Card>
-        <CardTitle
-          hint="Complete todos para o agente funcionar 100%."
-          action={
-            <span className="font-mono text-micro uppercase tracking-[0.15em] text-white/60">
-              {pending === 0 ? "tudo pronto" : `${pending} pendente${pending > 1 ? "s" : ""}`}
-            </span>
-          }
-        >
-          Sua configuração
-        </CardTitle>
-        <ul className="divide-y divide-white/5">
-          {checks.map((c) => (
-            <CheckRow key={c.label} c={c} />
-          ))}
-        </ul>
-      </Card>
+      {/*
+        Mesmo grid de /inicio: coluna principal (2/3) para o que se edita,
+        coluna lateral (1/3) para status e ações secundárias. Em telas
+        estreitas cai para 1 coluna só — a ordem no DOM já é a leitura certa.
+      */}
+      <div className="grid gap-6 lg:grid-cols-3">
+        <div className="space-y-6 lg:col-span-2">
+          <Card>
+            <CardTitle hint="Nome e e-mail usados na sua conta.">Perfil</CardTitle>
+            <ProfileForm name={user.name ?? ""} email={user.email} />
+          </Card>
 
-      <Card>
-        <CardTitle hint="Sua opinião ajuda a melhorar o produto.">Enviar feedback</CardTitle>
-        <FeedbackForm />
-      </Card>
+          <Card>
+            <CardTitle hint="Recomendado a cada alguns meses.">Senha</CardTitle>
+            <PasswordForm />
+          </Card>
+        </div>
+
+        <div className="space-y-6">
+          <Card>
+            <CardTitle
+              hint="Complete todos para o agente funcionar 100%."
+              action={
+                <span className="font-mono text-micro uppercase tracking-[0.15em] text-white/60">
+                  {pending === 0 ? "tudo pronto" : `${pending} pendente${pending > 1 ? "s" : ""}`}
+                </span>
+              }
+            >
+              Sua configuração
+            </CardTitle>
+            <ul className="divide-y divide-white/5">
+              {checks.map((c) => (
+                <CheckRow key={c.label} c={c} />
+              ))}
+            </ul>
+          </Card>
+
+          <Card>
+            <CardTitle hint="Sua opinião ajuda a melhorar o produto.">Enviar feedback</CardTitle>
+            <FeedbackForm />
+          </Card>
+        </div>
+      </div>
     </div>
   );
 }

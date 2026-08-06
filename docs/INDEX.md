@@ -18,6 +18,7 @@ Ver [CHANGELOG.md](./CHANGELOG.md) para o último milestone concluído.
 - Convenções de código → [CONVENTIONS.md](./CONVENTIONS.md)
 - Primitivos de UI, superfícies e regras de interação → [CONVENTIONS.md](./CONVENTIONS.md) (seções "Superfícies" e "Regras de interação")
 - Revisão de UI do painel (diagnóstico, decisões e pendências) → [revisao-ui-painel-2026-07.md](./revisao-ui-painel-2026-07.md)
+- SEO e GEO (metadata, sitemap, JSON-LD, llms.txt + passos fora do código) → [SEO.md](./SEO.md)
 - Decisões técnicas (ADRs) → [decisions/](./decisions/)
 - Auth (Auth.js v5) → `src/auth.ts`, guards em `src/lib/session.ts`
 - Cliente Prisma (singleton) → `src/lib/prisma.ts`

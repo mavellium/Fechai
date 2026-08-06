@@ -26,8 +26,8 @@ export const PERSONA_GROUPS: { key: PersonaGroup; legend: string; hint: string }
   },
   {
     key: "comportamento",
-    legend: "2. Como ele fala e o que pode dizer",
-    hint: "O jeito da conversa e os limites — é aqui que você evita promessa indevida.",
+    legend: "2. Como ele fala",
+    hint: "O tom e os assuntos que ele puxa sozinho. Limites do que ele NUNCA deve fazer ficam no passo Regras.",
   },
   {
     key: "objetivo",
@@ -88,14 +88,6 @@ export const PERSONA_FIELDS: PersonaField[] = [
     group: "comportamento",
   },
   {
-    name: "avoid",
-    label: "O que o agente NÃO deve fazer",
-    placeholder: "Ex: não prometer descontos, não dar diagnóstico médico",
-    type: "textarea",
-    hint: "Limites, um por linha. É o campo que evita promessa que você não pode cumprir.",
-    group: "comportamento",
-  },
-  {
     name: "objective",
     label: "Objetivo da conversa",
     placeholder: "Ex: agendar uma aula experimental",
@@ -105,6 +97,16 @@ export const PERSONA_FIELDS: PersonaField[] = [
   },
 ];
 
+/** `avoid` guarda uma regra por linha (ver RulesForm) — aqui vira lista com marcadores. */
+function formatRules(avoid: string): string {
+  const rules = avoid
+    .split("\n")
+    .map((r) => r.trim())
+    .filter(Boolean);
+  if (rules.length === 0) return "";
+  return `Regras que você deve seguir sempre:\n${rules.map((r) => `- ${r}`).join("\n")}`;
+}
+
 export function composeSystemPrompt(a: PersonaAnswers): string {
   const parts = [
     a.agentName
@@ -113,7 +115,7 @@ export function composeSystemPrompt(a: PersonaAnswers): string {
     a.tone ? `Tom de voz: ${a.tone}.` : "",
     "Responda com base APENAS na base de conhecimento fornecida. Se não souber, diga que vai verificar e ofereça encaminhar a um humano.",
     a.offer ? `Você deve oferecer/explicar: ${a.offer}.` : "",
-    a.avoid ? `Você NÃO deve: ${a.avoid}.` : "",
+    formatRules(a.avoid),
     "Seja objetivo e comercial. Colete os dados do contato quando fizer sentido e use as ações disponíveis.",
   ];
   return parts.filter(Boolean).join("\n");

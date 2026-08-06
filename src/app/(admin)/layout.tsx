@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { requireSuperadmin } from "@/lib/session";
 import { signOut } from "@/auth";
 import { PanelShell } from "@/components/shell/PanelShell";
@@ -8,6 +9,11 @@ const NAV: NavItem[] = [
   { href: "/admin/ia", label: "IA", icon: "Cpu" },
   { href: "/admin/feedbacks", label: "Feedbacks", icon: "Star" },
 ];
+
+/** Painel restrito: nunca indexar. */
+export const metadata: Metadata = {
+  robots: { index: false, follow: false },
+};
 
 async function signOutAction() {
   "use server";

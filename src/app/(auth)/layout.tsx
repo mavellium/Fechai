@@ -1,7 +1,20 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { HeroChat } from "../(marketing)/_components/HeroChat";
 import { FadeIn } from "@/components/ui/FadeIn";
 import { requireGuest } from "@/lib/session";
+
+/**
+ * As telas de auth são client components, que não podem exportar `metadata` —
+ * por isso o title/description delas vive aqui, no layout (server component).
+ * Ficam indexáveis de propósito: "criar conta fechai" é consulta de marca.
+ */
+export const metadata: Metadata = {
+  title: "Criar conta ou entrar",
+  description:
+    "Crie sua conta no fechai e coloque um agente de IA para atender o WhatsApp do seu negócio. Plano grátis, sem cartão de crédito.",
+  alternates: { canonical: "/cadastro" },
+};
 
 /**
  * Tela de conversão: sem navegação completa, um único caminho (completar o form).

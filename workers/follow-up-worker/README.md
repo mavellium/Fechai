@@ -18,10 +18,15 @@ npm run db:up        # Redis precisa estar de pé
 npm run worker       # tsx workers/follow-up-worker/index.ts
 ```
 
-Env: `REDIS_URL`, `FOLLOWUP_DELAY_MINUTES` (silêncio até follow-up, padrão 1440), `FOLLOWUP_SCAN_EVERY_MINUTES` (intervalo da varredura, padrão 15).
+Env: `REDIS_URL`, `FOLLOWUP_SCAN_EVERY_MINUTES` (intervalo da varredura, padrão 15).
+
+O silêncio até o follow-up e o texto da mensagem são configurados por agente
+(não são mais env/constante global) — `TenantAction.config` da chave
+`follow_up`, editado em `/agentes/[id]` → Ações → Follow-up automático (ver
+`src/modules/follow-up/config.ts`). Padrão: 24h, mensagem genérica de reengajamento.
 
 ## O que NÃO faz
 
-- Não gera texto por IA (usa `FOLLOWUP_TEXT` fixo no MVP).
+- Não gera texto por IA (usa o texto fixo salvo na config, não um LLM).
 - Não reenvia mais de uma vez (marca `followUpSentAt`).
 - Não roda dentro do Next — é um processo à parte (deploy no Railway/Fly.io).

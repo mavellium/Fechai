@@ -6,22 +6,33 @@ import Link from "next/link";
 import { AVAILABLE_ACTIONS, type ActionKey } from "@/modules/agent-engine/actions";
 import type { ScheduleConfig } from "@/modules/scheduling/config";
 import { describeSchedule } from "@/modules/scheduling/config";
+import type { FollowUpConfig } from "@/modules/follow-up/config";
+import { describeFollowUp } from "@/modules/follow-up/config";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { ScheduleSettings } from "./ScheduleSettings";
+import { FollowUpSettings } from "./FollowUpSettings";
 import { setActionEnabled } from "./actions";
+
+/** Rótulo do botão que abre a configuração — uma linha por ação configurável. */
+const CONFIG_LABEL: Partial<Record<ActionKey, string>> = {
+  schedule_meeting: "Configurar horário de atendimento",
+  follow_up: "Configurar intervalo do follow-up",
+};
 
 export function ActionsToggles({
   agentId,
   enabledKeys,
   planLimit,
   scheduleConfig,
+  followUpConfig,
 }: {
   agentId: string;
   enabledKeys: string[];
   planLimit: number;
   scheduleConfig: ScheduleConfig;
+  followUpConfig: FollowUpConfig;
 }) {
   const [enabled, setEnabled] = useState<Set<string>>(
     () => new Set(enabledKeys.filter((k) => AVAILABLE_ACTIONS.some((a) => a.key === k))),
@@ -131,17 +142,25 @@ export function ActionsToggles({
                     className="inline-flex items-center gap-2 rounded-control font-mono text-micro uppercase tracking-[0.15em] text-white/70 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris"
                   >
                     <Settings2 size={13} aria-hidden />
-                    {showConfig ? "Fechar configuração" : "Configurar horário de atendimento"}
+                    {showConfig ? "Fechar configuração" : CONFIG_LABEL[a.key]}
                   </button>
                   {!showConfig && (
-                    <p className="mt-1 text-sm text-white/45">{describeSchedule(scheduleConfig)}</p>
+                    <p className="mt-1 text-sm text-white/45">
+                      {a.key === "schedule_meeting" && describeSchedule(scheduleConfig)}
+                      {a.key === "follow_up" && describeFollowUp(followUpConfig)}
+                    </p>
                   )}
                 </div>
               )}
 
               {showConfig && (
                 <div className="mt-4">
-                  <ScheduleSettings agentId={agentId} config={scheduleConfig} />
+                  {a.key === "schedule_meeting" && (
+                    <ScheduleSettings agentId={agentId} config={scheduleConfig} />
+                  )}
+                  {a.key === "follow_up" && (
+                    <FollowUpSettings agentId={agentId} config={followUpConfig} />
+                  )}
                 </div>
               )}
             </li>

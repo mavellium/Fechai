@@ -90,6 +90,48 @@ body {
   font-family: var(--font-sans);
 }
 
+/*
+ * Scrollbar da marca — track invisível, thumb fino e arredondado, sem classe
+ * extra em cada `overflow-y-auto` do produto. Cobre a rolagem da janela
+ * (marketing/auth/onboarding, superfície `paper`) e qualquer container com
+ * overflow dentro do painel (`[data-surface="dark"]`, ver linha ~59).
+ * `color-mix`/`scrollbar-color` sem suporte (Safari <16.4, navegadores
+ * antigos) apenas caem no scrollbar nativo do SO — degradação tranquila.
+ */
+html {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--color-ink) 22%, transparent) transparent;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--color-ink) 22%, transparent);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--color-ink) 38%, transparent);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+[data-surface="dark"] {
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+}
+[data-surface="dark"] ::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.16);
+}
+[data-surface="dark"] ::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.3);
+}
+
 /* Assinatura da marca: "digitando → check" (TypingToCheck.tsx). */
 .ttc-dot {
   animation: ttc-bounce 1s ease-in-out infinite;

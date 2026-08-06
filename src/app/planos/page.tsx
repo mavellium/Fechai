@@ -1,9 +1,15 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { isStripeConfigured } from "@/modules/billing/stripe";
 import { PlanPicker } from "./PlanPicker";
 import { FadeIn } from "@/components/ui/FadeIn";
+
+/** Exige sessão (requireTenant): para o crawler é só um redirect ao login. */
+export const metadata: Metadata = {
+  robots: { index: false, follow: false },
+};
 
 export default async function PlanosPage() {
   const { tenantId } = await requireTenant();

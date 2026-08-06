@@ -46,9 +46,10 @@ export const ACTION_CATALOG: ActionDef[] = [
   {
     key: "follow_up",
     label: "Follow-up automático",
-    description: "Reengaja o contato após X horas sem resposta.",
+    description: "Reengaja o contato depois de quantas horas você definir, sem resposta.",
     outcome: "O agente manda uma mensagem sozinho se o contato sumir.",
     status: "ready",
+    configurable: true,
   },
   {
     key: "handoff_human",

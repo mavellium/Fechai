@@ -10,6 +10,7 @@ import { composeSystemPrompt, type PersonaAnswers } from "@/modules/agent-engine
 import { ACTION_BY_KEY, type ActionKey } from "@/modules/agent-engine/actions";
 import { createAgent, getAgentOwned, getAgentUsage } from "@/modules/agent-engine/agents";
 import { saveScheduleConfig } from "@/modules/scheduling/repository";
+import { saveFollowUpConfig } from "@/modules/follow-up/config";
 import { ingestDocument, deleteDocument } from "@/modules/knowledge-base/repository";
 import { extractTextFromFile } from "@/modules/knowledge-base/extract";
 import { uploadToBunny } from "@/lib/bunny";
@@ -161,7 +162,12 @@ export async function savePersona(_prev: Result | null, formData: FormData): Pro
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Dados inválidos" };
   }
-  const answers = parsed.data as PersonaAnswers;
+
+  // `avoid` não faz mais parte deste formulário (virou o passo Regras, com
+  // sua própria action) — preserva o que já estava salvo em vez de confiar no
+  // `.default("")` do schema, que apagaria as regras a cada save de persona.
+  const existingAvoid = (agent.personaDraft as Partial<PersonaAnswers> | null)?.avoid ?? "";
+  const answers: PersonaAnswers = { ...parsed.data, avoid: existingAvoid };
 
   await prisma.agent.update({
     where: { id: agent.id },
@@ -175,6 +181,44 @@ export async function savePersona(_prev: Result | null, formData: FormData): Pro
   });
   revalidateAgent(agent.id);
   return { ok: true, info: "Persona salva." };
+}
+
+const rulesSchema = z.object({
+  rules: z.string().trim().default(""),
+});
+
+/**
+ * Regras (`avoid`) têm a própria action porque o formulário de Regras não
+ * carrega os outros campos de persona no DOM — reaproveitar `personaSchema`
+ * faria o resto da persona cair no `.default("")` e ser apagado.
+ */
+export async function saveRules(_prev: Result | null, formData: FormData): Promise<Result> {
+  const agentId = String(formData.get("agentId") ?? "");
+  const { agent } = await requireAgent(agentId);
+  if (!agent) return { ok: false, error: "Agente não encontrado" };
+
+  const parsed = rulesSchema.safeParse({ rules: formData.get("rules") });
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Dados inválidos" };
+  }
+
+  const draft = (agent.personaDraft as Partial<PersonaAnswers> | null) ?? {};
+  const answers: PersonaAnswers = {
+    agentName: draft.agentName ?? "",
+    businessName: draft.businessName ?? "",
+    sector: draft.sector ?? "",
+    tone: draft.tone ?? "",
+    offer: draft.offer ?? "",
+    objective: draft.objective ?? "",
+    avoid: parsed.data.rules,
+  };
+
+  await prisma.agent.update({
+    where: { id: agent.id },
+    data: { systemPrompt: composeSystemPrompt(answers), personaDraft: answers },
+  });
+  revalidateAgent(agent.id);
+  return { ok: true, info: "Regras salvas." };
 }
 
 // ----------------------------------------------------------------- ações
@@ -259,6 +303,36 @@ export async function saveScheduleConfigAction(
   revalidateAgent(agent.id);
   revalidatePath("/agenda");
   return { ok: true, info: "Horário de atendimento salvo." };
+}
+
+// --------------------------------------------------- configuração do follow-up
+
+const followUpConfigSchema = z.object({
+  delayHours: z.coerce.number().int().min(1).max(720),
+  message: z.string().trim().min(1, "Escreva a mensagem de follow-up").max(500),
+});
+
+/**
+ * Intervalo de silêncio usado pela ação "Follow-up automático". Fica em
+ * `TenantAction.config` (ver módulo follow-up), igual ao horário de
+ * atendimento do agendamento.
+ */
+export async function saveFollowUpConfigAction(
+  _prev: Result | null,
+  formData: FormData,
+): Promise<Result> {
+  const agentId = String(formData.get("agentId") ?? "");
+  const { tenantId, agent } = await requireAgent(agentId);
+  if (!agent) return { ok: false, error: "Agente não encontrado" };
+
+  const parsed = followUpConfigSchema.safeParse(Object.fromEntries(formData));
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Dados inválidos" };
+  }
+
+  await saveFollowUpConfig(tenantId, agent.id, parsed.data);
+  revalidateAgent(agent.id);
+  return { ok: true, info: "Follow-up salvo." };
 }
 
 // ----------------------------------------------------------- conhecimento

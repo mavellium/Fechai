@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { requireOwner } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
@@ -16,6 +17,12 @@ const NAV: NavItem[] = [
   { href: "/relatorios", label: "Relatórios", icon: "BarChart3" },
   { href: "/configuracoes", label: "Configurações", icon: "Settings" },
 ];
+
+/** Área logada: fora do índice. Robots.txt já bloqueia, mas a meta tag cobre o
+ *  caso de a URL ser descoberta por link externo. */
+export const metadata: Metadata = {
+  robots: { index: false, follow: false },
+};
 
 async function signOutAction() {
   "use server";

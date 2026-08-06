@@ -40,6 +40,11 @@ ARG NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY
 ENV NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=${NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY}
 ARG NEXT_PUBLIC_BUNNY_PULL_ZONE
 ENV NEXT_PUBLIC_BUNNY_PULL_ZONE=${NEXT_PUBLIC_BUNNY_PULL_ZONE}
+# Domínio canônico: entra no HTML (canonical/OG) e no sitemap/robots gerados no
+# build — precisa existir aqui, não só em runtime, ou o site é publicado
+# apontando para o domínio de fallback.
+ARG NEXT_PUBLIC_SITE_URL
+ENV NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL}
 RUN npm run build
 
 # ---------- runner: imagem final, usuário não-root ----------

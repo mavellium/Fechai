@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { CalendarX2, Clock, User } from "lucide-react";
+import { CalendarX2, Clock, User, UsersRound } from "lucide-react";
 import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { Alert } from "@/components/ui/alert";
@@ -11,10 +11,14 @@ import { describeSchedule, parseScheduleConfig } from "@/modules/scheduling/conf
 import { isGoogleCalendarConfigured } from "@/modules/scheduling/google";
 import { listMonthAppointments } from "@/modules/scheduling/repository";
 import { timeInZone, todayInZone } from "@/modules/scheduling/time";
+import { leadStatusLabel } from "../conversas/leadStatus";
 import { CalendarMonth } from "./CalendarMonth";
 import { AppointmentActions } from "./AppointmentActions";
 import { NewAppointmentDialog, type ContactOption } from "./NewAppointmentDialog";
 import { GoogleCalendarCard, type GoogleState } from "./GoogleCalendarCard";
+
+/** Quantos contatos mostrar no painel lateral — o resto fica em /contatos. */
+const SIDEBAR_CONTACTS = 6;
 
 const STATUS_BADGE: Record<string, { label: string; tone: "success" | "neutral" | "danger" }> = {
   scheduled: { label: "marcado", tone: "success" },
@@ -76,7 +80,7 @@ export default async function AgendaPage({
       where: { tenantId, isTest: false },
       orderBy: { createdAt: "desc" },
       take: 100,
-      select: { id: true, name: true, phone: true },
+      select: { id: true, name: true, phone: true, status: true },
     }),
   ]);
 
@@ -276,6 +280,55 @@ export default async function AgendaPage({
           </Card>
 
           <GoogleCalendarCard state={googleState} />
+
+          <Card>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h2 className="font-display text-base font-semibold text-white">Contatos</h2>
+              <Link
+                href="/contatos"
+                className="shrink-0 rounded-control font-mono text-micro uppercase tracking-wide text-iris underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris"
+              >
+                Ver todos
+              </Link>
+            </div>
+
+            {contacts.length === 0 ? (
+              <EmptyState
+                icon={UsersRound}
+                title="Nenhum contato ainda"
+                description="Quando alguém falar com seu agente, aparece aqui."
+                className="py-6"
+              />
+            ) : (
+              <ul className="-mx-2 space-y-0.5">
+                {contacts.slice(0, SIDEBAR_CONTACTS).map((c) => {
+                  const status = leadStatusLabel(c.status);
+                  return (
+                    <li key={c.id}>
+                      <Link
+                        href={`/contatos?q=${encodeURIComponent(c.phone)}`}
+                        className="flex items-center justify-between gap-2 rounded-control px-2 py-2 transition-colors hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris"
+                      >
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm text-white/85">
+                            {c.name || c.phone}
+                          </span>
+                          {c.name && (
+                            <span className="block truncate font-mono text-micro text-white/45">
+                              {c.phone}
+                            </span>
+                          )}
+                        </span>
+                        <Badge tone={status.tone} className="shrink-0">
+                          {status.label}
+                        </Badge>
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </Card>
         </div>
       </div>
     </div>
