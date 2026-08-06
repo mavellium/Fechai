@@ -44,7 +44,7 @@ ENV NEXT_PUBLIC_BUNNY_PULL_ZONE=${NEXT_PUBLIC_BUNNY_PULL_ZONE}
 # build — precisa existir aqui, não só em runtime, ou o site é publicado
 # apontando para o domínio de fallback.
 ARG NEXT_PUBLIC_SITE_URL
-ENV NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL}
+ENV NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL:-https://fechai.januscms.com.br}
 RUN npm run build
 
 # ---------- runner: imagem final, usuário não-root ----------

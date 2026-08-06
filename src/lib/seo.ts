@@ -17,7 +17,7 @@
  * domínio real; para trocar de domínio, defina NEXT_PUBLIC_SITE_URL.
  */
 export const SITE_URL = (
-  process.env.NEXT_PUBLIC_SITE_URL ?? "https://fechai.januscms.com.br"
+  process.env.NEXT_PUBLIC_SITE_URL?.trim() || "https://fechai.januscms.com.br"
 ).replace(/\/+$/, "");
 
 export const SITE_NAME = "fechai";
