@@ -23,6 +23,20 @@ export const SITE_URL = (
 export const SITE_NAME = "fechai";
 
 /**
+ * Título da home. Formato "<marca> | <categoria>", com a marca ISOLADA antes do
+ * separador — e não "fechai — agente de IA que atende e vende pelo seu
+ * WhatsApp", que era uma frase inteira.
+ *
+ * O motivo não é estético: a verificação de branding do OAuth (Google Cloud
+ * Console) extrai o nome do app da página inicial, principalmente do <title>, e
+ * compara com o "Nome do app" configurado lá (`fechai`). Com um title que é uma
+ * frase, a comparação falhava com dois erros ao mesmo tempo — "o nome não
+ * corresponde" e "a página não explica a finalidade". A cauda longa de SEO
+ * continua no <h1> sr-only do Hero, na meta description e no JSON-LD.
+ */
+export const SITE_TITLE = `${SITE_NAME} | Agente de IA para WhatsApp`;
+
+/**
  * Descrição-mãe. Repete a marca + a categoria ("agente de IA para WhatsApp")
  * porque é assim que tanto o Google quanto um LLM associam o nome ao que o
  * produto faz — o alvo da busca por "fechai".

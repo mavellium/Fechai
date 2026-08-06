@@ -11,12 +11,15 @@ import { FAQ } from "./_components/FAQ";
 import { CTAFinal } from "./_components/CTAFinal";
 import { PERGUNTAS, PASSOS } from "./_components/content";
 import { FaqJsonLd, HowToJsonLd } from "@/components/seo/JsonLd";
+import { SITE_TITLE } from "@/lib/seo";
 
 export const metadata: Metadata = {
   // `absolute` ignora o template "%s · fechai" do root layout — sem ele o
   // title da home sairia "…WhatsApp · fechai", repetindo a marca duas vezes.
+  // O texto vem de SITE_TITLE (ver src/lib/seo.ts): o formato "fechai | <categoria>"
+  // é requisito da verificação de branding do OAuth, não escolha estética.
   title: {
-    absolute: "fechai — agente de IA que atende e vende pelo seu WhatsApp",
+    absolute: SITE_TITLE,
   },
   description:
     "O fechai coloca um agente de IA para atender, qualificar e agendar pelo WhatsApp do seu negócio 24h por dia. Você define a persona e o que ele sabe — sem programar. Plano grátis, sem cartão.",

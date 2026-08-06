@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Space_Grotesk, Plus_Jakarta_Sans, JetBrains_Mono } from "next/font/google";
-import { SITE_DESCRIPTION, SITE_KEYWORDS, SITE_NAME, SITE_URL } from "@/lib/seo";
+import { SITE_DESCRIPTION, SITE_KEYWORDS, SITE_NAME, SITE_TITLE, SITE_URL } from "@/lib/seo";
 import "./globals.css";
 
 // Fontes de marca: Clash Display (títulos) + Satoshi (corpo) via next/font/local
@@ -15,7 +15,7 @@ export const metadata: Metadata = {
   // emite OG image relativa — que várias plataformas simplesmente ignoram.
   metadataBase: new URL(SITE_URL),
   title: {
-    default: "fechai — agente de IA que atende e vende pelo seu WhatsApp",
+    default: SITE_TITLE,
     template: "%s · fechai",
   },
   description: SITE_DESCRIPTION,
@@ -34,12 +34,12 @@ export const metadata: Metadata = {
     locale: "pt_BR",
     url: SITE_URL,
     siteName: SITE_NAME,
-    title: "fechai — agente de IA que atende e vende pelo seu WhatsApp",
+    title: SITE_TITLE,
     description: SITE_DESCRIPTION,
   },
   twitter: {
     card: "summary_large_image",
-    title: "fechai — agente de IA que atende e vende pelo seu WhatsApp",
+    title: SITE_TITLE,
     description: SITE_DESCRIPTION,
   },
   robots: {
