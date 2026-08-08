@@ -15,12 +15,16 @@ const DEFAULT_SYSTEM =
  * `ok` — o agente respondeu.
  * `agent_off` — existe agente, mas ele está desligado: a mensagem do contato
  *   fica registrada e NINGUÉM responde (é o ponto do botão de desligar).
+ * `human_handling` — um humano respondeu manualmente pelo painel nesta
+ *   conversa (`sendManualMessage`); a IA fica em silêncio só aqui até a
+ *   conversa ser devolvida a ela. Diferente de `agent_off`: as outras
+ *   conversas do mesmo agente continuam respondidas normalmente.
  * `no_agent` — a conta não tem agente ativo.
  *
  * Quem chama decide o que fazer com o silêncio: o webhook do WhatsApp não
  * manda nada, o widget não mostra bolha, o sandbox explica o motivo na tela.
  */
-export type TurnStatus = "ok" | "agent_off" | "no_agent";
+export type TurnStatus = "ok" | "agent_off" | "human_handling" | "no_agent";
 
 export type AgentTurn = { reply: string; toolsUsed: string[]; status: TurnStatus };
 
@@ -37,6 +41,18 @@ export async function runAgentTurn(input: {
   const { tenantId, conversationId, leadId, userMessage } = input;
 
   await appendMessage(conversationId, "user", userMessage);
+
+  // Humano assumiu esta conversa (respondeu manualmente pelo painel): a
+  // mensagem do contato fica registrada, mas a IA não responde por cima —
+  // checa antes de resolver agente/persona porque nem chega a valer a pena
+  // montar contexto para um turno que não vai gerar resposta.
+  const paused = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+    select: { agentPaused: true },
+  });
+  if (paused?.agentPaused) {
+    return { reply: "", toolsUsed: [], status: "human_handling" };
+  }
 
   const agent = await resolveAgent(tenantId, input.agentId);
 
@@ -153,12 +169,12 @@ export async function runAgentTurn(input: {
         .update({ where: { id: conversationId }, data: { needsHuman: true } })
         .catch(() => {});
     }
-    await appendMessage(conversationId, "assistant", err.userMessage);
+    await appendMessage(conversationId, "assistant", err.userMessage, "agent");
     return { reply: err.userMessage, toolsUsed, status: "ok" };
   }
 
   if (!finalReply) finalReply = "Certo!";
-  await appendMessage(conversationId, "assistant", finalReply);
+  await appendMessage(conversationId, "assistant", finalReply, "agent");
   return { reply: finalReply, toolsUsed, status: agent ? "ok" : "no_agent" };
 }
 

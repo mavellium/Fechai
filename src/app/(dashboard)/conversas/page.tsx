@@ -30,8 +30,13 @@ export default async function ConversasPage({
   // aberta ao banco.
   const take = Math.min(Math.max(Number(takeParam) || PAGE_SIZE, PAGE_SIZE), 300);
 
+  // A aba "Testes" é o único lugar da tela que quer `isTest: true` — todo o
+  // resto (inclusive "Todos") continua mostrando só conversas de clientes de
+  // verdade, senão o chat de teste disputaria espaço com atendimento real.
+  const isTestTab = status === "test";
+
   const leadWhere: Prisma.LeadWhereInput = {};
-  if (status !== "all" && status !== "needs_human") leadWhere.status = status;
+  if (!isTestTab && status !== "all" && status !== "needs_human") leadWhere.status = status;
   if (search) {
     leadWhere.OR = [
       { name: { contains: search, mode: "insensitive" } },
@@ -39,13 +44,11 @@ export default async function ConversasPage({
     ];
   }
 
-  // `isTest: false` em todas as consultas desta tela: o chat de teste tem a
-  // própria janela e não pode disputar espaço com conversas de clientes reais.
-  const where: Prisma.ConversationWhereInput = { tenantId, isTest: false };
+  const where: Prisma.ConversationWhereInput = { tenantId, isTest: isTestTab };
   if (status === "needs_human") where.needsHuman = true;
   if (Object.keys(leadWhere).length > 0) where.lead = leadWhere;
 
-  const [conversations, matching, totalAll, needsHumanCount, selected] = await Promise.all([
+  const [conversations, matching, totalAll, needsHumanCount, testCount, selected] = await Promise.all([
     prisma.conversation.findMany({
       where,
       orderBy: { updatedAt: "desc" },
@@ -59,9 +62,10 @@ export default async function ConversasPage({
     prisma.conversation.count({ where }),
     prisma.conversation.count({ where: { tenantId, isTest: false } }),
     prisma.conversation.count({ where: { tenantId, isTest: false, needsHuman: true } }),
+    prisma.conversation.count({ where: { tenantId, isTest: true } }),
     id
       ? prisma.conversation.findFirst({
-          where: { id, tenantId, isTest: false },
+          where: { id, tenantId },
           include: {
             lead: true,
             agent: { select: { name: true } },
@@ -93,6 +97,8 @@ export default async function ConversasPage({
         data: {
           id: selected.id,
           needsHuman: selected.needsHuman,
+          isTest: selected.isTest,
+          agentPaused: selected.agentPaused,
           followUpSentAt: selected.followUpSentAt,
           updatedAt: selected.updatedAt,
           agent: selected.agent,
@@ -136,7 +142,9 @@ export default async function ConversasPage({
                   ? { ...f, count: needsHumanCount }
                   : f.key === "all"
                     ? { ...f, count: totalAll }
-                    : f,
+                    : f.key === "test"
+                      ? { ...f, count: testCount }
+                      : f,
               )}
               active={status}
               href={(key) => `/conversas?status=${key}${search ? `&q=${encodeURIComponent(search)}` : ""}`}
@@ -178,6 +186,7 @@ export default async function ConversasPage({
                 items={page.map((c) => ({
                   id: c.id,
                   needsHuman: c.needsHuman,
+                  isTest: c.isTest,
                   updatedAt: c.updatedAt,
                   lead: c.lead,
                   preview: c.messages[0]?.content ?? null,

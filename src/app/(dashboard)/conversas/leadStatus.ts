@@ -23,4 +23,5 @@ export const CONVERSA_FILTERS = [
   { key: "hot", label: "Quentes" },
   { key: "scheduled", label: "Agendados" },
   { key: "needs_human", label: "Precisa de você" },
+  { key: "test", label: "Testes" },
 ];

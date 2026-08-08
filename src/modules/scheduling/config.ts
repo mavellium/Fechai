@@ -112,6 +112,7 @@ export function scheduleSystemContext(cfg: ScheduleConfig, now = new Date()): st
     cfg.location ? `- Local/formato: ${cfg.location}.` : "",
     "- Converta o que o contato disser ('amanhã às 15h') para data e hora exatas antes de chamar a ação schedule_meeting.",
     "- Nunca confirme um horário sem antes chamar schedule_meeting e receber a confirmação.",
+    "- Depois que schedule_meeting confirmar um horário, não chame de novo para o mesmo horário — ele já está marcado. Só chame outra vez se o contato pedir uma DATA OU HORA diferente.",
   ]
     .filter(Boolean)
     .join("\n");

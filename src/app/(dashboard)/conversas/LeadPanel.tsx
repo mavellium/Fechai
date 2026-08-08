@@ -8,6 +8,8 @@ import { ResolveButton } from "./ResolveButton";
 export type LeadPanelData = {
   id: string;
   needsHuman: boolean;
+  isTest: boolean;
+  agentPaused: boolean;
   followUpSentAt: Date | null;
   updatedAt: Date;
   agent: { name: string } | null;
@@ -41,7 +43,11 @@ export function LeadPanel({ conversation }: { conversation: LeadPanelData }) {
       <div>
         <p className="font-mono text-micro uppercase tracking-[0.15em] text-white/50">Situação</p>
         <div className="mt-2 flex flex-wrap items-center gap-2">
-          <Badge tone={status.tone}>{status.label}</Badge>
+          {conversation.isTest ? (
+            <Badge tone="neutral">teste</Badge>
+          ) : (
+            <Badge tone={status.tone}>{status.label}</Badge>
+          )}
           {conversation.needsHuman && <Badge tone="danger">precisa de você</Badge>}
         </div>
       </div>
@@ -77,6 +83,7 @@ export function LeadPanel({ conversation }: { conversation: LeadPanelData }) {
         <ResolveButton
           conversationId={conversation.id}
           needsHuman={conversation.needsHuman}
+          agentPaused={conversation.agentPaused}
         />
         {wa ? (
           <ButtonLink

@@ -6,6 +6,7 @@ import { leadStatusLabel } from "./leadStatus";
 export type ConversationListItem = {
   id: string;
   needsHuman: boolean;
+  isTest: boolean;
   updatedAt: Date;
   lead: { name: string | null; phone: string; status: string };
   preview: string | null;
@@ -85,7 +86,11 @@ function Item({
           </span>
 
           <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
-            <Badge tone={status.tone}>{status.label}</Badge>
+            {item.isTest ? (
+              <Badge tone="neutral">teste</Badge>
+            ) : (
+              <Badge tone={status.tone}>{status.label}</Badge>
+            )}
             {item.needsHuman && <Badge tone="danger">precisa de você</Badge>}
           </span>
         </span>

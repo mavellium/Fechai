@@ -3,6 +3,7 @@ import type { LlmToolSchema } from "@/modules/ai";
 import { isWithinBusinessHours } from "@/modules/scheduling/config";
 import {
   createAppointment,
+  findOwnAppointment,
   getScheduleConfig,
   hasConflict,
 } from "@/modules/scheduling/repository";
@@ -140,6 +141,16 @@ const TOOLS: Record<ActionKey, ToolDef> = {
       }
 
       const endsAt = new Date(startsAt.getTime() + cfg.durationMinutes * 60_000);
+
+      // O LLM pode chamar de novo pra "confirmar" um horário que ele mesmo já
+      // marcou nesta conversa — trata como sucesso (idempotente) em vez de
+      // bater no conflito contra o próprio agendamento e entrar em loop.
+      const own = await findOwnAppointment(ctx.conversationId, startsAt, endsAt);
+      if (own) {
+        const when = formatInZone(own.startsAt, cfg.timezone);
+        return `Esse horário já está confirmado para ${when}${cfg.location ? ` (${cfg.location})` : ""}. Não é necessário marcar de novo — apenas confirme com o contato.`;
+      }
+
       if (await hasConflict(ctx.tenantId, startsAt, endsAt)) {
         return "Já existe um compromisso nesse horário. Ofereça outro horário ao contato.";
       }

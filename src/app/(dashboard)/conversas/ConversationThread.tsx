@@ -6,8 +6,15 @@ import { ChatLog } from "@/components/chat/ChatLog";
 import { dayLabel, phoneLabel, relativeTime } from "@/lib/format";
 import { leadStatusLabel } from "./leadStatus";
 import { LeadPanel, type LeadPanelData } from "./LeadPanel";
+import { SendMessageForm } from "./SendMessageForm";
 
-type ThreadMessage = { id: string; role: string; content: string; createdAt: Date };
+type ThreadMessage = {
+  id: string;
+  role: string;
+  content: string;
+  createdAt: Date;
+  sentBy: string | null;
+};
 
 /**
  * Histórico da conversa: cabeçalho fixo + mensagens com scroll próprio.
@@ -48,7 +55,11 @@ export function ConversationThread({
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
-          <Badge tone={status.tone}>{status.label}</Badge>
+          {conversation.isTest ? (
+            <Badge tone="neutral">teste</Badge>
+          ) : (
+            <Badge tone={status.tone}>{status.label}</Badge>
+          )}
           {conversation.needsHuman && <Badge tone="danger">precisa de você</Badge>}
         </div>
       </header>
@@ -86,7 +97,10 @@ export function ConversationThread({
                 </p>
               )}
               <div className={sameSpeaker ? "mt-1" : newDay ? "" : "mt-4"}>
-                <ChatBubble role={m.role === "user" ? "user" : "assistant"}>
+                <ChatBubble
+                  role={m.role === "user" ? "user" : "assistant"}
+                  footer={m.sentBy === "human" ? "você" : undefined}
+                >
                   {m.content}
                 </ChatBubble>
               </div>
@@ -98,11 +112,13 @@ export function ConversationThread({
       {conversation.needsHuman && (
         <div className="border-t border-white/10 bg-warn/5 px-4 py-3">
           <p className="text-sm text-white/80">
-            O agente pediu ajuda nesta conversa. Responda pelo WhatsApp e marque como resolvida
-            quando terminar — as ações estão no painel do cliente.
+            O agente pediu ajuda nesta conversa. Responda abaixo ou marque como resolvida quando
+            terminar — as ações estão no painel do cliente.
           </p>
         </div>
       )}
+
+      <SendMessageForm conversationId={conversation.id} />
     </>
   );
 }

@@ -14,9 +14,12 @@ import { resolveConversation, reopenConversation } from "./actions";
 export function ResolveButton({
   conversationId,
   needsHuman,
+  agentPaused,
 }: {
   conversationId: string;
   needsHuman: boolean;
+  /** Um humano respondeu manualmente e a IA está muda nesta conversa. */
+  agentPaused: boolean;
 }) {
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
@@ -47,6 +50,11 @@ export function ResolveButton({
             <Check size={14} aria-hidden />
             Marcar como resolvida
           </>
+        ) : agentPaused ? (
+          <>
+            <Undo2 size={14} aria-hidden />
+            Devolver para o agente
+          </>
         ) : (
           <>
             <Undo2 size={14} aria-hidden />
@@ -54,6 +62,11 @@ export function ResolveButton({
           </>
         )}
       </Button>
+      {agentPaused && !needsHuman && (
+        <p className="text-xs leading-relaxed text-white/50">
+          Você respondeu manualmente — o agente não responde mais sozinho aqui até você devolver.
+        </p>
+      )}
       {error && <Alert tone="danger">{error}</Alert>}
     </div>
   );

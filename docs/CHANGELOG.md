@@ -2,6 +2,82 @@
 
 Uma linha por milestone concluído (mais recente no topo).
 
+## Fix: agendamento em loop, base de conhecimento sem visualização, conversas de teste permanentes + resposta manual — 2026-08-08
+
+Três problemas relatados em uso real, sem relação entre si além de todos
+tocarem `agent-engine`.
+
+- **Bug: o agente marcava um horário, "esquecia" e entrava em loop.**
+  Causa: o system prompt (`modules/scheduling/config.ts`) mandava sempre
+  confirmar um horário chamando `schedule_meeting`, mas não dizia para parar
+  de chamar depois de já confirmado. Numa mensagem seguinte da mesma
+  conversa, o LLM rechamava a tool para o mesmo horário, `hasConflict` batia
+  contra o compromisso que o próprio agente tinha acabado de criar, e ele
+  concluía que o horário fora tomado — oferecia outro, marcava, repetia.
+  Fix em duas camadas independentes: instrução explícita no prompt para não
+  reconfirmar um horário já marcado, e `findOwnAppointment`
+  (`modules/scheduling/repository.ts`) no handler de `schedule_meeting`
+  (`agent-engine/tools.ts`) — se a *mesma conversa* já tem esse horário,
+  responde "já confirmado" em vez de tratar como conflito, mesmo que o LLM
+  chame de novo.
+- **Base de conhecimento sem visualização/edição.** O texto extraído (de PDF
+  ou colado) sempre foi salvo por completo em `KnowledgeDocument.content` —
+  nada era perdido ao apagar/recriar a base — mas `listDocuments` nunca
+  selecionava esse campo e não havia UI para lê-lo. Novo:
+  `getDocument`/`updateDocument` (`knowledge-base/repository.ts`, o segundo
+  reescreve o texto e regenera chunks/embeddings) e
+  `ViewEditDocumentDialog.tsx` — ícone de olho ao lado de cada documento abre
+  um modal com o texto usado pelo agente, editável. Editar não toca no
+  arquivo original na CDN (`fileUrl`), que continua baixável — só o texto do
+  RAG muda, podendo divergir do PDF depois de editado (aceito de propósito).
+- **Conversas de teste (sandbox) eram descartáveis e invisíveis em
+  `/conversas`.** `resetTestConversation` fazia hard delete
+  (`prisma.lead.deleteMany`) a cada "Recomeçar", e toda consulta da tela de
+  Conversas excluía `isTest: true` — dava a impressão de que testar apagava
+  histórico. Agora: `startFreshTestConversation` (`agent-engine/conversation.ts`)
+  arquiva a conversa atual (muda o telefone para
+  `sandbox:<agentId>:archived:<timestamp>`, fora do caminho de busca) em vez
+  de apagar, e libera o telefone canônico para nascer vazio — nada se perde,
+  e a IA não recomeça vendo o histórico do teste anterior. Nova aba "Testes"
+  em `/conversas` (`leadStatus.ts`) mostra esse histórico com badge "teste";
+  os demais filtros (inclusive "Todos") continuam só com conversas reais, e
+  Contatos/Relatórios/Agenda/Home não mudaram — já filtravam `isTest` por
+  conta própria.
+- **Responder manualmente pelo painel** (pedido junto: "conversar com o
+  agente por aqui"). Novo núcleo `sendManualReply`
+  (`agent-engine/conversation.ts`) — numa conversa real o texto sai de
+  verdade para o WhatsApp do cliente via `WhatsAppProvider.sendMessage`
+  (Evolution API, já existia); numa conversa de teste fica só na simulação
+  local. No caminho, achei que `contatos/actions.ts` já tinha uma
+  implementação **duplicada** disso (`sendMessageToContact`, usada pelo botão
+  "Enviar mensagem" da tela de Contatos) — sem `sentBy` nem pausa do agente.
+  As duas telas (`conversas/actions.ts` → `sendManualMessage`,
+  `contatos/actions.ts` → `sendMessageToContact`) agora chamam o mesmo
+  `sendManualReply`, então o fix de baixo vale para as duas, não só para
+  Conversas.
+  Grava a mensagem com o novo campo `Message.sentBy: "agent" | "human"` —
+  `role` continua `"assistant"` nos dois casos (o histórico que o LLM lê não
+  muda), `sentBy` é metadado extra só para UI/auditoria, sem o qual uma
+  resposta manual gravada como "assistant" faria o LLM achar que tinha sido
+  ELE quem disse aquilo nos turnos seguintes. Responder manualmente marca
+  `Conversation.agentPaused = true` (campo novo) — `runAgentTurn` checa isso
+  antes de montar contexto e fica em silêncio *só nessa conversa* (as outras
+  do mesmo agente continuam normais); "Devolver para o agente"
+  (`ResolveButton`, reaproveitando `reopenConversation`) desliga a pausa.
+  Novo status de turno `human_handling` em `TurnStatus`, tratado como
+  qualquer não-`"ok"` pelos três consumidores existentes
+  (`webhooks/whatsapp`, `api/widget`, `Sandbox.tsx`) sem precisar editá-los.
+- Verificado: `tsc --noEmit` e `eslint` limpos em todos os arquivos tocados;
+  `prisma db push` aplicado contra o Postgres de dev; `next dev` sobe e
+  `/conversas` responde sem erro de servidor. **Não verificado**: fluxo de
+  clique real no navegador (enviar mensagem, ver badge de teste, editar
+  documento) — sem sessão autenticada disponível neste ambiente para
+  screenshot/E2E manual.
+- **Pré-existente, não corrigido aqui**: dois `no-var` em
+  `orchestrator.ts:117,131` (`var result = ...` dentro do loop de fallback de
+  modelo) — fora do escopo desta rodada, sinalizando para quando alguém
+  mexer ali de novo.
+
 ## Layout de `/inicio`, `/conversas` e `/whatsapp` — 2026-07-31
 
 Proposta e wireframes em `docs/proposta-layout-painel-2026-07.md`. A revisão de

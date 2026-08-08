@@ -11,7 +11,12 @@ import { ACTION_BY_KEY, type ActionKey } from "@/modules/agent-engine/actions";
 import { createAgent, getAgentOwned, getAgentUsage } from "@/modules/agent-engine/agents";
 import { saveScheduleConfig } from "@/modules/scheduling/repository";
 import { saveFollowUpConfig } from "@/modules/follow-up/config";
-import { ingestDocument, deleteDocument } from "@/modules/knowledge-base/repository";
+import {
+  ingestDocument,
+  deleteDocument,
+  getDocument,
+  updateDocument,
+} from "@/modules/knowledge-base/repository";
 import { extractTextFromFile } from "@/modules/knowledge-base/extract";
 import { uploadToBunny } from "@/lib/bunny";
 
@@ -404,4 +409,46 @@ export async function removeDocument(agentId: string, documentId: string): Promi
   await deleteDocument(tenantId, documentId);
   revalidateAgent(agent.id);
   return { ok: true };
+}
+
+type DocumentContentResult =
+  | { ok: true; title: string; content: string }
+  | { ok: false; error: string };
+
+// Busca o texto sob demanda (ao abrir o modal de ver/editar) em vez de mandar
+// o conteúdo de todo documento na lista — evita puxar texto grande sem precisar.
+export async function getDocumentContent(
+  agentId: string,
+  documentId: string,
+): Promise<DocumentContentResult> {
+  const { tenantId, agent } = await requireAgent(agentId);
+  if (!agent) return { ok: false, error: "Agente não encontrado" };
+
+  const doc = await getDocument(tenantId, agent.id, documentId);
+  if (!doc) return { ok: false, error: "Documento não encontrado" };
+  return { ok: true, title: doc.title, content: doc.content };
+}
+
+export async function updateDocumentAction(_prev: Result | null, formData: FormData): Promise<Result> {
+  const agentId = String(formData.get("agentId") ?? "");
+  const documentId = String(formData.get("documentId") ?? "");
+  const { tenantId, agent } = await requireAgent(agentId);
+  if (!agent) return { ok: false, error: "Agente não encontrado" };
+
+  const title = String(formData.get("title") ?? "").trim();
+  const content = String(formData.get("content") ?? "").trim();
+  if (!title) return { ok: false, error: "Dê um título ao documento" };
+  if (!content) return { ok: false, error: "O texto não pode ficar vazio" };
+
+  const doc = await updateDocument(tenantId, agent.id, documentId, { title, content });
+  if (!doc) return { ok: false, error: "Documento não encontrado" };
+
+  revalidateAgent(agent.id);
+  const info =
+    doc.status === "no_embeddings"
+      ? "Documento atualizado (embeddings desativados: configure GEMINI_API_KEY)."
+      : doc.status === "failed"
+        ? "Documento atualizado, mas houve falha ao gerar embeddings."
+        : "Documento atualizado.";
+  return { ok: true, info };
 }

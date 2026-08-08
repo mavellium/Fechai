@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { StepTabs, type StepTab } from "./StepTabs";
 import { addDocument, removeDocument } from "./actions";
+import { ViewEditDocumentDialog } from "./ViewEditDocumentDialog";
 
 type Doc = {
   id: string;
@@ -164,22 +165,31 @@ export function KnowledgeManager({ agentId, documents }: { agentId: string; docu
                       </div>
                     </div>
 
-                    <ConfirmButton
-                      variant="ghost"
-                      size="icon"
-                      className="text-white/60 enabled:hover:text-danger"
-                      aria-label={`Remover documento ${d.title}`}
-                      disabled={removingId === d.id}
-                      confirm={{
-                        title: "Remover da base de conhecimento?",
-                        description: `"${d.title}" sai da base e o agente deixa de usar esse conteúdo nas respostas. Não dá para desfazer.`,
-                        confirmLabel: "Remover documento",
-                        tone: "danger",
-                      }}
-                      onConfirm={() => remove(d)}
-                    >
-                      <Trash2 size={16} aria-hidden />
-                    </ConfirmButton>
+                    <div className="flex items-center gap-1">
+                      <ViewEditDocumentDialog
+                        agentId={agentId}
+                        documentId={d.id}
+                        title={d.title}
+                        hasFile={Boolean(d.fileUrl)}
+                      />
+
+                      <ConfirmButton
+                        variant="ghost"
+                        size="icon"
+                        className="text-white/60 enabled:hover:text-danger"
+                        aria-label={`Remover documento ${d.title}`}
+                        disabled={removingId === d.id}
+                        confirm={{
+                          title: "Remover da base de conhecimento?",
+                          description: `"${d.title}" sai da base e o agente deixa de usar esse conteúdo nas respostas. Não dá para desfazer.`,
+                          confirmLabel: "Remover documento",
+                          tone: "danger",
+                        }}
+                        onConfirm={() => remove(d)}
+                      >
+                        <Trash2 size={16} aria-hidden />
+                      </ConfirmButton>
+                    </div>
                   </li>
                 );
               })}

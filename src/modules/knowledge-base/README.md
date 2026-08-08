@@ -9,15 +9,21 @@ Ingesta documentos do tenant (texto/PDF), quebra em chunks, gera embeddings (Ope
 - `extract.ts` — `extractTextFromFile(file)`: texto de `.txt/.md` (direto) e `.pdf` (pdf-parse, import dinâmico).
 - `chunk.ts` — `chunkText(text)`: ~800 chars por chunk, com sobreposição, quebrando por parágrafo.
 - `embeddings.ts` — `embedTexts`/`embedQuery` (modelo `text-embedding-3-small`, 1536 dims). `isEmbeddingConfigured()`. Sem `OPENAI_API_KEY` retorna `null` (degrada com graça).
-- `repository.ts` — `ingestDocument`, `listDocuments`, `deleteDocument`, `searchSimilarChunks` (usado no Milestone 5).
+- `repository.ts` — `ingestDocument`, `listDocuments`, `getDocument`, `updateDocument`, `deleteDocument`, `searchSimilarChunks` (usado no Milestone 5).
 
 ## Contratos expostos
 
 ```ts
 ingestDocument({ tenantId, agentId, title, content, fileUrl?, fileName? }) -> doc (status: ready|failed|no_embeddings)
 listDocuments(tenantId, agentId); deleteDocument(tenantId, documentId)
+getDocument(tenantId, agentId, documentId) -> doc com `content` (texto completo)
+updateDocument(tenantId, agentId, documentId, { title, content }) -> reescreve content, apaga chunks/embeddings antigos e gera novos
 searchSimilarChunks(agentId, queryEmbedding, limit?) -> {content, distance}[]
 ```
+
+`listDocuments` não seleciona `content` de propósito (a lista não usa e o
+texto pode ser grande) — `getDocument` existe só para a tela de ver/editar
+buscar sob demanda. UI em `agentes/ViewEditDocumentDialog.tsx`.
 
 ## Detalhes
 

@@ -70,6 +70,31 @@ export async function hasConflict(
   return Boolean(clash);
 }
 
+/**
+ * A própria conversa já tem esse horário marcado?
+ *
+ * O agente confirma um agendamento chamando `schedule_meeting` de novo mais
+ * tarde na mesma conversa (o LLM não tem garantia de lembrar que já marcou —
+ * só vê o resultado em texto no histórico). Sem checar isto antes, a segunda
+ * chamada batia em `hasConflict` contra o compromisso que ELE MESMO acabara de
+ * criar, o agente achava que o horário fora tomado por outra pessoa, oferecia
+ * outro, marcava esse, e repetia — nunca fechando o agendamento.
+ */
+export async function findOwnAppointment(
+  conversationId: string,
+  startsAt: Date,
+  endsAt: Date,
+) {
+  return prisma.appointment.findFirst({
+    where: {
+      conversationId,
+      status: "scheduled",
+      startsAt: { lt: endsAt },
+      endsAt: { gt: startsAt },
+    },
+  });
+}
+
 export async function createAppointment(input: CreateAppointmentInput) {
   const endsAt = new Date(input.startsAt.getTime() + input.durationMinutes * 60_000);
 

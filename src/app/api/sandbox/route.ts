@@ -4,7 +4,7 @@ import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import {
   getOrCreateConversation,
-  resetTestConversation,
+  startFreshTestConversation,
 } from "@/modules/agent-engine/conversation";
 import { runAgentTurn } from "@/modules/agent-engine/orchestrator";
 
@@ -35,7 +35,8 @@ async function ownedAgentId(tenantId: string, agentId?: string) {
 
 // Chat de teste no dashboard: roda o mesmo motor sem WhatsApp real.
 // O lead/conversa criados aqui nascem com `isTest`, então não entram em
-// Contatos, Conversas nem nos relatórios (antes o teste virava lead de verdade).
+// Contatos nem nos relatórios (antes o teste virava lead de verdade) — mas
+// ficam visíveis em Conversas, na aba "Testes".
 export async function POST(req: Request) {
   const { tenantId } = await requireTenant();
   const parsed = schema.safeParse(await req.json().catch(() => null));
@@ -62,13 +63,17 @@ export async function POST(req: Request) {
   return NextResponse.json({ reply, toolsUsed, status });
 }
 
-/** Limpa o histórico do teste — o botão "recomeçar" do sandbox. */
+/**
+ * Botão "recomeçar" do sandbox: arquiva o teste atual (fica salvo, visível em
+ * Conversas) e libera o telefone canônico do sandbox para nascer vazio na
+ * próxima mensagem — a IA não recomeça vendo o histórico do teste anterior.
+ */
 export async function DELETE(req: Request) {
   const { tenantId } = await requireTenant();
   const agentId = await ownedAgentId(
     tenantId,
     new URL(req.url).searchParams.get("agentId") ?? undefined,
   );
-  await resetTestConversation(tenantId, sandboxPhone(agentId));
+  await startFreshTestConversation(tenantId, sandboxPhone(agentId));
   return NextResponse.json({ ok: true });
 }

@@ -197,9 +197,9 @@ model Lead {
   phone        String
   status       String        @default("new") // new | warm | hot | scheduled | lost
   /// Contato criado pelo chat de teste (sandbox), não por um cliente real.
-  /// Fica no banco para o teste ter histórico, mas TODA contagem de negócio
-  /// (contatos, conversas, relatórios, home) filtra `isTest: false` — antes o
-  /// sandbox inflava o número de leads da conta.
+  /// Fica no banco com histórico permanente (aparece em Conversas, na aba
+  /// "Testes"), mas contagem de negócio (contatos, relatórios, home) filtra
+  /// `isTest: false` — antes o sandbox inflava o número de leads da conta.
   isTest       Boolean       @default(false)
   createdAt    DateTime      @default(now())
   conversation Conversation?
@@ -221,6 +221,12 @@ model Conversation {
   lead       Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
   messages   Message[]
   needsHuman Boolean   @default(false)
+  /// Verdadeiro depois que um humano responde manualmente pelo painel
+  /// (`sendManualMessage`). Enquanto ligado, `runAgentTurn` não gera resposta
+  /// automática NESTA conversa — as outras do mesmo agente continuam normais.
+  /// `needsHuman` sozinho não bastava: é só sinalizador de fila, nada no motor
+  /// olhava pra ele antes de responder.
+  agentPaused Boolean  @default(false)
   /// Espelha `Lead.isTest` para as consultas de conversa não precisarem de join.
   isTest     Boolean   @default(false)
   lastInboundAt DateTime?
@@ -240,6 +246,14 @@ model Message {
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   role           String // user | assistant | system
   content        String
+  /// Quem gerou uma mensagem "assistant": "agent" (a IA respondeu sozinha) ou
+  /// "human" (o dono da conta respondeu manualmente pelo painel). Null em
+  /// mensagens "user"/"system", onde a distinção não existe. Sem isto, uma
+  /// resposta manual gravada como "assistant" faria a IA achar que foi ELA
+  /// quem disse aquilo nos próximos turnos — `sentBy` deixa `role` intacto
+  /// (o histórico que vai pro LLM continua "assistant", que é o que importa
+  /// pro contexto) e só a UI e a auditoria usam este campo pra diferenciar.
+  sentBy         String?
   createdAt      DateTime     @default(now())
 
   @@index([conversationId])

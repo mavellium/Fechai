@@ -74,6 +74,76 @@ export async function listDocuments(tenantId: string, agentId: string) {
   });
 }
 
+// Traz o texto extraído junto — só para a tela de ver/editar um documento, que
+// precisa do conteúdo cru. `listDocuments` continua sem `content` de propósito
+// (a lista não usa e o texto pode ser grande).
+export async function getDocument(tenantId: string, agentId: string, documentId: string) {
+  return prisma.knowledgeDocument.findFirst({
+    where: { id: documentId, tenantId, agentId },
+    select: {
+      id: true,
+      title: true,
+      content: true,
+      status: true,
+      createdAt: true,
+      fileUrl: true,
+      fileName: true,
+    },
+  });
+}
+
+/**
+ * Reescreve o texto de um documento existente: troca `content`, apaga os
+ * chunks/embeddings antigos e gera novos a partir do texto editado. O arquivo
+ * original (`fileUrl`/`fileName`) não muda — só o texto que o agente usa no RAG,
+ * que pode divergir do PDF depois de editado (é a troca aceita ao permitir editar
+ * texto extraído de PDF em vez de bloquear).
+ */
+export async function updateDocument(
+  tenantId: string,
+  agentId: string,
+  documentId: string,
+  input: { title: string; content: string },
+) {
+  const existing = await prisma.knowledgeDocument.findFirst({
+    where: { id: documentId, tenantId, agentId },
+    select: { id: true },
+  });
+  if (!existing) return null;
+
+  await prisma.knowledgeDocument.update({
+    where: { id: documentId },
+    data: { title: input.title, content: input.content, status: "pending" },
+  });
+  await prisma.knowledgeChunk.deleteMany({ where: { documentId, tenantId } });
+
+  const chunks = chunkText(input.content);
+  if (chunks.length === 0) {
+    return prisma.knowledgeDocument.update({ where: { id: documentId }, data: { status: "ready" } });
+  }
+
+  let embeddings: number[][] | null = null;
+  try {
+    embeddings = await embedTexts(chunks);
+  } catch (err) {
+    console.error("[knowledge-base] falha ao gerar embeddings (edição)", err);
+  }
+
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = await prisma.knowledgeChunk.create({
+      data: { tenantId, agentId, documentId, content: chunks[i] },
+    });
+    const vec = embeddings?.[i];
+    if (vec) {
+      await prisma.$executeRaw`
+        UPDATE "KnowledgeChunk" SET embedding = ${toVectorLiteral(vec)}::vector WHERE id = ${chunk.id}`;
+    }
+  }
+
+  const status = embeddings ? "ready" : isEmbeddingConfigured() ? "failed" : "no_embeddings";
+  return prisma.knowledgeDocument.update({ where: { id: documentId }, data: { status } });
+}
+
 export async function deleteDocument(tenantId: string, documentId: string) {
   // Busca antes de apagar: é o único jeito de saber o fileUrl pra limpar a CDN.
   const doc = await prisma.knowledgeDocument.findFirst({

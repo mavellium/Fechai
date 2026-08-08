@@ -4,8 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
-import { getWhatsAppProvider } from "@/modules/whatsapp";
-import { getOrCreateConversation } from "@/modules/agent-engine/conversation";
+import { getOrCreateConversation, sendManualReply } from "@/modules/agent-engine/conversation";
 
 type Result = { ok: boolean; error?: string; info?: string };
 
@@ -39,48 +38,27 @@ function revalidateContatos() {
 }
 
 /**
- * Envia uma mensagem para o WhatsApp de um contato da conta. Persiste a
- * mensagem como do agente (role "assistant") para ela aparecer em /conversas.
+ * Envia uma mensagem para o WhatsApp de um contato da conta. Usa o mesmo
+ * núcleo de `/conversas` (`sendManualReply`): grava com `sentBy: "human"` e
+ * pausa o agente nesta conversa, para ele não responder por cima depois.
  */
 export async function sendMessageToContact(leadId: string, text: string): Promise<Result> {
   const { tenantId } = await requireTenant();
   const parsed = messageSchema.safeParse(text);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message };
 
-  const lead = await prisma.lead.findFirst({
-    where: { id: leadId, tenantId },
-    include: { conversation: true },
-  });
+  const lead = await prisma.lead.findFirst({ where: { id: leadId, tenantId } });
   if (!lead) return { ok: false, error: "Contato não encontrado." };
   // `isTest` em vez do telefone literal: o sandbox agora tem um por agente.
+  // Aqui (diferente de /conversas) recusa de propósito: quem manda mensagem
+  // pela tela de Contatos espera que ela chegue a um WhatsApp de verdade.
   if (lead.isTest) {
     return { ok: false, error: "Este contato é do chat de teste — envie para um WhatsApp real." };
   }
 
-  const provider = getWhatsAppProvider();
-  if (!provider.isConfigured()) {
-    return { ok: false, error: "Evolution API não configurada (EVOLUTION_API_URL / EVOLUTION_API_KEY)." };
-  }
-
-  const instance = await prisma.whatsappInstance.findUnique({ where: { tenantId } });
-  if (!instance?.externalId || instance.status !== "connected") {
-    return {
-      ok: false,
-      error: "O WhatsApp não está conectado. Conecte na tela WhatsApp antes de enviar.",
-    };
-  }
-
-  try {
-    await provider.sendMessage(instance.externalId, lead.phone, parsed.data);
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : "Falha ao enviar a mensagem." };
-  }
-
   const { conversation } = await getOrCreateConversation(tenantId, lead.phone, lead.name ?? undefined);
-  await prisma.message.create({
-    data: { conversationId: conversation.id, role: "assistant", content: parsed.data },
-  });
-  await prisma.conversation.update({ where: { id: conversation.id }, data: { updatedAt: new Date() } });
+  const res = await sendManualReply(tenantId, conversation.id, parsed.data);
+  if (!res.ok) return res;
 
   revalidateContatos();
   return { ok: true, info: "Mensagem enviada." };
