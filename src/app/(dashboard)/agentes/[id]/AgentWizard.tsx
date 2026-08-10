@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Check, MessageSquareText, Ban, BrainCircuit, Sparkles, Rocket } from "lucide-react";
+import { Check, MessageSquareText, Ban, BrainCircuit, Sparkles, Mic, Rocket } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { PersonaAnswers } from "@/modules/agent-engine/persona";
 import type { ScheduleConfig } from "@/modules/scheduling/config";
@@ -13,6 +13,7 @@ import { PersonaForm } from "../PersonaForm";
 import { RulesForm } from "../RulesForm";
 import { KnowledgeManager } from "../KnowledgeManager";
 import { ActionsToggles } from "../ActionsToggles";
+import { BehaviorSettings } from "../BehaviorSettings";
 import { StepTabs } from "../StepTabs";
 
 type Doc = {
@@ -54,6 +55,13 @@ const STEPS = [
     help: "Além de responder, o agente pode marcar horário na sua agenda, avisar quando um contato está quente e chamar você. Ligue só o que você quer que ele faça sozinho.",
   },
   {
+    key: "comportamento",
+    label: "Comportamento",
+    icon: Mic,
+    title: "Como ele conversa",
+    help: "Dois comportamentos de conversa: ouvir mensagens de voz e encerrar quando a pessoa manda só um emoji. Os dois vêm ligados por padrão.",
+  },
+  {
     key: "testar",
     label: "Testar",
     icon: Rocket,
@@ -84,6 +92,8 @@ export function AgentWizard({
   scheduleConfig,
   followUpConfig,
   enabled,
+  listenAudio,
+  stopOnEmoji,
   done,
 }: {
   agentId: string;
@@ -97,6 +107,9 @@ export function AgentWizard({
   followUpConfig: FollowUpConfig;
   /** Agente ligado? Desligado, o teste não responde — a tela avisa antes. */
   enabled: boolean;
+  /** Comportamentos de conversa (ver BehaviorSettings). */
+  listenAudio: boolean;
+  stopOnEmoji: boolean;
   done: Record<string, boolean>;
 }) {
   // Abre no primeiro passo pendente — quem volta continua de onde parou em vez
@@ -104,7 +117,9 @@ export function AgentWizard({
   // de fora dessa checagem: regras é opcional (nunca deveria prender quem já
   // preencheu persona e quer seguir direto para Cérebro) e testar não tem
   // conclusão própria.
-  const blocking = STEPS.filter((s) => s.key !== "regras" && s.key !== "testar");
+  const blocking = STEPS.filter(
+    (s) => s.key !== "regras" && s.key !== "testar" && s.key !== "comportamento",
+  );
   const firstPendingKey = blocking.find((s) => !done[s.key])?.key;
   const initialStep =
     firstPendingKey != null
@@ -192,6 +207,23 @@ export function AgentWizard({
                     planLimit={planLimit}
                     scheduleConfig={scheduleConfig}
                     followUpConfig={followUpConfig}
+                  />
+                ),
+              },
+            ]}
+          />
+        )}
+        {current.key === "comportamento" && (
+          <StepTabs
+            tabs={[
+              {
+                key: "comportamento",
+                label: "Comportamento",
+                content: (
+                  <BehaviorSettings
+                    agentId={agentId}
+                    listenAudio={listenAudio}
+                    stopOnEmoji={stopOnEmoji}
                   />
                 ),
               },

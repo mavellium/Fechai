@@ -16,6 +16,10 @@ export type IncomingMessage = {
   text: string;
   /** true quando a mensagem veio de um grupo do WhatsApp (@g.us). */
   isGroup: boolean;
+  /** A mensagem é de áudio (voz ou arquivo) — transcrita antes do turno. */
+  hasAudio: boolean;
+  /** id da mensagem no WhatsApp (key.id) — necessário para baixar a mídia. */
+  messageKeyId?: string;
 };
 
 export interface WhatsAppProvider {
@@ -26,6 +30,11 @@ export interface WhatsAppProvider {
   sendMessage(externalId: string, toPhone: string, text: string): Promise<void>;
   /** Desloga o número da instância (exige novo QR para voltar). */
   disconnect(externalId: string): Promise<void>;
+  /** Baixa a mídia de uma mensagem recebida em base64 (ex.: mensagem de voz). */
+  getMediaAsBase64(
+    externalId: string,
+    messageKeyId: string,
+  ): Promise<{ base64: string; mime: string }>;
   // onMessageReceived é implementado via webhook (ver api/webhooks/whatsapp).
   // O provider expõe apenas o parser do payload recebido.
   parseWebhook(payload: unknown): IncomingMessage | null;

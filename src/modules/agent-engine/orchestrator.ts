@@ -213,18 +213,29 @@ async function completeWithFallback(
  * `enabled: true`: filtrar faria o turno cair no próximo agente da conta e o
  * botão de desligar não desligaria nada. Quem trata o `enabled: false` é
  * `runAgentTurn`.
+ *
+ * Exportada porque o webhook do WhatsApp também precisa dela: para saber se a
+ * opção "ouvir áudio" está ligada antes de gastar uma transcrição, e a de
+ * "parar com emoji" antes de pausar a conversa.
  */
-async function resolveAgent(tenantId: string, agentId?: string) {
+export async function resolveAgent(tenantId: string, agentId?: string) {
+  const select = {
+    id: true,
+    systemPrompt: true,
+    enabled: true,
+    listenAudio: true,
+    stopOnEmoji: true,
+  } as const;
   if (agentId) {
     return prisma.agent.findFirst({
       where: { id: agentId, tenantId, archived: false },
-      select: { id: true, systemPrompt: true, enabled: true },
+      select,
     });
   }
   return prisma.agent.findFirst({
     where: { tenantId, archived: false },
     orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }],
-    select: { id: true, systemPrompt: true, enabled: true },
+    select,
   });
 }
 

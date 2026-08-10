@@ -49,6 +49,7 @@ export default async function AgentePage({ params }: { params: Promise<{ id: str
     regras: rules.trim().length > 0,
     cerebro: documents.length > 0,
     habilidades: actions.length > 0,
+    comportamento: true, // já vem configurado por padrão
     testar: false,
   };
 
@@ -82,6 +83,8 @@ export default async function AgentePage({ params }: { params: Promise<{ id: str
         scheduleConfig={scheduleConfig}
         followUpConfig={followUpConfig}
         enabled={agent.enabled}
+        listenAudio={agent.listenAudio}
+        stopOnEmoji={agent.stopOnEmoji}
         done={done}
       />
     </div>

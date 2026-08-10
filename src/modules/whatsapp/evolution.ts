@@ -74,23 +74,48 @@ export class EvolutionProvider implements WhatsAppProvider {
     if (!res.ok) throw new Error(`Evolution logout falhou (${res.status})`);
   }
 
+  async getMediaAsBase64(
+    externalId: string,
+    messageKeyId: string,
+  ): Promise<{ base64: string; mime: string }> {
+    // Endpoint oficial da v2 para extrair a mídia de uma mensagem recebida.
+    // Precisa do id da mensagem (key.id) e de a mídia estar salva no banco —
+    // os dois valem aqui (ver DATABASE_SAVE_DATA_NEW_MESSAGE no docker-compose).
+    const res = await fetch(`${this.baseUrl}/chat/getBase64FromMediaMessage/${externalId}`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ message: { key: { id: messageKeyId } }, convertToMp4: false }),
+    });
+    if (!res.ok) throw new Error(`Evolution getBase64FromMediaMessage falhou (${res.status})`);
+    const data = (await res.json()) as { base64?: string; mimetype?: string };
+    if (!data.base64) throw new Error("Evolution não devolveu a mídia da mensagem");
+    return { base64: data.base64, mime: data.mimetype ?? "audio/ogg" };
+  }
+
   parseWebhook(payload: unknown): IncomingMessage | null {
     // Formato do evento messages.upsert da Evolution API.
     const p = payload as {
       instance?: string;
       data?: {
-        key?: { remoteJid?: string; fromMe?: boolean };
+        key?: { remoteJid?: string; fromMe?: boolean; id?: string };
         pushName?: string;
-        message?: { conversation?: string; extendedTextMessage?: { text?: string } };
+        message?: {
+          conversation?: string;
+          extendedTextMessage?: { text?: string };
+          audioMessage?: unknown;
+          pttMessage?: unknown;
+        };
       };
     };
     const data = p?.data;
     if (!data || data.key?.fromMe) return null; // ignora o que nós mesmos enviamos
 
     const text = data.message?.conversation ?? data.message?.extendedTextMessage?.text ?? "";
+    // Voz (pttMessage) e arquivo de áudio (audioMessage) têm a mesma forma.
+    const hasAudio = Boolean(data.message?.audioMessage ?? data.message?.pttMessage);
     const jid = data.key?.remoteJid ?? "";
     const fromPhone = jid.split("@")[0];
-    if (!text || !fromPhone) return null;
+    if ((!text && !hasAudio) || !fromPhone) return null;
 
     return {
       instanceExternalId: p.instance ?? "",
@@ -99,6 +124,8 @@ export class EvolutionProvider implements WhatsAppProvider {
       text,
       // Grupos têm JID com sufixo @g.us (ex: 5511999999999-1615000000@g.us).
       isGroup: jid.endsWith("@g.us"),
+      hasAudio,
+      messageKeyId: data.key?.id,
     };
   }
 }

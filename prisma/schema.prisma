@@ -112,6 +112,13 @@ model Agent {
   /// Existe porque a única forma de calar um agente era excluí-lo ou desligar
   /// o WhatsApp inteiro — as duas destrutivas demais para uma pausa.
   enabled      Boolean  @default(true)
+  /// Ouve mensagens de voz do WhatsApp: o áudio é transcrito e o agente
+  /// responde como se fosse texto. Desligado, áudios são ignorados.
+  listenAudio  Boolean  @default(true)
+  /// Cliente manda só um emoji: a conversa encerra e o agente para de
+  /// responder nela (mesmo mecanismo de quando um humano assume — `agentPaused`).
+  /// O dono devolve a conversa em /conversas para retomar.
+  stopOnEmoji  Boolean  @default(true)
   archived     Boolean  @default(false)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt

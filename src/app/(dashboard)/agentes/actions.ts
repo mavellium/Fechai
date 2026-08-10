@@ -116,6 +116,29 @@ export async function setAgentEnabled(agentId: string, enabled: boolean): Promis
 }
 
 /**
+ * Liga/desliga um comportamento de conversa do agente (passo Comportamento):
+ * `listenAudio` (ouvir mensagens de voz) e `stopOnEmoji` (encerrar quando o
+ * cliente manda só um emoji). São colunas do Agent, não ações com limite de
+ * plano — por isso não passam por `setActionEnabled`.
+ */
+export async function setAgentBehavior(
+  agentId: string,
+  field: "listenAudio" | "stopOnEmoji",
+  enabled: boolean,
+): Promise<Result> {
+  const { agent } = await requireAgent(agentId);
+  if (!agent) return { ok: false, error: "Agente não encontrado" };
+
+  if (field !== "listenAudio" && field !== "stopOnEmoji") {
+    return { ok: false, error: "Comportamento inválido" };
+  }
+
+  await prisma.agent.update({ where: { id: agent.id }, data: { [field]: enabled } });
+  revalidateAgent(agent.id);
+  return { ok: true, info: "Comportamento atualizado." };
+}
+
+/**
  * Exclui o agente (e, por cascade, sua base e ações). As conversas ficam: o
  * vínculo é `SetNull`, então o histórico e os leads sobrevivem ao agente.
  */
