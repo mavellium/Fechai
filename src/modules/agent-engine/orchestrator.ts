@@ -1,8 +1,8 @@
 import { prisma } from "@/lib/prisma";
 import { embedQuery } from "@/modules/knowledge-base/embeddings";
 import { searchSimilarChunks } from "@/modules/knowledge-base/repository";
-import { getLLMProvider, isAiError, createProvider, type LlmMessage } from "@/modules/ai";
-import { GEMINI_FALLBACK_CHAIN, findModel } from "@/modules/ai/catalog";
+import { getLLMProvider, isAiError, createProvider, type LlmMessage, type LlmResult } from "@/modules/ai";
+import { GEMINI_FALLBACK_CHAIN, findModel, getGrokFallbackModel } from "@/modules/ai/catalog";
 import { parseScheduleConfig, scheduleSystemContext } from "@/modules/scheduling/config";
 import { getToolSchemas, runToolHandler, type ToolContext } from "./tools";
 import { appendMessage, getRecentMessages } from "./conversation";
@@ -113,22 +113,36 @@ export async function runAgentTurn(input: {
   const attemptedModels = new Set<string>();
   try {
     for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
+      let result: LlmResult;
       try {
-        var result = await llm.complete(messages, toolSchemas);
+        result = await llm.complete(messages, toolSchemas);
       } catch (err) {
-        // Fallback automático: se modelo Gemini falhar com erro de provider
-        // (ex: modelo descontinuado), tenta próximo na chain
-        if (isAiError(err) && err.code === "provider" && llm.provider === "gemini") {
+        if (isAiError(err) && llm.provider === "gemini") {
           attemptedModels.add(llm.model);
-          const nextModel = GEMINI_FALLBACK_CHAIN.find((m) => !attemptedModels.has(m));
-          if (nextModel) {
-            const model = findModel(nextModel);
-            if (model) {
-              console.warn(
-                `[orchestrator] Fallback: modelo ${llm.model} indisponível, tentando ${nextModel}`,
-              );
-              llm = createProvider(model);
-              var result = await llm.complete(messages, toolSchemas);
+          // Gemini do free tier falhou (cota, rate limit ou erro): troca para
+          // Grok. Só acontece se XAI_API_KEY estiver configurada.
+          const grokFallbackId = getGrokFallbackModel(llm.model);
+          const grokModel = grokFallbackId ? findModel(grokFallbackId) : undefined;
+          if (grokModel) {
+            console.warn(
+              `[orchestrator] Fallback: Gemini ${llm.model} indisponível (${err.code}), usando Grok ${grokModel.id}`,
+            );
+            llm = createProvider(grokModel);
+            result = await llm.complete(messages, toolSchemas);
+          } else if (err.code === "provider") {
+            // Sem Grok configurado, mantém a chain antiga: outro modelo Gemini.
+            const nextModel = GEMINI_FALLBACK_CHAIN.find((m) => !attemptedModels.has(m));
+            if (nextModel) {
+              const model = findModel(nextModel);
+              if (model) {
+                console.warn(
+                  `[orchestrator] Fallback: modelo ${llm.model} indisponível, tentando ${nextModel}`,
+                );
+                llm = createProvider(model);
+                result = await llm.complete(messages, toolSchemas);
+              } else {
+                throw err;
+              }
             } else {
               throw err;
             }

@@ -10,29 +10,49 @@ import {
   type LlmResult,
   type LlmToolCall,
   type LlmToolSchema,
+  type ProviderKey,
 } from "../types";
 
-/** Adapter da OpenAI. Todo acoplamento com o SDK mora aqui. */
-export class OpenAIProvider implements LLMProvider {
-  readonly provider = "openai" as const;
+/**
+ * Base para provedores com API compatível com a OpenAI (OpenAI, xAI/Grok, ...).
+ * Todo acoplamento com o SDK mora aqui; o subadapter só informa quem é, onde
+ * fica a chave e o baseURL.
+ */
+export type OpenAICompatConfig = {
+  provider: ProviderKey;
+  envKey: string;
+  /** URL base da API. Omitido = API oficial da OpenAI. */
+  baseURL?: string;
+  /** Nome para mensagens de erro (ex.: "OpenAI", "xAI"). */
+  displayName: string;
+};
+
+export class OpenAICompatProvider implements LLMProvider {
+  readonly provider: ProviderKey;
+  readonly model: string;
   private client: OpenAI | null = null;
 
-  constructor(readonly model: string) {}
+  constructor(model: string, private readonly config: OpenAICompatConfig) {
+    this.model = model;
+    this.provider = config.provider;
+  }
 
   isConfigured() {
-    return Boolean(process.env.OPENAI_API_KEY);
+    return Boolean(process.env[this.config.envKey]);
   }
 
   private getClient() {
-    this.client ??= new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    this.client ??= new OpenAI({
+      apiKey: process.env[this.config.envKey],
+      baseURL: this.config.baseURL,
+    });
     return this.client;
   }
 
   async complete(messages: LlmMessage[], tools: LlmToolSchema[]): Promise<LlmResult> {
     if (!this.isConfigured()) {
       return {
-        content:
-          "Recebi sua mensagem! (IA em modo de demonstração — configure OPENAI_API_KEY para respostas reais.)",
+        content: `Recebi sua mensagem! (IA em modo de demonstração — configure ${this.config.envKey} para respostas reais.)`,
         toolCalls: [],
       };
     }
@@ -65,23 +85,37 @@ export class OpenAIProvider implements LLMProvider {
   }
 
   private toAiError(err: unknown): AiError {
+    const name = this.config.displayName;
     const ctx = { provider: this.provider, model: this.model, cause: err } as const;
     if (err instanceof APIError) {
       if (err.status === 429) {
-        // A OpenAI usa 429 tanto para rate limit quanto para crédito acabado.
+        // 429 tanto para rate limit quanto para crédito acabado.
         const outOfCredit = /quota|billing|insufficient/i.test(err.message);
         return new AiError(
           outOfCredit ? "quota_exceeded" : "rate_limit",
-          `OpenAI: ${err.message}`,
+          `${name}: ${err.message}`,
           ctx,
         );
       }
       if (err.status === 401 || err.status === 403) {
-        return new AiError("auth", `OpenAI credencial inválida: ${err.message}`, ctx);
+        // xAI/OpenAI respondem 403 quando a conta ficou sem crédito ou bateu o
+        // limite de gasto — não é erro de credencial, é cota esgotada.
+        const outOfCredit = /quota|billing|insufficient|credit|spending|limit/i.test(err.message);
+        if (outOfCredit) {
+          return new AiError("quota_exceeded", `${name}: ${err.message}`, ctx);
+        }
+        return new AiError("auth", `${name} credencial inválida: ${err.message}`, ctx);
       }
-      return new AiError("provider", `OpenAI erro ${err.status}: ${err.message}`, ctx);
+      return new AiError("provider", `${name} erro ${err.status}: ${err.message}`, ctx);
     }
-    return new AiError("provider", `OpenAI falhou: ${String(err)}`, ctx);
+    return new AiError("provider", `${name} falhou: ${String(err)}`, ctx);
+  }
+}
+
+/** Adapter da OpenAI. */
+export class OpenAIProvider extends OpenAICompatProvider {
+  constructor(model: string) {
+    super(model, { provider: "openai", envKey: "OPENAI_API_KEY", displayName: "OpenAI" });
   }
 }
 

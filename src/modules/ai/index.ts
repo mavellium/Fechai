@@ -1,5 +1,6 @@
 import { GeminiProvider } from "./providers/gemini";
 import { OpenAIProvider } from "./providers/openai";
+import { GrokProvider } from "./providers/grok";
 import { getActiveModel } from "./settings";
 import type { AiModelInfo } from "./catalog";
 import type { LLMProvider } from "./types";
@@ -21,6 +22,8 @@ export function createProvider(model: AiModelInfo): LLMProvider {
       return new GeminiProvider(model.id);
     case "openai":
       return new OpenAIProvider(model.id);
+    case "grok":
+      return new GrokProvider(model.id);
   }
 }
 
