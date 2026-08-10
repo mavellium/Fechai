@@ -145,6 +145,7 @@ export function AgentWizard({
                 >
                   {isDone ? <Check size={11} /> : i + 1}
                 </span>
+                <s.icon size={14} aria-hidden />
                 {s.label}
                 {isDone && <span className="sr-only">(concluído)</span>}
               </button>
