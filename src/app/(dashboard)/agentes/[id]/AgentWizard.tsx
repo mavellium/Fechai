@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Check, MessageSquareText, Ban, FileText, Zap, Rocket } from "lucide-react";
+import { Check, MessageSquareText, Ban, BrainCircuit, Sparkles, Rocket } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { PersonaAnswers } from "@/modules/agent-engine/persona";
 import type { ScheduleConfig } from "@/modules/scheduling/config";
@@ -26,30 +26,30 @@ type Doc = {
 
 const STEPS = [
   {
-    key: "persona",
-    label: "Persona",
+    key: "personalidade",
+    label: "Personalidade",
     icon: MessageSquareText,
     title: "Quem é o seu agente",
-    help: "Responda como se estivesse treinando um funcionário novo. É isso que define o jeito dele falar.",
+    help: "Responda como se estivesse treinando um funcionário novo: o nome, o tom de voz e o que ele deve oferecer.",
   },
   {
     key: "regras",
     label: "Regras",
     icon: Ban,
-    title: "O que ele nunca deve fazer",
-    help: "Limites diretos — coisas que o agente nunca deve prometer, dizer ou fazer. Fatos que mudam (preço, horário) ficam no passo Conhecimento.",
+    title: "O que ele nunca faz",
+    help: "Limites diretos: algo que o agente nunca deve fazer, prometer ou dizer. Opcional, mas evita surpresa.",
   },
   {
-    key: "conhecimento",
-    label: "Conhecimento",
-    icon: FileText,
+    key: "cerebro",
+    label: "Cérebro",
+    icon: BrainCircuit,
     title: "O que ele precisa saber",
     help: "Preços, horários, regras, perguntas frequentes. O agente responde com base nestes documentos — sem eles, ele não inventa: diz que vai verificar.",
   },
   {
-    key: "acoes",
-    label: "Ações",
-    icon: Zap,
+    key: "habilidades",
+    label: "Habilidades",
+    icon: Sparkles,
     title: "O que ele pode fazer",
     help: "Além de responder, o agente pode marcar horário na sua agenda, avisar quando um contato está quente e chamar você. Ligue só o que você quer que ele faça sozinho.",
   },
@@ -63,9 +63,12 @@ const STEPS = [
 ] as const;
 
 /**
- * Passo a passo do agente. A tela antiga empilhava os três formulários (7
- * campos de persona + upload + 5 toggles) numa página só — quem chegava pela
- * primeira vez não sabia por onde começar nem quando tinha terminado.
+ * Passo a passo do agente: Personalidade → Regras → Cérebro → Habilidades →
+ * Testar. A tela antiga empilhava tudo (7 campos de persona + regras + upload
+ * + 5 toggles) numa página só — quem chegava pela primeira vez não sabia por
+ * onde começar nem quando tinha terminado. Regras já foi sub-aba dentro de
+ * Personalidade; voltou a ser passo próprio para ficar visível por si só, não
+ * escondida dentro de outro passo.
  *
  * Os passos são estado local, não rota: cada um já salva sozinho na sua
  * própria action, então trocar de passo não perde nada e não precisa de URL
@@ -73,7 +76,6 @@ const STEPS = [
  */
 export function AgentWizard({
   agentId,
-  initialStep,
   persona,
   rules,
   documents,
@@ -85,7 +87,6 @@ export function AgentWizard({
   done,
 }: {
   agentId: string;
-  initialStep: number;
   persona: Partial<PersonaAnswers>;
   /** `avoid` cru do personaDraft — uma regra por linha (ver RulesForm). */
   rules: string;
@@ -98,6 +99,18 @@ export function AgentWizard({
   enabled: boolean;
   done: Record<string, boolean>;
 }) {
+  // Abre no primeiro passo pendente — quem volta continua de onde parou em vez
+  // de cair sempre na personalidade já preenchida. "Regras" e "Testar" ficam
+  // de fora dessa checagem: regras é opcional (nunca deveria prender quem já
+  // preencheu persona e quer seguir direto para Cérebro) e testar não tem
+  // conclusão própria.
+  const blocking = STEPS.filter((s) => s.key !== "regras" && s.key !== "testar");
+  const firstPendingKey = blocking.find((s) => !done[s.key])?.key;
+  const initialStep =
+    firstPendingKey != null
+      ? STEPS.findIndex((s) => s.key === firstPendingKey)
+      : STEPS.length - 1;
+
   const [step, setStep] = useState(initialStep);
   const current = STEPS[step];
 
@@ -154,23 +167,23 @@ export function AgentWizard({
           </div>
         </div>
 
-        {current.key === "persona" && <PersonaForm agentId={agentId} initial={persona} />}
-        {/* Regras/Ações/Testar não têm seção interna para dividir — a sub-aba
-            única existe só pela consistência visual com os outros passos. */}
-        {current.key === "regras" && (
-          <StepTabs
-            tabs={[{ key: "regras", label: "Regras", content: <RulesForm agentId={agentId} initial={rules} /> }]}
-          />
+        {current.key === "personalidade" && (
+          <PersonaForm agentId={agentId} initial={persona} />
         )}
-        {current.key === "conhecimento" && (
+        {/* Passo próprio de novo (era sub-aba dentro de Personalidade) — o
+            design original tinha 5 passos no topo, com Regras separado. */}
+        {current.key === "regras" && <RulesForm agentId={agentId} initial={rules} />}
+        {current.key === "cerebro" && (
           <KnowledgeManager agentId={agentId} documents={documents} />
         )}
-        {current.key === "acoes" && (
+        {/* Habilidades/Testar não têm seção interna para dividir — a sub-aba
+            única existe só pela consistência visual com os outros passos. */}
+        {current.key === "habilidades" && (
           <StepTabs
             tabs={[
               {
-                key: "acoes",
-                label: "Ações",
+                key: "habilidades",
+                label: "Habilidades",
                 content: (
                   <ActionsToggles
                     agentId={agentId}

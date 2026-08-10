@@ -20,7 +20,7 @@ import {
 import { extractTextFromFile } from "@/modules/knowledge-base/extract";
 import { uploadToBunny } from "@/lib/bunny";
 
-type Result = { ok: boolean; error?: string; info?: string };
+export type Result = { ok: boolean; error?: string; info?: string };
 
 /**
  * Todas as actions recebem `agentId` e passam por `requireAgent`: o id vem da

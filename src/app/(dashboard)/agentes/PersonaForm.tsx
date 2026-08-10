@@ -50,8 +50,8 @@ export function PersonaForm({
 
   const preview = composeSystemPrompt(answers);
 
-  // Um grupo por sub-aba. Todas ficam sempre montadas (ver StepTabs) — os
-  // três grupos continuam sendo UM `<form>` só, com UM botão salvar.
+  // Um grupo por sub-aba, todas sempre montadas (ver StepTabs) — os três
+  // grupos continuam sendo UM `<form>` só, com UM botão salvar.
   const tabs: StepTab[] = PERSONA_GROUPS.map((group) => ({
     key: group.key,
     label: group.legend.replace(/^\d+\.\s*/, ""),
@@ -93,7 +93,7 @@ export function PersonaForm({
       <Alert tone="info">
         O que você escrever aqui vira as instruções que o agente recebe em toda
         conversa. Fatos que mudam (preço, horário, cardápio) não entram aqui — vão na
-        <strong className="font-medium"> Base de conhecimento</strong>, no próximo passo.
+        <strong className="font-medium"> Base de conhecimento</strong>, alguns passos à frente.
       </Alert>
 
       <StepTabs tabs={tabs} />

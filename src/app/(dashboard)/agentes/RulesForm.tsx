@@ -1,13 +1,13 @@
 "use client";
 
-import { useActionState, useId, useState } from "react";
+import { useId, useState, useTransition } from "react";
 import { Ban, Plus, X } from "lucide-react";
 import { Alert, FormFeedback } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Field, fieldProps } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { saveRules } from "./actions";
+import { saveRules, type Result } from "./actions";
 
 function parseRules(raw: string): string[] {
   return raw
@@ -16,8 +16,15 @@ function parseRules(raw: string): string[] {
     .filter(Boolean);
 }
 
+/**
+ * Vive dentro da aba "Regras" do passo Personalidade, que por sua vez está
+ * dentro do `<form>` da persona (ver PersonaForm) — por isso não renderiza
+ * `<form>` próprio (HTML não aceita form aninhado). Salva chamando a action
+ * direto via transition, no mesmo padrão do `remove()` de KnowledgeManager.
+ */
 export function RulesForm({ agentId, initial }: { agentId: string; initial: string }) {
-  const [state, formAction, pending] = useActionState(saveRules, null);
+  const [state, setState] = useState<Result | null>(null);
+  const [pending, startTransition] = useTransition();
   const [rules, setRules] = useState<string[]>(() => parseRules(initial));
   const [draft, setDraft] = useState("");
   const inputId = useId();
@@ -32,11 +39,18 @@ export function RulesForm({ agentId, initial }: { agentId: string; initial: stri
     setDraft("");
   }
 
-  return (
-    <form action={formAction} className="space-y-6">
-      <input type="hidden" name="agentId" value={agentId} />
-      <input type="hidden" name="rules" value={rules.join("\n")} />
+  function save() {
+    const formData = new FormData();
+    formData.set("agentId", agentId);
+    formData.set("rules", rules.join("\n"));
+    startTransition(async () => {
+      const res = await saveRules(null, formData);
+      setState(res);
+    });
+  }
 
+  return (
+    <div className="space-y-6">
       <Alert tone="info">
         Cada regra é um limite direto: algo que o agente nunca deve fazer, prometer ou dizer. Fatos
         que mudam (preço, horário, cardápio) vão na{" "}
@@ -99,9 +113,9 @@ export function RulesForm({ agentId, initial }: { agentId: string; initial: stri
 
       <FormFeedback error={state?.error} info={state?.info} />
 
-      <Button type="submit" loading={pending} loadingLabel="Salvando regras">
+      <Button type="button" onClick={save} loading={pending} loadingLabel="Salvando regras">
         Salvar regras
       </Button>
-    </form>
+    </div>
   );
 }

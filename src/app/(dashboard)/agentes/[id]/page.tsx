@@ -43,19 +43,14 @@ export default async function AgentePage({ params }: { params: Promise<{ id: str
   const rules = (agent.personaDraft as Partial<PersonaAnswers> | null)?.avoid ?? "";
 
   const done = {
-    persona: agent.systemPrompt.length > 0,
-    // Regras é complementar (o agente funciona sem nenhuma) — o check aqui é
-    // só informativo, não bloqueia nada; ver decisão em agentSteps().
-    regras: Boolean(rules),
-    conhecimento: documents.length > 0,
-    acoes: actions.length > 0,
+    // Persona é o que bloqueia; regras é complementar (o agente funciona sem
+    // nenhuma) — só informativo aqui, nunca trava o avanço no stepper.
+    personalidade: agent.systemPrompt.length > 0,
+    regras: rules.trim().length > 0,
+    cerebro: documents.length > 0,
+    habilidades: actions.length > 0,
     testar: false,
   };
-  // Abre no primeiro passo pendente — quem volta continua de onde parou em vez
-  // de cair sempre na persona já preenchida.
-  const firstPending = ["persona", "regras", "conhecimento", "acoes"].findIndex(
-    (k) => !done[k as keyof typeof done],
-  );
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -79,8 +74,6 @@ export default async function AgentePage({ params }: { params: Promise<{ id: str
 
       <AgentWizard
         agentId={agent.id}
-        // -1 (tudo pronto) cai no último passo (Testar) — 5 passos agora, com Regras.
-        initialStep={firstPending === -1 ? 4 : firstPending}
         persona={(agent.personaDraft as Partial<PersonaAnswers> | null) ?? {}}
         rules={rules}
         documents={documents}
