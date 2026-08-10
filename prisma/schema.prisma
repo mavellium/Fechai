@@ -51,6 +51,9 @@ model Tenant {
   widgetBorderColor String? // null = sem borda
   widgetDeployedAt  DateTime?
 
+  // WhatsApp: se verdadeiro (padrão), o agente ignora mensagens de grupos.
+  whatsappIgnoreGroups Boolean @default(true)
+
   users            User[]
   agents           Agent[]
   knowledgeDocs    KnowledgeDocument[]

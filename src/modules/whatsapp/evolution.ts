@@ -66,6 +66,14 @@ export class EvolutionProvider implements WhatsAppProvider {
     if (!res.ok) throw new Error(`Evolution sendMessage falhou (${res.status})`);
   }
 
+  async disconnect(externalId: string): Promise<void> {
+    const res = await fetch(`${this.baseUrl}/instance/logout/${externalId}`, {
+      method: "POST",
+      headers: this.headers(),
+    });
+    if (!res.ok) throw new Error(`Evolution logout falhou (${res.status})`);
+  }
+
   parseWebhook(payload: unknown): IncomingMessage | null {
     // Formato do evento messages.upsert da Evolution API.
     const p = payload as {
@@ -89,6 +97,8 @@ export class EvolutionProvider implements WhatsAppProvider {
       fromPhone,
       fromName: data.pushName,
       text,
+      // Grupos têm JID com sufixo @g.us (ex: 5511999999999-1615000000@g.us).
+      isGroup: jid.endsWith("@g.us"),
     };
   }
 }

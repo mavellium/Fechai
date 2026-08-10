@@ -24,7 +24,7 @@ export default async function WhatsappPage() {
   const { tenantId } = await requireTenant();
 
   const since = new Date(new Date().getTime() - 7 * 86_400_000);
-  const [instance, inboundLast7, tenant] = await Promise.all([
+  const [instance, inboundLast7, tenant, agent] = await Promise.all([
     prisma.whatsappInstance.findUnique({ where: { tenantId } }),
     prisma.message.count({
       where: { role: "user", createdAt: { gte: since }, conversation: { tenantId } },
@@ -39,7 +39,13 @@ export default async function WhatsappPage() {
         widgetIconUrl: true,
         widgetShape: true,
         widgetBorderColor: true,
+        whatsappIgnoreGroups: true,
       },
+    }),
+    prisma.agent.findFirst({
+      where: { tenantId, archived: false },
+      orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }],
+      select: { name: true, enabled: true },
     }),
   ]);
 
@@ -94,13 +100,19 @@ export default async function WhatsappPage() {
           </span>
         </CardTitle>
 
+        {/* key={status}: quando desconecta, o WhatsappConnect remonta no estado
+            novo (o status é estado local dele e não se atualizaria sozinho). */}
         <WhatsappConnect
+          key={status}
           initialStatus={status}
           configured={configured}
           connectedSince={
             connected && instance?.updatedAt ? dateLabel(instance.updatedAt) : undefined
           }
           inboundLast7={connected ? inboundLast7 : undefined}
+          agentName={agent?.name ?? "Agente"}
+          agentEnabled={agent?.enabled ?? false}
+          ignoreGroups={tenant?.whatsappIgnoreGroups ?? true}
         />
       </Card>
 

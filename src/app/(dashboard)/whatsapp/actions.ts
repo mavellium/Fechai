@@ -61,6 +61,69 @@ export async function refreshWhatsappStatus(): Promise<ConnectResult> {
   }
 }
 
+type WhatsappControlResult = { ok: boolean; error?: string; info?: string };
+
+/**
+ * Desloga o número da instância na Evolution e marca como desconectado no
+ * banco. Alternativa ao "desligar" (que só cala o agente): aqui o WhatsApp
+ * inteiro sai — volta a conectar exige novo QR. Se a Evolution falhar,
+ * retorna o erro sem marcar como desconectado (senão enganaríamos a tela).
+ */
+export async function disconnectWhatsapp(): Promise<WhatsappControlResult> {
+  const { tenantId } = await requireTenant();
+  const provider = getWhatsAppProvider();
+  const instance = await prisma.whatsappInstance.findUnique({ where: { tenantId } });
+  if (!instance?.externalId) return { ok: false, error: "Nenhum número conectado." };
+  if (!provider.isConfigured()) return { ok: false, error: "Evolution API não configurada." };
+
+  try {
+    await provider.disconnect(instance.externalId);
+  } catch (err) {
+    console.error("[whatsapp] falha ao desconectar na Evolution", err);
+    return { ok: false, error: err instanceof Error ? err.message : "Falha ao desconectar" };
+  }
+
+  await prisma.whatsappInstance.update({
+    where: { tenantId },
+    data: { status: "disconnected" },
+  });
+  revalidatePath("/whatsapp");
+  revalidatePath("/inicio");
+  return { ok: true, info: "WhatsApp desconectado. Para voltar, gere um novo código." };
+}
+
+/**
+ * Pausa/retoma o agente que atende o WhatsApp (o principal, ou o mais antigo
+ * se nenhum for marcado como principal). Espelha o `enabled` da página de
+ * agentes — o mesmo campo que o `runAgentTurn` respeita para calar o bot.
+ */
+export async function setWhatsappAgentEnabled(enabled: boolean): Promise<WhatsappControlResult> {
+  const { tenantId } = await requireTenant();
+  const agent = await prisma.agent.findFirst({
+    where: { tenantId, archived: false },
+    orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }],
+    select: { id: true, name: true },
+  });
+  if (!agent) return { ok: false, error: "Nenhum agente nesta conta." };
+
+  await prisma.agent.update({ where: { id: agent.id }, data: { enabled } });
+  revalidatePath("/whatsapp");
+  revalidatePath("/agentes");
+  revalidatePath("/inicio");
+  return { ok: true, info: enabled ? `${agent.name} voltou a responder.` : `${agent.name} parou de responder.` };
+}
+
+/** Configura se o agente ignora mensagens de grupos do WhatsApp. */
+export async function setWhatsappIgnoreGroups(ignore: boolean): Promise<WhatsappControlResult> {
+  const { tenantId } = await requireTenant();
+  await prisma.tenant.update({ where: { id: tenantId }, data: { whatsappIgnoreGroups: ignore } });
+  revalidatePath("/whatsapp");
+  return {
+    ok: true,
+    info: ignore ? "O agente ignora mensagens de grupos." : "O agente passa a responder em grupos.",
+  };
+}
+
 // --------------------------------------------------------- widget do site
 
 type WidgetConfigResult = { ok: boolean; error?: string; info?: string };

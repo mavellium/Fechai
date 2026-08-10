@@ -14,6 +14,8 @@ export type IncomingMessage = {
   fromPhone: string;
   fromName?: string;
   text: string;
+  /** true quando a mensagem veio de um grupo do WhatsApp (@g.us). */
+  isGroup: boolean;
 };
 
 export interface WhatsAppProvider {
@@ -22,6 +24,8 @@ export interface WhatsAppProvider {
   createInstance(tenantId: string): Promise<CreateInstanceResult>;
   getQrCode(externalId: string): Promise<{ status: WhatsAppStatus; qrCode?: string }>;
   sendMessage(externalId: string, toPhone: string, text: string): Promise<void>;
+  /** Desloga o número da instância (exige novo QR para voltar). */
+  disconnect(externalId: string): Promise<void>;
   // onMessageReceived é implementado via webhook (ver api/webhooks/whatsapp).
   // O provider expõe apenas o parser do payload recebido.
   parseWebhook(payload: unknown): IncomingMessage | null;

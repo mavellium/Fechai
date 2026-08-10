@@ -15,9 +15,15 @@ export async function POST(req: Request) {
 
   const instance = await prisma.whatsappInstance.findFirst({
     where: { externalId: incoming.instanceExternalId },
-    select: { tenantId: true },
+    select: { tenantId: true, tenant: { select: { whatsappIgnoreGroups: true } } },
   });
   if (!instance) return NextResponse.json({ ignored: "instância desconhecida" });
+
+  // Config de grupos: se o tenant optou por ignorar, descarta em silêncio —
+  // nem a mensagem entra como conversa/lead.
+  if (incoming.isGroup && instance.tenant?.whatsappIgnoreGroups) {
+    return NextResponse.json({ ignored: "grupo" });
+  }
 
   const tenantId = instance.tenantId;
   const { lead, conversation } = await getOrCreateConversation(
