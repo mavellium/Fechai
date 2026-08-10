@@ -49,6 +49,11 @@ export function dateTimeLabel(date: Date) {
   }).format(date);
 }
 
+/** Moeda em reais a partir de centavos: "R$ 1.234,56". Visão Financeira de /relatorios. */
+export function formatBRL(cents: number) {
+  return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(cents / 100);
+}
+
 /** Separador de dia dentro do histórico: "hoje", "ontem" ou a data. */
 export function dayLabel(date: Date, now: Date = new Date()) {
   const start = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();

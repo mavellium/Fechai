@@ -58,7 +58,7 @@ export class AiError extends Error {
       case "rate_limit":
         return "Estamos recebendo muitas mensagens agora. Tento de novo em instantes.";
       case "quota_exceeded":
-        return "O limite diário do plano gratuito de IA foi atingido. Um humano vai assumir daqui.";
+        return "O provedor de IA atingiu o limite diário de uso da API. Um humano vai assumir daqui.";
       case "auth":
         return "A integração de IA está sem credencial válida. Avise o administrador.";
       default:

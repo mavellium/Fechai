@@ -58,6 +58,20 @@ export async function POST(req: Request) {
     incoming.fromName,
   );
 
+  // Reação (emoji sobreposta a uma mensagem): não é uma mensagem do cliente —
+  // não entra no histórico e não dispara turno. Com a opção "Encerrar conversa
+  // com emoji" ligada, a reação encerra a conversa: pausa com o mesmo flag de
+  // quando um humano assume (`agentPaused`), para o agente não responder por
+  // cima na próxima mensagem.
+  if (incoming.isReaction) {
+    if (agent?.stopOnEmoji) {
+      await prisma.conversation
+        .update({ where: { id: conversation.id }, data: { agentPaused: true, needsHuman: true } })
+        .catch(() => {});
+    }
+    return NextResponse.json({ ok: true, silent: "reaction" });
+  }
+
   // Opção "parar com emoji": cliente manda só um emoji e a conversa encerra.
   // Pausa com o mesmo flag de quando um humano assume (`agentPaused`): o
   // `runAgentTurn` ainda registra a mensagem, mas fica em silêncio. O dono

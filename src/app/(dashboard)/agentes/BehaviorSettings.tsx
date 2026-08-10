@@ -26,7 +26,7 @@ const OPTIONS: {
     icon: StopCircle,
     title: "Encerrar conversa com emoji",
     description:
-      "Se o cliente responder só com um emoji, o agente para de responder naquela conversa — ela sobe como “precisa de você”. Devolva em Conversas para o agente retomar.",
+      "Se o cliente reagir com um emoji (ou responder só com um emoji), o agente para de responder naquela conversa — ela sobe como “precisa de você”. Devolva em Conversas para o agente retomar.",
   },
 ];
 
@@ -65,7 +65,7 @@ export function BehaviorSettings({
     <div className="space-y-3">
       <Alert tone="info">
         Estes são os dois comportamentos de conversa do agente: ouvir mensagens de voz e encerrar
-        quando a pessoa manda só um emoji. Os dois vêm ligados por padrão.
+        quando a pessoa reage com um emoji ou manda só um emoji. Os dois vêm ligados por padrão.
       </Alert>
 
       {error && <Alert tone="danger">{error}</Alert>}

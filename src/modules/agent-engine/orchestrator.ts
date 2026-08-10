@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { getUsageSummary } from "@/modules/billing/usage";
 import { embedQuery } from "@/modules/knowledge-base/embeddings";
 import { searchSimilarChunks } from "@/modules/knowledge-base/repository";
 import { getLLMProvider, isAiError, createProvider, type AiError, type LLMProvider, type LlmMessage, type LlmResult, type LlmToolSchema } from "@/modules/ai";
@@ -20,11 +21,15 @@ const DEFAULT_SYSTEM =
  *   conversa ser devolvida a ela. Diferente de `agent_off`: as outras
  *   conversas do mesmo agente continuam respondidas normalmente.
  * `no_agent` — a conta não tem agente ativo.
+ * `limit_reached` — a conta esgotou a cota de conversas do mês (ver
+ *   `modules/billing/usage.ts`): a mensagem fica registrada e a conversa sobe
+ *   para "precisa de você", mas a IA fica em silêncio. O sandbox pula essa
+ *   checagem (`skipUsageCheck`): testar não é atendimento.
  *
  * Quem chama decide o que fazer com o silêncio: o webhook do WhatsApp não
  * manda nada, o widget não mostra bolha, o sandbox explica o motivo na tela.
  */
-export type TurnStatus = "ok" | "agent_off" | "human_handling" | "no_agent";
+export type TurnStatus = "ok" | "agent_off" | "human_handling" | "no_agent" | "limit_reached";
 
 export type AgentTurn = { reply: string; toolsUsed: string[]; status: TurnStatus };
 
@@ -37,6 +42,8 @@ export async function runAgentTurn(input: {
   userMessage: string;
   /** Agente que deve atender. Omitido (webhook do WhatsApp), usa o principal. */
   agentId?: string;
+  /** Sandbox: pula a checagem de cota — testar não conta como atendimento. */
+  skipUsageCheck?: boolean;
 }): Promise<AgentTurn> {
   const { tenantId, conversationId, leadId, userMessage } = input;
 
@@ -52,6 +59,40 @@ export async function runAgentTurn(input: {
   });
   if (paused?.agentPaused) {
     return { reply: "", toolsUsed: [], status: "human_handling" };
+  }
+
+  // Cota de conversas do mês esgotada (e não é o sandbox): a mensagem já ficou
+  // registrada, a conversa é marcada para o dono responder, e a IA não fala
+  // mais nada — o enforcement dos planos (ver billing/usage.ts).
+  if (!input.skipUsageCheck) {
+    const usage = await getUsageSummary(tenantId);
+    if (usage.atLimit) {
+      await prisma.conversation
+        .update({ where: { id: conversationId }, data: { needsHuman: true } })
+        .catch(() => {});
+      return { reply: "", toolsUsed: [], status: "limit_reached" };
+    }
+
+    // Teto por conversa (limite × 3): a cota da conta é por conversa, então sem
+    // isso uma única conversa usaria o LLM à vontade. Aqui o número já está
+    // contando só as respostas da IA deste mês nesta conversa (a do turno
+    // atual ainda não existe — é gravada no final). Estourar aqui silencia a
+    // IA SÓ nesta conversa, o resto da conta continua atendendo.
+    const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+    const aiRepliesThisConversation = await prisma.message.count({
+      where: {
+        conversationId,
+        role: "assistant",
+        sentBy: "agent",
+        createdAt: { gte: monthStart },
+      },
+    });
+    if (aiRepliesThisConversation >= usage.perConversationCap) {
+      await prisma.conversation
+        .update({ where: { id: conversationId }, data: { needsHuman: true } })
+        .catch(() => {});
+      return { reply: "", toolsUsed: [], status: "limit_reached" };
+    }
   }
 
   const agent = await resolveAgent(tenantId, input.agentId);
@@ -147,10 +188,21 @@ export async function runAgentTurn(input: {
     }
   } catch (err) {
     if (!isAiError(err)) throw err;
-    // Limite/credencial do provedor: o lead recebe uma resposta clara e a
-    // conversa é escalada para humano em vez de morrer em silêncio.
     console.error(`[orchestrator] IA indisponível (${err.code}) em ${llm.provider}/${llm.model}`, err);
-    const escalate = err.code === "quota_exceeded" || err.code === "auth";
+
+    // Cota do provedor esgotada (ex.: limite diário de tokens): o cliente não
+    // recebe NENHUMA mensagem sobre o limite — só a conversa sobe como
+    // "precisa de você" e um humano assume. Nada é registrado no histórico.
+    if (err.code === "quota_exceeded") {
+      await prisma.conversation
+        .update({ where: { id: conversationId }, data: { needsHuman: true } })
+        .catch(() => {});
+      return { reply: "", toolsUsed, status: "limit_reached" };
+    }
+
+    // Erro de configuração (credencial) ou problema pontual: o lead recebe uma
+    // resposta clara e a conversa é escalada em vez de morrer em silêncio.
+    const escalate = err.code === "auth";
     if (escalate) {
       await prisma.conversation
         .update({ where: { id: conversationId }, data: { needsHuman: true } })

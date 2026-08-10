@@ -7,6 +7,7 @@ import { dayLabel, phoneLabel, relativeTime } from "@/lib/format";
 import { leadStatusLabel } from "./leadStatus";
 import { LeadPanel, type LeadPanelData } from "./LeadPanel";
 import { SendMessageForm } from "./SendMessageForm";
+import { DeleteTestConversationButton } from "./DeleteTestConversationButton";
 
 type ThreadMessage = {
   id: string;
@@ -61,6 +62,9 @@ export function ConversationThread({
             <Badge tone={status.tone}>{status.label}</Badge>
           )}
           {conversation.needsHuman && <Badge tone="danger">precisa de você</Badge>}
+          {conversation.isTest && (
+            <DeleteTestConversationButton conversationId={conversation.id} />
+          )}
         </div>
       </header>
 

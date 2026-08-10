@@ -10,6 +10,8 @@ declare module "next-auth" {
       id: string;
       role: string;
       tenantId: string;
+      /** true quando o superadmin está vendo o painel de outro usuário. */
+      impersonating?: boolean;
     } & DefaultSession["user"];
   }
 }

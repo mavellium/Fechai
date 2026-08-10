@@ -70,3 +70,28 @@ export async function sendManualMessage(conversationId: string, text: string): P
   revalidatePath("/inicio");
   return { ok: true };
 }
+
+/**
+ * Excluir um chat de teste (sandbox) em definitivo: a conversa, as mensagens e
+ * o lead de teste vão junto (cascade). Só conversas `isTest: true` da própria
+ * conta passam por aqui — um id de conversa real retorna erro, nunca apaga.
+ */
+export async function deleteTestConversation(id: string): Promise<Result> {
+  const { tenantId } = await requireTenant();
+
+  const conv = await prisma.conversation.findFirst({
+    where: { id, tenantId, isTest: true, lead: { isTest: true } },
+    select: { id: true, leadId: true },
+  });
+  if (!conv) return { ok: false, error: "Conversa de teste não encontrada." };
+
+  await prisma.$transaction([
+    prisma.message.deleteMany({ where: { conversationId: conv.id } }),
+    prisma.conversation.delete({ where: { id: conv.id } }),
+    prisma.lead.delete({ where: { id: conv.leadId } }),
+  ]);
+
+  revalidatePath("/conversas");
+  revalidatePath("/inicio");
+  return { ok: true };
+}

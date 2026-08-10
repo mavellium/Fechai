@@ -43,7 +43,7 @@ export function NewAgentButton({ usage }: { usage: AgentUsage }) {
       <dialog
         ref={ref}
         aria-labelledby="novo-agente-titulo"
-        className="w-[min(28rem,92vw)] rounded-surface border border-white/10 bg-ink p-6 text-white backdrop:bg-ink/70"
+        className="m-auto w-[min(28rem,92vw)] rounded-surface border border-white/10 bg-ink p-6 text-white backdrop:bg-ink/70"
       >
         <h2 id="novo-agente-titulo" className="font-display text-xl font-bold">
           Novo agente

@@ -31,7 +31,7 @@ export function AddContactDialog({ label = "Novo contato" }: { label?: string })
       <dialog
         ref={ref}
         aria-labelledby="novo-contato-titulo"
-        className="w-[min(28rem,92vw)] rounded-surface border border-white/15 bg-ink p-6 text-white backdrop:bg-ink/70"
+        className="m-auto w-[min(28rem,92vw)] rounded-surface border border-white/15 bg-ink p-6 text-white backdrop:bg-ink/70"
       >
         <div className="mb-4 flex items-start justify-between gap-4">
           <div className="min-w-0">

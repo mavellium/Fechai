@@ -104,13 +104,22 @@ export class EvolutionProvider implements WhatsAppProvider {
           extendedTextMessage?: { text?: string };
           audioMessage?: unknown;
           pttMessage?: unknown;
+          reactionMessage?: { text?: string; key?: { remoteJid?: string } };
         };
       };
     };
     const data = p?.data;
     if (!data || data.key?.fromMe) return null; // ignora o que nós mesmos enviamos
 
-    const text = data.message?.conversation ?? data.message?.extendedTextMessage?.text ?? "";
+    // Reação (emoji sobreposta a uma mensagem): não é uma mensagem do cliente.
+    // O webhook encerra a conversa com a opção "Encerrar conversa com emoji",
+    // mas nunca dispara turno do agente (nem entra no histórico).
+    const reaction = data.message?.reactionMessage;
+    const text =
+      reaction?.text ??
+      data.message?.conversation ??
+      data.message?.extendedTextMessage?.text ??
+      "";
     // Voz (pttMessage) e arquivo de áudio (audioMessage) têm a mesma forma.
     const hasAudio = Boolean(data.message?.audioMessage ?? data.message?.pttMessage);
     const jid = data.key?.remoteJid ?? "";
@@ -126,6 +135,7 @@ export class EvolutionProvider implements WhatsAppProvider {
       isGroup: jid.endsWith("@g.us"),
       hasAudio,
       messageKeyId: data.key?.id,
+      isReaction: Boolean(reaction),
     };
   }
 }

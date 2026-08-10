@@ -3,8 +3,12 @@ import { redirect } from "next/navigation";
 import { requireOwner } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { signOut } from "@/auth";
+import { clearImpersonation } from "@/lib/impersonation";
+import { getUsageSummary } from "@/modules/billing/usage";
 import { Button } from "@/components/ui/button";
 import { PanelShell } from "@/components/shell/PanelShell";
+import { ImpersonationBanner } from "@/components/shell/ImpersonationBanner";
+import { stopImpersonation } from "@/app/(admin)/actions";
 import type { NavItem } from "@/components/shell/ShellNav";
 
 const NAV: NavItem[] = [
@@ -26,13 +30,16 @@ export const metadata: Metadata = {
 
 async function signOutAction() {
   "use server";
+  await clearImpersonation();
   await signOut({ redirectTo: "/login" });
 }
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const session = await requireOwner();
+  const impersonating = session.user.impersonating ?? false;
+  const tenantId = session.user.tenantId;
   const tenant = await prisma.tenant.findUnique({
-    where: { id: session.user.tenantId },
+    where: { id: tenantId },
     select: { status: true, name: true, planKey: true, onboardingCompleted: true },
   });
 
@@ -45,11 +52,19 @@ export default async function DashboardLayout({ children }: { children: React.Re
           <p className="mt-2 text-sm text-white/65">
             Sua conta está temporariamente suspensa. Fale com o suporte para reativá-la.
           </p>
-          <form action={signOutAction} className="mt-6">
-            <Button variant="outline" size="sm" type="submit">
-              Sair
-            </Button>
-          </form>
+          {impersonating ? (
+            <form action={stopImpersonation} className="mt-6">
+              <Button variant="outline" size="sm" type="submit">
+                Sair da personificação
+              </Button>
+            </form>
+          ) : (
+            <form action={signOutAction} className="mt-6">
+              <Button variant="outline" size="sm" type="submit">
+                Sair
+              </Button>
+            </form>
+          )}
         </div>
       </div>
     );
@@ -60,6 +75,11 @@ export default async function DashboardLayout({ children }: { children: React.Re
   // wizard. (/onboarding está fora deste grupo de rotas, então não há loop.)
   if (tenant && !tenant.onboardingCompleted) redirect("/onboarding");
 
+  // Uso do mês para o indicador da navegação (conversas X/Y, link para
+  // /configuracoes). Sem o tenant ativo a busca é inócua — só roda depois das
+  // duas saídas acima.
+  const usage = await getUsageSummary(tenantId);
+
   return (
     <PanelShell
       navItems={NAV}
@@ -68,6 +88,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
       footerLabel={`plano · ${tenant?.planKey ?? "FREE"}`}
       userLabel={session.user.email ?? ""}
       signOutAction={signOutAction}
+      usage={usage}
+      banner={impersonating ? <ImpersonationBanner email={session.user.email ?? ""} /> : undefined}
     >
       {children}
     </PanelShell>

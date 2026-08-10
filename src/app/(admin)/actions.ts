@@ -1,10 +1,13 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { z } from "zod";
 import type { PlanKey } from "@prisma/client";
+import { prisma } from "@/lib/prisma";
 import { requireSuperadmin } from "@/lib/session";
-import { setTenantStatus, adminSetPlan, adminCreateAccount } from "@/modules/admin/service";
+import { setImpersonation, clearImpersonation } from "@/lib/impersonation";
+import { setTenantStatus, adminSetPlan, adminSetUsageLimit, adminCreateAccount } from "@/modules/admin/service";
 import { setFeedbackStatus, type FeedbackStatus } from "@/modules/feedback/service";
 import { setActiveModelId } from "@/modules/ai";
 
@@ -17,6 +20,20 @@ export async function suspendTenant(tenantId: string, suspend: boolean) {
 export async function changePlan(tenantId: string, planKey: PlanKey) {
   await requireSuperadmin();
   await adminSetPlan(tenantId, planKey);
+  revalidatePath("/admin/contas");
+}
+
+/**
+ * Altera os limites da conta (null = volta ao padrão do plano). São duas cotas
+ * independentes: conversas/mês e o teto de respostas da IA por conversa.
+ */
+export async function setTenantUsageLimit(
+  tenantId: string,
+  limit: number | null,
+  perConversationCap?: number | null,
+) {
+  await requireSuperadmin();
+  await adminSetUsageLimit(tenantId, limit, perConversationCap);
   revalidatePath("/admin/contas");
 }
 
@@ -69,4 +86,46 @@ export async function changeAiModel(modelId: string) {
   const session = await requireSuperadmin();
   await setActiveModelId(modelId, session.user.email ?? undefined);
   revalidatePath("/admin/ia");
+}
+
+export type ImpersonateResult = { ok: boolean; error?: string };
+
+/**
+ * Entra como um usuário (normalmente o dono da conta): grava um cookie
+ * assinado que faz os guards do dashboard tratar a sessão como a do cliente.
+ * Sai com stopImpersonation(). Não dá para personificar conta do admin
+ * (SUPERADMIN) nem a própria conta.
+ */
+export async function impersonateUser(userId: string): Promise<ImpersonateResult> {
+  const session = await requireSuperadmin();
+
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) return { ok: false, error: "Usuário não encontrado." };
+  if (user.role === "SUPERADMIN") {
+    return { ok: false, error: "Não é permitido personificar uma conta do admin." };
+  }
+  if (user.tenantId === session.user.tenantId) {
+    return { ok: false, error: "Você já está na sua própria conta." };
+  }
+  const tenant = await prisma.tenant.findUnique({ where: { id: user.tenantId }, select: { status: true } });
+  if (tenant?.status === "suspended") {
+    return { ok: false, error: "Conta suspensa — reative-a antes de personificar." };
+  }
+
+  await setImpersonation({
+    userId: user.id,
+    email: user.email,
+    role: user.role,
+    tenantId: user.tenantId,
+  });
+  revalidatePath("/inicio");
+  redirect("/inicio");
+}
+
+/** Encerra a personificação e volta ao painel do admin. */
+export async function stopImpersonation() {
+  await requireSuperadmin();
+  await clearImpersonation();
+  revalidatePath("/admin/contas");
+  redirect("/admin/contas");
 }

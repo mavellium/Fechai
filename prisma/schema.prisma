@@ -31,6 +31,16 @@ model Tenant {
   status           String            @default("active") // active | suspended
   createdAt        DateTime          @default(now())
 
+  // Limite de conversas/mês: null = usa o teto do plano (`conversationsPerMonth`).
+  // Preenchido pelo superadmin em /admin/contas para dar um teto diferente do
+  // plano — usado pelo enforcement (runAgentTurn) e pelos indicadores de uso.
+  conversationLimitOverride Int?
+
+  // Teto de respostas da IA por conversa/mês: null = deriva do limite efetivo
+  // de conversas (× 3). Override próprio permite o admin fixar as duas cotas
+  // independentes — a conta (conversas) e o uso por conversa (respostas).
+  perConversationCapOverride Int?
+
   // Onboarding guiado (/onboarding). Enquanto `onboardingCompleted` for false, o
   // dashboard redireciona para o wizard; `onboardingStep` + `onboardingDraft`
   // permitem retomar de onde o usuário parou.
@@ -64,6 +74,7 @@ model Tenant {
   feedbacks        Feedback[]
   appointments     Appointment[]
   calendar         CalendarIntegration?
+  leadValues       TenantLeadValue[]
 }
 
 model User {
@@ -115,9 +126,9 @@ model Agent {
   /// Ouve mensagens de voz do WhatsApp: o áudio é transcrito e o agente
   /// responde como se fosse texto. Desligado, áudios são ignorados.
   listenAudio  Boolean  @default(true)
-  /// Cliente manda só um emoji: a conversa encerra e o agente para de
-  /// responder nela (mesmo mecanismo de quando um humano assume — `agentPaused`).
-  /// O dono devolve a conversa em /conversas para retomar.
+  /// Cliente reage com um emoji ou manda só um emoji: a conversa encerra e o
+  /// agente para de responder nela (mesmo mecanismo de quando um humano assume
+  /// — `agentPaused`). O dono devolve a conversa em /conversas para retomar.
   stopOnEmoji  Boolean  @default(true)
   archived     Boolean  @default(false)
   createdAt    DateTime @default(now())
@@ -331,4 +342,21 @@ model AiSetting {
   modelId   String // id do modelo no catálogo (src/modules/ai/catalog.ts)
   updatedAt DateTime @updatedAt
   updatedBy String? // e-mail do superadmin que trocou
+}
+
+/// Quanto um lead fechado vale para o dono — definido manualmente na visão
+/// Financeira de /relatorios. Cada alteração cria uma entrada nova com vigência
+/// (`startsAt`): períodos já iniciados usam o valor em vigor no início deles,
+/// então mudar o valor não recalcula relatórios passados retroativamente.
+model TenantLeadValue {
+  id         String   @id @default(cuid())
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// Em centavos de real (mesma unidade de `Plan.priceCents`).
+  valueCents Int
+  /// Entra em vigor a partir desta data/hora.
+  startsAt   DateTime
+  createdAt  DateTime @default(now())
+
+  @@index([tenantId, startsAt])
 }

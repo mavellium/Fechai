@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { shortAge } from "@/lib/format";
 import { leadStatusLabel } from "./leadStatus";
+import { DeleteTestConversationButton } from "./DeleteTestConversationButton";
 
 export type ConversationListItem = {
   id: string;
@@ -55,11 +56,11 @@ function Item({
   const name = item.lead.name ?? item.lead.phone;
 
   return (
-    <li>
+    <li className="group/item relative">
       <Link
         href={href}
         aria-current={active ? "true" : undefined}
-        className={`flex gap-3 rounded-surface px-3 py-2.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris ${
+        className={`flex gap-3 rounded-surface px-3 py-2.5 pr-10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris ${
           active ? "bg-iris/20" : "hover:bg-white/5"
         }`}
       >
@@ -95,6 +96,12 @@ function Item({
           </span>
         </span>
       </Link>
+
+      {item.isTest && (
+        <span className="absolute right-1.5 top-1/2 -translate-y-1/2 opacity-60 transition-opacity group-hover/item:opacity-100">
+          <DeleteTestConversationButton conversationId={item.id} iconOnly />
+        </span>
+      )}
     </li>
   );
 }

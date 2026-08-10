@@ -9,7 +9,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { TenantRow } from "./TenantRow";
 import { NewAccountForm } from "./NewAccountForm";
 
-const COLUMNS = ["Tenant", "Plano", "WhatsApp", "Status", "Ação"];
+const COLUMNS = ["Tenant", "Plano", "Limite", "WhatsApp", "Status", "Ação"];
 
 export default async function ContasPage({
   searchParams,
@@ -98,7 +98,10 @@ export default async function ContasPage({
                   planKey={t.planKey}
                   status={t.status}
                   whatsappStatus={t.whatsappInstance?.status ?? "—"}
+                  conversationLimitOverride={t.conversationLimitOverride}
+                  perConversationCapOverride={t.perConversationCapOverride}
                   isAdminAccount={t.users.some((u) => u.role === "SUPERADMIN")}
+                  ownerUserId={t.users.find((u) => u.role === "OWNER")?.id ?? t.users[0]?.id}
                   createdAt={t.createdAt.toLocaleDateString("pt-BR")}
                   counts={{
                     users: t._count.users,

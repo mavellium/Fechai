@@ -58,6 +58,9 @@ export async function POST(req: Request) {
     leadId: lead.id,
     userMessage: parsed.data.message,
     agentId,
+    // Teste não é atendimento: o sandbox segue respondendo mesmo com a cota do
+    // mês esgotada, para o dono conseguir testar/diagnosticar o agente.
+    skipUsageCheck: true,
   });
 
   return NextResponse.json({ reply, toolsUsed, status });

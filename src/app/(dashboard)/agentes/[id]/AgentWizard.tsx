@@ -59,7 +59,7 @@ const STEPS = [
     label: "Comportamento",
     icon: Mic,
     title: "Como ele conversa",
-    help: "Dois comportamentos de conversa: ouvir mensagens de voz e encerrar quando a pessoa manda só um emoji. Os dois vêm ligados por padrão.",
+    help: "Dois comportamentos de conversa: ouvir mensagens de voz e encerrar quando a pessoa reage com um emoji ou manda só um emoji. Os dois vêm ligados por padrão.",
   },
   {
     key: "testar",

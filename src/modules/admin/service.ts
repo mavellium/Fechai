@@ -14,7 +14,7 @@ export async function listTenants(search?: string) {
     take: 200,
     include: {
       whatsappInstance: { select: { status: true } },
-      users: { select: { role: true } },
+      users: { select: { id: true, email: true, role: true } },
       _count: { select: { users: true, leads: true, conversations: true } },
     },
   });
@@ -37,6 +37,27 @@ export async function setTenantStatus(tenantId: string, status: "active" | "susp
 
 export async function adminSetPlan(tenantId: string, planKey: PlanKey) {
   await prisma.tenant.update({ where: { id: tenantId }, data: { planKey } });
+}
+
+/**
+ * Fixa limites fora do padrão do plano (override) ou restaura o padrão com
+ * `null`. O admin altera as duas cotas independentes: conversas/mês da conta e
+ * o teto de respostas da IA por conversa. É o "alterar o limite da conta".
+ */
+export async function adminSetUsageLimit(
+  tenantId: string,
+  limit: number | null,
+  perConversationCap?: number | null,
+) {
+  await prisma.tenant.update({
+    where: { id: tenantId },
+    data: {
+      conversationLimitOverride: limit,
+      ...(perConversationCap === undefined
+        ? {}
+        : { perConversationCapOverride: perConversationCap }),
+    },
+  });
 }
 
 /**

@@ -75,7 +75,9 @@ export async function POST(
       return NextResponse.json(
         {
           reply:
-            "Nosso atendimento automático está pausado no momento. Sua mensagem foi registrada e alguém responde em breve.",
+            status === "limit_reached"
+              ? "Nosso atendimento automático está indisponível no momento. Sua mensagem foi registrada e alguém responde em breve."
+              : "Nosso atendimento automático está pausado no momento. Sua mensagem foi registrada e alguém responde em breve.",
         },
         { headers: CORS_HEADERS },
       );

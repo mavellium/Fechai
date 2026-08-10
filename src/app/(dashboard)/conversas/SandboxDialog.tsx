@@ -1,6 +1,7 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { X, FlaskConical } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sandbox } from "./Sandbox";
@@ -14,13 +15,34 @@ import { Sandbox } from "./Sandbox";
  *
  * `<dialog>` nativo com `showModal()`, como o `ConfirmButton` e o `MobileNav`:
  * foco preso, `Esc`, `inert` no resto da página e devolução do foco ao gatilho.
+ *
+ * Cada abertura é um CHAT NOVO: o `key={openCount}` remonta o `Sandbox` (tela
+ * zerada) e o `DELETE /api/sandbox` arquiva a conversa de teste anterior no
+ * servidor (a antiga continua salva na aba "Testes" de /conversas) — sem isso
+ * o próximo teste herdava o histórico do anterior no contexto da IA.
  */
 export function SandboxDialog({ label = "Testar agente" }: { label?: string }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const [openCount, setOpenCount] = useState(0);
+  const router = useRouter();
+
+  function open() {
+    setOpenCount((n) => n + 1);
+    ref.current?.showModal();
+    // Dispara sem travar a abertura; o envio da primeira mensagem vem bem
+    // depois, então a arquivagem já terminou.
+    fetch("/api/sandbox", { method: "DELETE" }).catch(() => {});
+  }
+
+  // Ao fechar (X ou Esc), a lista de conversas re-renderiza no servidor: o teste
+  // recém-criado/arquivado aparece na aba "Testes" sem recarregar a tela.
+  function handleClose() {
+    router.refresh();
+  }
 
   return (
     <>
-      <Button type="button" variant="outline" size="sm" onClick={() => ref.current?.showModal()}>
+      <Button type="button" variant="outline" size="sm" onClick={open}>
         <FlaskConical size={14} aria-hidden />
         {label}
       </Button>
@@ -28,6 +50,7 @@ export function SandboxDialog({ label = "Testar agente" }: { label?: string }) {
       <dialog
         ref={ref}
         aria-labelledby="sandbox-title"
+        onClose={handleClose}
         // `m-auto`: o reset do Tailwind zera as margens automáticas que
         // centralizariam o dialog nativo.
         className="m-auto w-[calc(100%-2rem)] max-w-xl rounded-surface border border-white/15 bg-ink p-6 text-white backdrop:bg-ink/70"
@@ -52,7 +75,7 @@ export function SandboxDialog({ label = "Testar agente" }: { label?: string }) {
           </button>
         </div>
 
-        <Sandbox />
+        <Sandbox key={openCount} />
       </dialog>
     </>
   );

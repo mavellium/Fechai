@@ -19,7 +19,9 @@ export function PanelShell({
   footerLabel,
   userLabel,
   signOutAction,
+  usage,
   accent = "iris",
+  banner,
   children,
 }: {
   navItems: NavItem[];
@@ -30,7 +32,16 @@ export function PanelShell({
   footerLabel: string;
   userLabel: string;
   signOutAction: () => Promise<void>;
+  /** Uso de conversas do mês, mostrado na navegação (link para /configuracoes). */
+  usage?: {
+    used: number;
+    limit: number;
+    perConversationCap: number;
+    perConversationUsed: number;
+  } | null;
   accent?: "iris" | "signal";
+  /** Aviso global fixo acima do cabeçalho (ex.: personificação em andamento). */
+  banner?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
@@ -54,6 +65,7 @@ export function PanelShell({
         brandHref={brandHref}
         brandSubtitle={brandSubtitle}
         footerLabel={footerLabel}
+        usage={usage}
       />
 
       {/* `min-h-0` nos dois: sem isso, a altura mínima "auto" de um item flex
@@ -62,9 +74,10 @@ export function PanelShell({
           precisa rolar e as áreas internas com scroll próprio (ex.: o chat de
           /conversas) nunca ganham uma altura travada pra rolar dentro dela. */}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        {banner}
         <header className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3 md:px-6">
           <div className="flex min-w-0 items-center gap-2">
-            <MobileNav items={navItems} title="fechai" subtitle={brandSubtitle} />
+            <MobileNav items={navItems} title="fechai" subtitle={brandSubtitle} usage={usage} />
             <span className="truncate font-mono text-micro uppercase tracking-[0.15em] text-white/55">
               {userLabel}
             </span>

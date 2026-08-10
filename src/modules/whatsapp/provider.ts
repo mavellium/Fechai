@@ -18,6 +18,8 @@ export type IncomingMessage = {
   isGroup: boolean;
   /** A mensagem é de áudio (voz ou arquivo) — transcrita antes do turno. */
   hasAudio: boolean;
+  /** Reação a uma mensagem (emoji sobreposta) — não é uma mensagem do cliente. */
+  isReaction?: boolean;
   /** id da mensagem no WhatsApp (key.id) — necessário para baixar a mídia. */
   messageKeyId?: string;
 };
