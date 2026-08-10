@@ -21,7 +21,7 @@ export type AiModelInfo = {
   /** Custo por 1M tokens entrada/saída. */
   pricing: string;
   /** Exige chave do provedor nesta env var. */
-  envKey: "GEMINI_API_KEY" | "OPENAI_API_KEY" | "XAI_API_KEY";
+  envKey: "GEMINI_API_KEY" | "OPENAI_API_KEY" | "XAI_API_KEY" | "GROQ_API_KEY";
 };
 
 export const AI_MODELS: AiModelInfo[] = [
@@ -96,26 +96,40 @@ export const AI_MODELS: AiModelInfo[] = [
     pricing: "US$ 0,75 / US$ 2,50",
     envKey: "XAI_API_KEY",
   },
+  {
+    id: "llama-3.3-70b-versatile",
+    provider: "groq",
+    label: "Llama 3.3 70B Versatile",
+    tier: "paid",
+    description:
+      "Terceiro fallback da chain (Gemini → Grok → Groq). Requer GROQ_API_KEY.",
+    limits: "Rate limit por tier da conta Groq",
+    pricing: "US$ 0,59 / US$ 0,79",
+    envKey: "GROQ_API_KEY",
+  },
 ];
 
 /** Modelo usado quando não há nada salvo no banco. */
 export const DEFAULT_MODEL_ID = "gemini-2.5-flash";
 
-/** Fallback chain: lista de modelos para tentar caso o principal falhe. */
-export const GEMINI_FALLBACK_CHAIN = ["gemini-2.5-flash", "gemini-2.0-flash-lite", "gemini-2.5-pro"];
-
-/** Modelo xAI usado como fallback quando um Gemini do free tier falha. */
+/** Modelo xAI usado como 2º fallback quando um Gemini do free tier falha. */
 export const GROK_FALLBACK_MODEL_ID = "grok-4.3";
 
+/** Modelo Groq usado como 3º fallback quando Grok também falha. */
+export const GROQ_FALLBACK_MODEL_ID = "llama-3.3-70b-versatile";
+
 /**
- * Se o modelo atual é um Gemini do free tier e há chave xAI configurada,
- * devolve o modelo Grok de fallback; caso contrário `undefined`.
+ * Chain de fallback de um Gemini do free tier: Grok → Groq.
+ * Só entram na lista os que têm chave configurada neste ambiente. Vazio = o
+ * agente não tem fallback cross-provider (ex.: Gemini pago como modelo ativo).
  */
-export function getGrokFallbackModel(modelId: string): string | undefined {
+export function getGeminiFallbackChain(modelId: string): string[] {
   const model = findModel(modelId);
-  if (!model || model.provider !== "gemini" || model.tier !== "free") return undefined;
-  if (!process.env.XAI_API_KEY) return undefined;
-  return GROK_FALLBACK_MODEL_ID;
+  if (!model || model.provider !== "gemini" || model.tier !== "free") return [];
+  return [GROK_FALLBACK_MODEL_ID, GROQ_FALLBACK_MODEL_ID].filter((id) => {
+    const fb = findModel(id);
+    return Boolean(fb && process.env[fb.envKey]);
+  });
 }
 
 export function findModel(id: string): AiModelInfo | undefined {

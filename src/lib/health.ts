@@ -20,9 +20,9 @@ export function integrationChecks(): Check[] {
       ok: isEmbeddingConfigured(),
       detail: process.env.GEMINI_API_KEY
         ? "GEMINI_API_KEY"
-        : process.env.XAI_API_KEY
-          ? "XAI_API_KEY"
-          : "GEMINI_API_KEY/OPENAI_API_KEY/XAI_API_KEY",
+        : process.env.XAI_API_KEY || process.env.GROQ_API_KEY
+          ? "XAI_API_KEY/GROQ_API_KEY"
+          : "GEMINI_API_KEY/OPENAI_API_KEY/XAI_API_KEY/GROQ_API_KEY",
     },
     { label: "Stripe (pagamentos)", ok: isStripeConfigured(), detail: "STRIPE_SECRET_KEY" },
     { label: "Evolution API (WhatsApp)", ok: getWhatsAppProvider().isConfigured(), detail: "EVOLUTION_API_URL/KEY" },

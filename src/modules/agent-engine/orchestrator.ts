@@ -1,8 +1,8 @@
 import { prisma } from "@/lib/prisma";
 import { embedQuery } from "@/modules/knowledge-base/embeddings";
 import { searchSimilarChunks } from "@/modules/knowledge-base/repository";
-import { getLLMProvider, isAiError, createProvider, type LlmMessage, type LlmResult } from "@/modules/ai";
-import { GEMINI_FALLBACK_CHAIN, findModel, getGrokFallbackModel } from "@/modules/ai/catalog";
+import { getLLMProvider, isAiError, createProvider, type AiError, type LLMProvider, type LlmMessage, type LlmResult, type LlmToolSchema } from "@/modules/ai";
+import { findModel, getGeminiFallbackChain } from "@/modules/ai/catalog";
 import { parseScheduleConfig, scheduleSystemContext } from "@/modules/scheduling/config";
 import { getToolSchemas, runToolHandler, type ToolContext } from "./tools";
 import { appendMessage, getRecentMessages } from "./conversation";
@@ -107,52 +107,25 @@ export async function runAgentTurn(input: {
   const toolSchemas = getToolSchemas(actions.map((a) => a.key));
   const ctx: ToolContext = { tenantId, conversationId, leadId, agentId: agent?.id ?? null };
   let llm = await getLLMProvider();
+  // Chain de fallback resolvida UMA vez a partir do modelo ativo. Para um
+  // Gemini do free tier: Grok → Groq (só os com chave configurada).
+  const fallbackChain = getGeminiFallbackChain(llm.model);
   const toolsUsed: string[] = [];
 
   let finalReply = "";
   const attemptedModels = new Set<string>();
   try {
     for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
-      let result: LlmResult;
-      try {
-        result = await llm.complete(messages, toolSchemas);
-      } catch (err) {
-        if (isAiError(err) && llm.provider === "gemini") {
-          attemptedModels.add(llm.model);
-          // Gemini do free tier falhou (cota, rate limit ou erro): troca para
-          // Grok. Só acontece se XAI_API_KEY estiver configurada.
-          const grokFallbackId = getGrokFallbackModel(llm.model);
-          const grokModel = grokFallbackId ? findModel(grokFallbackId) : undefined;
-          if (grokModel) {
-            console.warn(
-              `[orchestrator] Fallback: Gemini ${llm.model} indisponível (${err.code}), usando Grok ${grokModel.id}`,
-            );
-            llm = createProvider(grokModel);
-            result = await llm.complete(messages, toolSchemas);
-          } else if (err.code === "provider") {
-            // Sem Grok configurado, mantém a chain antiga: outro modelo Gemini.
-            const nextModel = GEMINI_FALLBACK_CHAIN.find((m) => !attemptedModels.has(m));
-            if (nextModel) {
-              const model = findModel(nextModel);
-              if (model) {
-                console.warn(
-                  `[orchestrator] Fallback: modelo ${llm.model} indisponível, tentando ${nextModel}`,
-                );
-                llm = createProvider(model);
-                result = await llm.complete(messages, toolSchemas);
-              } else {
-                throw err;
-              }
-            } else {
-              throw err;
-            }
-          } else {
-            throw err;
-          }
-        } else {
-          throw err;
-        }
-      }
+      // Chama o LLM e, se falhar, caminha pela chain de fallback (ex.: Gemini
+      // → Grok → Groq). `attemptedModels` evita repetir quem já deu erro.
+      const { llm: nextLlm, result } = await completeWithFallback(
+        llm,
+        messages,
+        toolSchemas,
+        fallbackChain,
+        attemptedModels,
+      );
+      llm = nextLlm;
 
       if (result.toolCalls.length === 0) {
         finalReply = result.content;
@@ -190,6 +163,44 @@ export async function runAgentTurn(input: {
   if (!finalReply) finalReply = "Certo!";
   await appendMessage(conversationId, "assistant", finalReply, "agent");
   return { reply: finalReply, toolsUsed, status: agent ? "ok" : "no_agent" };
+}
+
+/**
+ * Chama `complete` no provider atual; se falhar com `AiError`, tenta os
+ * modelos da chain de fallback em ordem (ex.: Gemini → Grok → Groq). Devolve
+ * o provider que respondeu junto do resultado, para o turno seguir com ele.
+ * Se todos falharem, propaga o último erro.
+ */
+async function completeWithFallback(
+  llm: LLMProvider,
+  messages: LlmMessage[],
+  toolSchemas: LlmToolSchema[],
+  fallbackChain: string[],
+  attemptedModels: Set<string>,
+): Promise<{ llm: LLMProvider; result: LlmResult }> {
+  try {
+    return { llm, result: await llm.complete(messages, toolSchemas) };
+  } catch (err) {
+    if (!isAiError(err)) throw err;
+    let lastErr: AiError = err;
+    for (const fallbackId of fallbackChain) {
+      if (attemptedModels.has(fallbackId)) continue;
+      const model = findModel(fallbackId);
+      if (!model) continue;
+      attemptedModels.add(fallbackId);
+      const next = createProvider(model);
+      console.warn(
+        `[orchestrator] Fallback: ${llm.provider} ${llm.model} indisponível (${lastErr.code}), usando ${model.provider} ${model.id}`,
+      );
+      try {
+        return { llm: next, result: await next.complete(messages, toolSchemas) };
+      } catch (e) {
+        if (!isAiError(e)) throw e;
+        lastErr = e;
+      }
+    }
+    throw lastErr;
+  }
 }
 
 /**
