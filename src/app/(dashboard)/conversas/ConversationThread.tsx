@@ -3,7 +3,7 @@ import { ArrowLeft } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { ChatBubble } from "@/components/chat/ChatBubble";
 import { ChatLog } from "@/components/chat/ChatLog";
-import { dayLabel, phoneLabel, relativeTime, timeLabel } from "@/lib/format";
+import { dayLabel, phoneLabel, relativeTime, samePanelDay, timeLabel } from "@/lib/format";
 import { leadStatusLabel } from "./leadStatus";
 import { LeadPanel, type LeadPanelData } from "./LeadPanel";
 import { SendMessageForm } from "./SendMessageForm";
@@ -102,8 +102,7 @@ export function ConversationThread({
         {messages.map((m, i) => {
           const previous = messages[i - 1];
           const newDay =
-            !previous ||
-            previous.createdAt.toDateString() !== m.createdAt.toDateString();
+            !previous || !samePanelDay(previous.createdAt, m.createdAt);
           // Mensagens seguidas do mesmo lado ficam coladas: numa conversa de 40
           // mensagens, o espaçamento uniforme vira ruído e esconde os turnos.
           const sameSpeaker = previous?.role === m.role && !newDay;
