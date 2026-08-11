@@ -29,6 +29,8 @@ export async function GET(request: Request) {
     `${cell(label)};${value};${previous === undefined ? "" : previous}`,
   ];
 
+  const weekdayLabel = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+
   const lines = [
     "indicador;valor;periodo_anterior",
     ...rows("Conversas ativas", r.kpis.conversations, prev?.conversations),
@@ -39,6 +41,7 @@ export async function GET(request: Request) {
     ...rows("Taxa de resposta (%)", Math.round(r.kpis.responseRate * 100), prev ? Math.round(prev.responseRate * 100) : undefined),
     ...rows("Leads quentes (agora)", r.kpis.hotLeads, undefined),
     ...rows("Precisam de você (agora)", r.kpis.needsHuman, undefined),
+    ...rows("Resolução autônoma (%)", Math.round(r.autonomyRate.current * 100), r.autonomyRate.previous !== null ? Math.round(r.autonomyRate.previous * 100) : undefined),
     "",
     "bucket;recebidas;enviadas",
     ...r.flow.map((p) => `${cell(p.label)};${p.inbound};${p.outbound}`),
@@ -51,6 +54,22 @@ export async function GET(request: Request) {
     "",
     "status;leads_novos",
     ...r.byStatus.map((s) => `${cell(LEAD_STATUS[s.status]?.label ?? s.status)};${s.count}`),
+    "",
+    "degrau_do_funil;contagem",
+    ...r.funnel.map((f) => `${cell(f.name)};${f.count}`),
+    "",
+    "dia_da_semana;hora;mensagens",
+    ...r.peakHours.filter((c) => c.count > 0).map((c) => `${cell(weekdayLabel[c.weekday])};${c.hour}h;${c.count}`),
+    "",
+    "faixa_de_resposta;ia;humano",
+    ...r.firstResponseTime.map((b) => `${cell(b.label)};${b.ai};${b.human}`),
+    "",
+    "follow_up;valor",
+    `${cell("Enviados")};${r.followUpRecovery.sent}`,
+    `${cell("Com resposta depois")};${r.followUpRecovery.recovered}`,
+    "",
+    "bucket;concluidos;cancelados",
+    ...r.attendanceOutcome.map((p) => `${cell(p.label)};${p.done};${p.canceled}`),
   ];
 
   const csv = "\uFEFF" + lines.join("\r\n") + "\r\n";

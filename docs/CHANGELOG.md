@@ -2,6 +2,84 @@
 
 Uma linha por milestone concluído (mais recente no topo).
 
+## Novos gráficos em /relatorios + correções de fuso e paleta — 2026-08-11
+
+Onze gráficos novos (seis no Operacional: funil de conversão, horários de
+pico, tempo até a primeira resposta, resolução autônoma, recuperação por
+follow-up, comparecimento/no-show; cinco no Financeiro: retorno acumulado ×
+investido, retorno por agente, ponto de equilíbrio, retorno mês a mês, custo
+por lead), além de melhorar a apresentação dos seis gráficos existentes e
+corrigir dois defeitos achados durante o levantamento.
+
+- **Bug de fuso nos buckets de `/relatorios`.** `src/modules/reports/service.ts`
+  montava os buckets (`startOfDay`, `startOfMonth`, `bucketStart`) e os rótulos
+  (`MONTH_LABEL`/`DAY_LABEL`/`HOUR_LABEL`) com hora do **servidor**, não do
+  painel — o mesmo bug já corrigido em `src/lib/format.ts` no commit anterior,
+  que tinha ficado de fora deste arquivo. Em produção (UTC), "hoje" começava às
+  21h da véspera em Brasília. Fix: todo o bucketing agora passa por
+  `partsInZone`/`zonedTimeToUtc` (`src/modules/scheduling/time.ts`), incluindo
+  o cálculo de meses da visão Financeira (`computeFinancialSummary`), que também
+  usava `getFullYear()/getMonth()` cru.
+- **Paleta do donut reprovava CVD.** `DonutChart.tsx` usava
+  `["#4b3cf0", "#1fc8a3", "#f59e0b", "#ff6b4a", "#94a3b8"]` — validado com o
+  script do skill dataviz, `#ff6b4a` e `#f59e0b` (posições adjacentes) tinham
+  ΔE 12,7 em visão normal (piso é 15) e 7,2 em deuteranopia: duas fatias
+  vizinhas indistinguíveis para boa parte dos leitores. O neutro `#94a3b8`
+  também reprovava o piso de croma. Nova paleta centralizada em
+  `src/components/charts/palette.ts` — ordem `iris, warn, success, signal,
+  violeta` (variáveis CSS `--chart-1..5` em `globals.css`, claro e escuro com
+  passos próprios) — **ALL CHECKS PASS** nos dois modos.
+- **Mudança de definição: "lead fechado" não conta mais cancelado.** `closed`
+  (gráfico Operacional) e `closedLeads` (base do ROI Financeiro) contavam
+  qualquer agendamento **criado** no período, sem filtrar status — cancelado
+  entrava como fechado, divergindo do KPI "Agendamentos" ao lado, que já
+  filtrava `status in ["scheduled","done"]`. Alinhado aos dois. **Efeito
+  esperado:** o retorno e o ROI exibidos na visão Financeira caem para contas
+  com cancelamentos — não é regressão, é a métrica ficando consistente com o
+  que a mesma tela já mostrava ao lado.
+- **Apresentação dos gráficos existentes.** `SeriesChart`/`BarsChart` ganharam
+  eixo Y com 3 gridlines, rótulo do valor de pico de cada série, crosshair +
+  tooltip com paridade de teclado (`ChartTooltip`/`ChartHoverLayer`, novos em
+  `src/components/charts/`) — o `<title>` nativo (só hover, sem foco) deixou de
+  ser a única via para ler um valor. `BarsChart` também parou de desenhar uma
+  barra visível para bucket zerado (piso antigo de 4% de altura fazia zero
+  parecer dado).
+
+Arquivos novos: `src/components/charts/palette.ts`, `ChartTooltip.tsx`,
+`ChartAxisY.tsx`, `HeatmapChart.tsx`, `FunnelChart.tsx`, `MeterChart.tsx`,
+`DivergingBars.tsx`, `HorizontalBars.tsx`,
+`src/app/(dashboard)/relatorios/FinancialCharts.tsx`. Mapa completo e regras
+de cálculo exatas: `src/app/(dashboard)/relatorios/README.md`.
+
+## Fix: horários das conversas presos no fuso do servidor — 2026-08-11
+
+O painel mostravam horas/datas no fuso em que o servidor roda. Na máquina de
+dev (Brasília) tudo parecia certo, mas em produção o servidor roda em UTC e o
+histórico de `/conversas` amanhecia com 3h a menos ("14:32" virava "11:32").
+Causa: `Intl.DateTimeFormat("pt-BR", …)` **sem `timeZone`** em
+`src/lib/format.ts` usa o fuso do runtime — nada no código fixava Brasília.
+
+Fix: toda formatação de data/hora de UI do painel agora é calculada em
+`America/Sao_Paulo` de forma explícita, em duas frentes:
+
+- **`src/lib/format.ts`** — constante `PANEL_TIME_ZONE = "America/Sao_Paulo"`
+  aplicada a `dateLabel`, `dateTimeLabel`, `timeLabel`, `shortAge` e ao
+  fallback de data do `dayLabel`. Novos `startOfPanelDay` (meia-noite do dia no
+  fuso do painel, como instante UTC — mesmo truque de `Intl.formatToParts` do
+  `modules/scheduling/time.ts`) e `samePanelDay` (compara se duas datas caem no
+  mesmo dia de painel).
+- **`src/app/(dashboard)/conversas/ConversationThread.tsx`** — o separador de
+  dia do histórico usava `createdAt.toDateString()`, que também depende do fuso
+  do servidor; trocado por `samePanelDay`.
+
+Regra para o futuro: **nenhum `Intl.DateTimeFormat` de UI do painel deve
+formatar data/hora sem `timeZone`** — o painel é brasileiro e Brasília
+(`America/Sao_Paulo`) é o fuso do produto, mesmo que o servidor rode em UTC.
+Precedente original: a saudação de `/inicio` já fixava Brasília. Fora de escopo
+aqui: páginas de `/admin` ainda usam `toLocaleDateString` cru e não foram
+tocadas.
+
+
 ## Fix: agendamento em loop, base de conhecimento sem visualização, conversas de teste permanentes + resposta manual — 2026-08-08
 
 Três problemas relatados em uso real, sem relação entre si além de todos

@@ -347,6 +347,30 @@ model AiSetting {
   updatedBy String? // e-mail do superadmin que trocou
 }
 
+/// Uso de tokens por provedor de IA da PLATAFORMA, agregado por dia. Um
+/// contador incrementado a cada resposta bem-sucedida (não uma linha por
+/// chamada) — o que /admin/ia mostra como "% de uso" vem daqui, quando o
+/// provedor expõe um teto (só o Groq hoje, via headers de rate-limit lidos em
+/// tempo real — não guardados aqui). Sem histórico anterior à instrumentação:
+/// mensagens geradas antes disso não têm como ser atribuídas a um provedor
+/// (ver src/modules/ai/usage.ts para a estimativa retroativa aproximada).
+model AiUsageDaily {
+  id                String   @id @default(cuid())
+  /// "gemini" | "openai" | "grok" | "groq" — chave do provedor (não do modelo:
+  /// vários modelos do catálogo dividem a mesma chave de API/provedor).
+  provider          String
+  /// Meia-noite UTC do dia — chave de agrupamento, não instante de evento.
+  day               DateTime
+  promptTokens      Int      @default(0)
+  completionTokens  Int      @default(0)
+  totalTokens       Int      @default(0)
+  /// Quantas chamadas bem-sucedidas compõem este total — não é o mesmo que
+  /// turnos do agente (uma iteração de tool-calling pode chamar o LLM 2+ vezes).
+  requests          Int      @default(0)
+
+  @@unique([provider, day])
+}
+
 /// Quanto um lead fechado vale para o dono — definido manualmente na visão
 /// Financeira de /relatorios. Cada alteração cria uma entrada nova com vigência
 /// (`startsAt`): períodos já iniciados usam o valor em vigor no início deles,

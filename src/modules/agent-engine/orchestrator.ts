@@ -4,6 +4,7 @@ import { embedQuery } from "@/modules/knowledge-base/embeddings";
 import { searchSimilarChunks } from "@/modules/knowledge-base/repository";
 import { getLLMProvider, isAiError, createProvider, type AiError, type LLMProvider, type LlmMessage, type LlmResult, type LlmToolSchema } from "@/modules/ai";
 import { findModel, getGeminiFallbackChain } from "@/modules/ai/catalog";
+import { recordUsage } from "@/modules/ai/usage";
 import { parseScheduleConfig, scheduleSystemContext } from "@/modules/scheduling/config";
 import { getToolSchemas, runToolHandler, type ToolContext } from "./tools";
 import { appendMessage, getRecentMessages } from "./conversation";
@@ -181,8 +182,11 @@ export async function runAgentTurn(input: {
       }
 
       if (i === MAX_TOOL_ITERATIONS - 1) {
-        // Última iteração: força uma resposta em texto sem mais tools.
+        // Última iteração: força uma resposta em texto sem mais tools. Fora
+        // de `completeWithFallback` (não faz sentido trocar de provider só
+        // pra fechar a resposta), então grava o uso aqui direto.
         const closing = await llm.complete(messages, []);
+        recordUsage(llm.provider, closing.usage).catch(() => {});
         finalReply = closing.content;
       }
     }
@@ -231,7 +235,9 @@ async function completeWithFallback(
   attemptedModels: Set<string>,
 ): Promise<{ llm: LLMProvider; result: LlmResult }> {
   try {
-    return { llm, result: await llm.complete(messages, toolSchemas) };
+    const result = await llm.complete(messages, toolSchemas);
+    recordUsage(llm.provider, result.usage).catch(() => {});
+    return { llm, result };
   } catch (err) {
     if (!isAiError(err)) throw err;
     let lastErr: AiError = err;
@@ -245,7 +251,12 @@ async function completeWithFallback(
         `[orchestrator] Fallback: ${llm.provider} ${llm.model} indisponível (${lastErr.code}), usando ${model.provider} ${model.id}`,
       );
       try {
-        return { llm: next, result: await next.complete(messages, toolSchemas) };
+        // Registrado no provider que RESPONDEU (`next`), não no que falhou
+        // (`llm`) — é exatamente o ponto que resolve a atribuição de uso que o
+        // histórico anterior nunca teve: aqui sabemos com certeza quem gerou.
+        const result = await next.complete(messages, toolSchemas);
+        recordUsage(next.provider, result.usage).catch(() => {});
+        return { llm: next, result };
       } catch (e) {
         if (!isAiError(e)) throw e;
         lastErr = e;

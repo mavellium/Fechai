@@ -203,6 +203,55 @@ export default async function RelatoriosPage({
               </Card>
             </div>
           </FadeIn>
+
+          <FadeIn>
+            <div className="grid gap-6 lg:grid-cols-3">
+              <ChartPanel
+                variant="funnel"
+                title="Funil de conversão"
+                hint="De conversa a agendamento — quem entrou no período."
+                funnel={report.funnel}
+              />
+              <ChartPanel
+                variant="autonomyRate"
+                title="Resolução autônoma"
+                hint="Fração dos contatos atendidos que a IA resolveu sem um humano entrar."
+                autonomyRate={report.autonomyRate}
+              />
+              <ChartPanel
+                variant="followUpRecovery"
+                title="Recuperação por follow-up"
+                hint="Follow-ups automáticos enviados no período e quantos trouxeram o lead de volta."
+                followUpRecovery={report.followUpRecovery}
+              />
+            </div>
+          </FadeIn>
+
+          <FadeIn>
+            <div className="grid gap-6 lg:grid-cols-2">
+              <ChartPanel
+                variant="peakHours"
+                title="Horários de pico"
+                hint="Quando os leads mandam mensagem — dia da semana × hora, fuso de Brasília."
+                peakHours={report.peakHours}
+              />
+              <ChartPanel
+                variant="firstResponseTime"
+                title="Tempo até a primeira resposta"
+                hint="Quanto tempo passa entre a mensagem do lead e a primeira resposta."
+                firstResponseTime={report.firstResponseTime}
+              />
+            </div>
+          </FadeIn>
+
+          <FadeIn>
+            <ChartPanel
+              variant="attendanceOutcome"
+              title="Comparecimento e no-show"
+              hint="Agendamentos do período, pelo status em que terminaram."
+              attendanceOutcome={report.attendanceOutcome}
+            />
+          </FadeIn>
         </>
       ) : view === "financeiro" && financial ? (
         <FadeIn>

@@ -69,6 +69,11 @@ export class GeminiProvider implements LLMProvider {
 
     const json = (await res.json()) as {
       candidates?: { content?: { parts?: GeminiPart[] } }[];
+      usageMetadata?: {
+        promptTokenCount?: number;
+        candidatesTokenCount?: number;
+        totalTokenCount?: number;
+      };
     };
     const parts = json.candidates?.[0]?.content?.parts ?? [];
 
@@ -90,7 +95,24 @@ export class GeminiProvider implements LLMProvider {
         arguments: p.functionCall.args ?? {},
       }));
 
-    return { content: text, toolCalls };
+    // Extração isolada, mesmo princípio do OpenAICompatProvider: a resposta em
+    // texto já foi montada acima e não depende disso — `usageMetadata` ausente
+    // ou malformado só deixa o registro de consumo sem esse dado.
+    let usage: LlmResult["usage"];
+    try {
+      const u = json.usageMetadata;
+      if (u && u.promptTokenCount !== undefined && u.candidatesTokenCount !== undefined) {
+        usage = {
+          promptTokens: u.promptTokenCount,
+          completionTokens: u.candidatesTokenCount,
+          totalTokens: u.totalTokenCount ?? u.promptTokenCount + u.candidatesTokenCount,
+        };
+      }
+    } catch {
+      usage = undefined;
+    }
+
+    return { content: text, toolCalls, usage };
   }
 
   /** Traduz o erro HTTP do Gemini para o vocabulário da nossa camada. */

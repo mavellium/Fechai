@@ -1,6 +1,14 @@
 import { prisma } from "@/lib/prisma";
 import { dateLabel } from "@/lib/format";
 import { planOf } from "@/modules/billing/plans";
+import { partsInZone, zonedTimeToUtc } from "@/modules/scheduling/time";
+
+/**
+ * Fuso do painel para todo agrupamento por dia/hora/mês de /relatorios. Sem
+ * isto os buckets usavam hora do servidor — em produção (UTC) "hoje" começava
+ * às 21h da véspera em Brasília. Mesmo fuso de `src/lib/format.ts`.
+ */
+const PANEL_TIME_ZONE = "America/Sao_Paulo";
 
 export type TenantReport = {
   conversations: number;
@@ -60,8 +68,10 @@ export type HomeSummary = {
 
 const DAY_MS = 86_400_000;
 
+/** Meia-noite (fuso do painel) do dia que contém `d`, como instante UTC. */
 function startOfDay(d: Date) {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const p = partsInZone(d, PANEL_TIME_ZONE);
+  return zonedTimeToUtc(p.year, p.month, p.day, 0, 0, PANEL_TIME_ZONE);
 }
 
 /**
@@ -176,6 +186,18 @@ export type PeriodKpis = {
   } | null;
 };
 
+/** Um degrau do funil de conversão — nome + contagem, na ordem em que aparecem. */
+export type FunnelStep = { name: string; count: number };
+
+/** Uma célula do heatmap de horário de pico: dia da semana (0=dom) × hora (0-23). */
+export type HeatmapCell = { weekday: number; hour: number; count: number };
+
+/** Uma faixa de tempo até a primeira resposta, com a contagem em cada uma. */
+export type ResponseTimeBucket = { label: string; ai: number; human: number };
+
+/** Uma coluna do gráfico de comparecimento: concluídos × cancelados. */
+export type AttendanceOutcomePoint = { key: string; label: string; done: number; canceled: number };
+
 export type PeriodReport = {
   kpis: PeriodKpis;
   flow: FlowPoint[];
@@ -184,29 +206,48 @@ export type PeriodReport = {
   byStatus: { status: string; count: number }[];
   /** Contatos atendidos só pela IA × contatos em que um humano respondeu. */
   attendance: AiHumanPoint[];
-  /** Agendamentos fechados pela IA (`source: agent`) × manuais (`source: manual`). */
+  /** Agendamentos fechados pela IA (`source: agent`) × manuais (`source: manual`), só scheduled/done. */
   closed: AiHumanPoint[];
+  /** Conversas → leads engajados → leads quentes → agendados, todos CRIADOS no período. */
+  funnel: FunnelStep[];
+  /** Mensagens recebidas do lead, por dia da semana × hora (fuso do painel). */
+  peakHours: HeatmapCell[];
+  /** Tempo entre a mensagem do lead e a primeira resposta seguinte, por faixa. */
+  firstResponseTime: ResponseTimeBucket[];
+  /** Resolução autônoma: fração de contatos que a IA atendeu sozinha no período. */
+  autonomyRate: { current: number; previous: number | null };
+  /** Follow-ups enviados no período e quantos tiveram resposta do lead depois. */
+  followUpRecovery: { sent: number; recovered: number };
+  /** Agendamentos concluídos × cancelados, por bucket (base: `createdAt`). */
+  attendanceOutcome: AttendanceOutcomePoint[];
 };
 
 const HOUR_MS = 3_600_000;
-const MONTH_LABEL = new Intl.DateTimeFormat("pt-BR", { month: "short", year: "2-digit" });
-const DAY_LABEL = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit" });
-const HOUR_LABEL = new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", hourCycle: "h23" });
+const MONTH_LABEL = new Intl.DateTimeFormat("pt-BR", { month: "short", year: "2-digit", timeZone: PANEL_TIME_ZONE });
+const DAY_LABEL = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", timeZone: PANEL_TIME_ZONE });
+const HOUR_LABEL = new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", hourCycle: "h23", timeZone: PANEL_TIME_ZONE });
 
+/** Início (dia 1, meia-noite) do mês do painel que contém `d`, como instante UTC. */
 function startOfMonth(d: Date) {
-  return new Date(d.getFullYear(), d.getMonth(), 1);
+  const p = partsInZone(d, PANEL_TIME_ZONE);
+  return zonedTimeToUtc(p.year, p.month, 1, 0, 0, PANEL_TIME_ZONE);
 }
 
 function addMonths(d: Date, n: number) {
-  return new Date(d.getFullYear(), d.getMonth() + n, 1);
+  const p = partsInZone(d, PANEL_TIME_ZONE);
+  const total = p.month - 1 + n;
+  const year = p.year + Math.floor(total / 12);
+  const month = (((total % 12) + 12) % 12) + 1;
+  return zonedTimeToUtc(year, month, 1, 0, 0, PANEL_TIME_ZONE);
 }
 
-/** "YYYY-MM-DD" da URL → Date local, ou null se malformado. */
+/** "YYYY-MM-DD" da URL → meia-noite desse dia no fuso do painel, ou null se malformado. */
 function parseDate(s: string): Date | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
   const [y, m, d] = s.split("-").map(Number);
-  const date = new Date(y, m - 1, d);
-  if (date.getFullYear() !== y || date.getMonth() !== m - 1 || date.getDate() !== d) return null;
+  const date = zonedTimeToUtc(y, m, d, 0, 0, PANEL_TIME_ZONE);
+  const p = partsInZone(date, PANEL_TIME_ZONE);
+  if (p.year !== y || p.month !== m || p.day !== d) return null;
   return date;
 }
 
@@ -231,7 +272,9 @@ export function resolveRange(period: PeriodKey, de?: string, ate?: string): Repo
   const customTo = ate ? parseDate(ate) : null;
   if (customFrom) {
     from = customFrom;
-    to = customTo ? new Date(customTo.getFullYear(), customTo.getMonth(), customTo.getDate(), 23, 59, 59, 999) : now;
+    // customTo já é meia-noite (fuso do painel) do dia final; some quase um dia
+    // inteiro para cobrir até 23:59:59.999 desse dia, sem repetir o cálculo de fuso.
+    to = customTo ? new Date(customTo.getTime() + DAY_MS - 1) : now;
     if (to > now) to = now;
     if (from > now) from = startOfDay(now);
     if (to < from) to = from;
@@ -249,9 +292,11 @@ export function resolveRange(period: PeriodKey, de?: string, ate?: string): Repo
       case "mes":
         from = startOfMonth(now);
         break;
-      case "ano":
-        from = new Date(now.getFullYear(), 0, 1);
+      case "ano": {
+        const p = partsInZone(now, PANEL_TIME_ZONE);
+        from = zonedTimeToUtc(p.year, 1, 1, 0, 0, PANEL_TIME_ZONE);
         break;
+      }
       case "tudo":
         from = null;
         break;
@@ -281,7 +326,10 @@ export function resolveRange(period: PeriodKey, de?: string, ate?: string): Repo
 }
 
 function bucketStart(ts: Date, unit: BucketUnit) {
-  if (unit === "hora") return new Date(ts.getFullYear(), ts.getMonth(), ts.getDate(), ts.getHours());
+  if (unit === "hora") {
+    const p = partsInZone(ts, PANEL_TIME_ZONE);
+    return zonedTimeToUtc(p.year, p.month, p.day, p.hour, 0, PANEL_TIME_ZONE);
+  }
   if (unit === "dia") return startOfDay(ts);
   return startOfMonth(ts);
 }
@@ -321,7 +369,26 @@ export async function computePeriodReport(tenantId: string, range: ReportRange):
   const toExcl = new Date(to.getTime() + 1);
   const prevLt = prevTo ? new Date(prevTo.getTime() + 1) : undefined;
 
-  const [conversations, leads, scheduled, messages, leadRows, apptRows, engagedGroups, agentGroups, statusGroups, hotLeads, needsHuman, assistantMsgs, closedAppts] = await Promise.all([
+  const [
+    conversations,
+    leads,
+    scheduled,
+    messages,
+    leadRows,
+    apptRows,
+    engagedGroups,
+    agentGroups,
+    statusGroups,
+    hotLeads,
+    needsHuman,
+    assistantMsgs,
+    closedAppts,
+    canceledAppts,
+    doneAppts,
+    hotLeadsInPeriod,
+    orderedMsgs,
+    followUpConvos,
+  ] = await Promise.all([
     prisma.conversation.count({
       where: { tenantId, isTest: false, updatedAt: { gte: from ?? undefined, lt: toExcl } },
     }),
@@ -386,10 +453,58 @@ export async function computePeriodReport(tenantId: string, range: ReportRange):
       },
       select: { sentBy: true, createdAt: true, conversationId: true },
     }),
-    // Todos os agendamentos criados no período, com origem (IA vs manual).
+    // Agendamentos EFETIVADOS criados no período, com origem (IA vs manual).
+    // Alinhado ao KPI "Agendamentos" (só scheduled/done) — antes contava
+    // cancelado como "lead fechado", divergindo do número que a mesma tela
+    // mostra ao lado. Mudança de definição registrada no CHANGELOG.
     prisma.appointment.findMany({
-      where: { tenantId, createdAt: { gte: from ?? undefined, lt: toExcl } },
+      where: {
+        tenantId,
+        createdAt: { gte: from ?? undefined, lt: toExcl },
+        status: { in: ["scheduled", "done"] },
+      },
       select: { source: true, createdAt: true },
+    }),
+    // Agendamentos cancelados no período — base do gráfico de comparecimento.
+    prisma.appointment.findMany({
+      where: {
+        tenantId,
+        createdAt: { gte: from ?? undefined, lt: toExcl },
+        status: "canceled",
+      },
+      select: { createdAt: true },
+    }),
+    // Agendamentos concluídos no período — a outra metade do comparecimento.
+    prisma.appointment.findMany({
+      where: {
+        tenantId,
+        createdAt: { gte: from ?? undefined, lt: toExcl },
+        status: "done",
+      },
+      select: { createdAt: true },
+    }),
+    // Funil: leads com 2+ mensagens do lead (engajados) já vem de engagedGroups;
+    // aqui só o total de leads quentes/agendados CRIADOS no período (o funil é
+    // sobre o que entrou nesta janela, não o estado atual da conta inteira).
+    prisma.lead.count({
+      where: { tenantId, isTest: false, createdAt: { gte: from ?? undefined, lt: toExcl }, status: "hot" },
+    }),
+    // Primeira mensagem do lead e primeira resposta de cada conversa tocada no
+    // período — base do "tempo até a primeira resposta". Ordenado para achar o
+    // par (1ª pergunta, 1ª resposta seguinte) em memória, sem N+1 por conversa.
+    prisma.message.findMany({
+      where: {
+        role: { in: ["user", "assistant"] },
+        createdAt: { gte: from ?? undefined, lt: toExcl },
+        conversation: { tenantId, isTest: false },
+      },
+      select: { conversationId: true, role: true, sentBy: true, createdAt: true },
+      orderBy: { createdAt: "asc" },
+    }),
+    // Conversas com follow-up enviado no período — base da "recuperação por follow-up".
+    prisma.conversation.findMany({
+      where: { tenantId, isTest: false, followUpSentAt: { gte: from ?? undefined, lt: toExcl } },
+      select: { id: true, followUpSentAt: true },
     }),
   ]);
 
@@ -434,6 +549,28 @@ export async function computePeriodReport(tenantId: string, range: ReportRange):
       outbound: counts.assistant ?? 0,
       responseRate: prevConversations > 0 ? prevEngaged.filter((g) => g._count._all >= 2).length / prevConversations : 0,
     };
+  }
+
+  // Resolução autônoma do período anterior — só o delta do meter, não precisa
+  // do bucket por bucket que `attendance` calcula (o mesmo set exclusivo por
+  // conversa, mas somado na janela inteira de uma vez).
+  let previousAutonomy: number | null = null;
+  if (prevFrom && prevLt) {
+    const prevAssistantMsgs = await prisma.message.findMany({
+      where: {
+        role: "assistant",
+        sentBy: { in: ["agent", "human"] },
+        createdAt: { gte: prevFrom, lt: prevLt },
+        conversation: { tenantId, isTest: false },
+      },
+      select: { sentBy: true, conversationId: true },
+    });
+    const aiSet = new Set<string>();
+    const humanSet = new Set<string>();
+    for (const m of prevAssistantMsgs) (m.sentBy === "agent" ? aiSet : humanSet).add(m.conversationId);
+    const aiOnly = Math.max(0, aiSet.size - humanSet.size);
+    const totalPrev = aiOnly + humanSet.size;
+    previousAutonomy = totalPrev > 0 ? aiOnly / totalPrev : null;
   }
 
   // ── agregação por bucket ───────────────────────────────────────────────────
@@ -493,6 +630,95 @@ export async function computePeriodReport(tenantId: string, range: ReportRange):
   }
   const closed: AiHumanPoint[] = buckets.map((b) => ({ ...b, ...closedMap.get(b.key)! }));
 
+  // ── comparecimento: concluído × cancelado, por bucket ──────────────────────
+  const outcomeMap = new Map(buckets.map((b) => [b.key, { done: 0, canceled: 0 }]));
+  for (const a of doneAppts) {
+    const slot = outcomeMap.get(bucketStart(a.createdAt, bucket).toISOString());
+    if (slot) slot.done++;
+  }
+  for (const a of canceledAppts) {
+    const slot = outcomeMap.get(bucketStart(a.createdAt, bucket).toISOString());
+    if (slot) slot.canceled++;
+  }
+  const attendanceOutcome: AttendanceOutcomePoint[] = buckets.map((b) => ({ ...b, ...outcomeMap.get(b.key)! }));
+
+  // ── funil de conversão (estado ATUAL de quem entrou no período — não há
+  // histórico de transição de status, então "quente"/"agendado" são o status
+  // de hoje dos leads criados na janela, não uma velocidade de funil) ────────
+  const leadsCreated = leadRows.length;
+  const engagedInPeriod = engagedGroups.filter((g) => g._count._all >= 2).length;
+  const scheduledInPeriod = results.reduce((s, p) => s + p.appts, 0);
+  const funnel: FunnelStep[] = [
+    { name: "Conversas", count: conversations },
+    { name: "Leads engajados", count: Math.min(engagedInPeriod, leadsCreated) },
+    { name: "Leads quentes", count: hotLeadsInPeriod },
+    { name: "Agendados", count: scheduledInPeriod },
+  ];
+
+  // ── horários de pico: mensagens do lead por dia da semana × hora ──────────
+  const heatCounts = new Map<string, number>();
+  for (const m of messages) {
+    if (m.role !== "user") continue;
+    const p = partsInZone(m.createdAt, PANEL_TIME_ZONE);
+    const key = `${p.weekday}-${p.hour}`;
+    heatCounts.set(key, (heatCounts.get(key) ?? 0) + 1);
+  }
+  const peakHours: HeatmapCell[] = [];
+  for (let weekday = 0; weekday < 7; weekday++) {
+    for (let hour = 0; hour < 24; hour++) {
+      peakHours.push({ weekday, hour, count: heatCounts.get(`${weekday}-${hour}`) ?? 0 });
+    }
+  }
+
+  // ── tempo até a primeira resposta (por conversa, o par 1ª pergunta → 1ª
+  // resposta seguinte; `orderedMsgs` já chega ordenado por createdAt) ───────
+  const RESPONSE_BUCKETS = [
+    { label: "<1min", maxMs: 60_000 },
+    { label: "1-5min", maxMs: 5 * 60_000 },
+    { label: "5-30min", maxMs: 30 * 60_000 },
+    { label: "30min-2h", maxMs: 2 * HOUR_MS },
+    { label: "+2h", maxMs: Infinity },
+  ];
+  const firstResponseCounts = RESPONSE_BUCKETS.map((b) => ({ label: b.label, ai: 0, human: 0 }));
+  const pendingQuestion = new Map<string, Date>();
+  const answeredConversations = new Set<string>();
+  for (const m of orderedMsgs) {
+    if (m.role === "user") {
+      if (!pendingQuestion.has(m.conversationId) && !answeredConversations.has(m.conversationId)) {
+        pendingQuestion.set(m.conversationId, m.createdAt);
+      }
+      continue;
+    }
+    const askedAt = pendingQuestion.get(m.conversationId);
+    if (!askedAt || answeredConversations.has(m.conversationId)) continue;
+    const elapsedMs = m.createdAt.getTime() - askedAt.getTime();
+    const idx = RESPONSE_BUCKETS.findIndex((b) => elapsedMs <= b.maxMs);
+    const slot = firstResponseCounts[idx === -1 ? RESPONSE_BUCKETS.length - 1 : idx];
+    if (m.sentBy === "human") slot.human++;
+    else slot.ai++;
+    answeredConversations.add(m.conversationId);
+    pendingQuestion.delete(m.conversationId);
+  }
+  const firstResponseTime: ResponseTimeBucket[] = firstResponseCounts;
+
+  // ── resolução autônoma: fração dos contatos atendidos que a IA resolveu
+  // sozinha no período (mesma base de `attendance`, resumida num número) ────
+  const totalAi = attendance.reduce((s, p) => s + p.ai, 0);
+  const totalHuman = attendance.reduce((s, p) => s + p.human, 0);
+  const currentAutonomy = totalAi + totalHuman > 0 ? totalAi / (totalAi + totalHuman) : 0;
+
+  // ── recuperação por follow-up: dos enviados no período, quantos tiveram
+  // resposta do lead depois do envio (mesma janela — consistente com o resto
+  // do relatório, que não olha além do período selecionado) ─────────────────
+  const followUpAt = new Map(followUpConvos.map((c) => [c.id, c.followUpSentAt!]));
+  const recoveredConvos = new Set<string>();
+  for (const m of orderedMsgs) {
+    if (m.role !== "user") continue;
+    const sentAt = followUpAt.get(m.conversationId);
+    if (sentAt && m.createdAt > sentAt) recoveredConvos.add(m.conversationId);
+  }
+  const followUpRecovery = { sent: followUpConvos.length, recovered: recoveredConvos.size };
+
   // ── distribuições ──────────────────────────────────────────────────────────
   const agentIds = agentGroups.map((g) => g.agentId).filter(Boolean) as string[];
   const agents = agentIds.length
@@ -531,13 +757,28 @@ export async function computePeriodReport(tenantId: string, range: ReportRange):
     byStatus,
     attendance,
     closed,
+    funnel,
+    peakHours,
+    firstResponseTime,
+    autonomyRate: { current: currentAutonomy, previous: previousAutonomy },
+    followUpRecovery,
+    attendanceOutcome,
   };
 }
 
 // ── Visão Financeira (retorno do investimento no projeto) ────────────────────
 
+/** Um ponto do retorno acumulado × investido acumulado, um eixo só (R$). */
+export type CumulativeReturnPoint = { key: string; label: string; returnCents: number; investedCents: number };
+
+/** Retorno estimado por agente — barras horizontais. */
+export type AgentReturnPoint = { name: string; returnCents: number; closedLeads: number };
+
+/** Retorno − investido de um mês fechado (para o gráfico divergente). */
+export type MonthlyReturnPoint = { key: string; label: string; netCents: number };
+
 export type FinancialSummary = {
-  /** Agendamentos criados no período — mesma base do gráfico "Leads fechados". */
+  /** Agendamentos EFETIVADOS (scheduled/done) criados no período — alinhado ao KPI "Agendamentos". */
   closedLeads: number;
   /** Meses de plano cobertos pela janela (mínimo 1; "hoje" conta 1). */
   months: number;
@@ -557,6 +798,16 @@ export type FinancialSummary = {
   returnCents: number | null;
   /** `(retorno − investido) / investido`; `null` se investido = 0 ou sem valor. */
   roiPercent: number | null;
+  /** Retorno acumulado × investido acumulado por bucket. `null` sem valor por lead definido. */
+  cumulative: CumulativeReturnPoint[] | null;
+  /** Retorno estimado por agente, maiores primeiro. `null` sem valor por lead definido. */
+  byAgent: AgentReturnPoint[] | null;
+  /** Leads fechados necessários para cobrir o investido. `null` sem valor por lead definido. */
+  breakEvenLeads: number | null;
+  /** Retorno − investido, um ponto por mês de calendário tocado pela janela. `null` sem valor por lead. */
+  monthly: MonthlyReturnPoint[] | null;
+  /** `investedCents / closedLeads`. `null` sem fechamento no período. */
+  costPerLeadCents: number | null;
 };
 
 /**
@@ -572,10 +823,15 @@ export async function computeFinancialSummary(
 ): Promise<FinancialSummary> {
   const toExcl = new Date(range.to.getTime() + 1);
 
-  const [closedLeads, tenant, values] = await Promise.all([
-    // Mesmo corte do gráfico "closed": agendamentos criados no período.
-    prisma.appointment.count({
-      where: { tenantId, createdAt: { gte: range.from ?? undefined, lt: toExcl } },
+  const [closedAppts, tenant, values] = await Promise.all([
+    // Mesmo corte do gráfico "closed" do Operacional: só efetivados (scheduled/done).
+    prisma.appointment.findMany({
+      where: {
+        tenantId,
+        createdAt: { gte: range.from ?? undefined, lt: toExcl },
+        status: { in: ["scheduled", "done"] },
+      },
+      select: { createdAt: true, agentId: true },
     }),
     prisma.tenant.findUnique({
       where: { id: tenantId },
@@ -587,16 +843,17 @@ export async function computeFinancialSummary(
       select: { valueCents: true, startsAt: true },
     }),
   ]);
+  const closedLeads = closedAppts.length;
 
   const plan = planOf(tenant?.planKey);
 
   // "tudo" não tem `from`: ancora os meses na criação da conta.
   const anchor = range.from ?? tenant?.createdAt ?? range.to;
+  const anchorParts = partsInZone(anchor, PANEL_TIME_ZONE);
+  const toParts = partsInZone(range.to, PANEL_TIME_ZONE);
   const months = Math.max(
     1,
-    (range.to.getFullYear() - anchor.getFullYear()) * 12 +
-      (range.to.getMonth() - anchor.getMonth()) +
-      1,
+    (toParts.year - anchorParts.year) * 12 + (toParts.month - anchorParts.month) + 1,
   );
   const investedCents = plan.priceCents * months;
 
@@ -625,6 +882,76 @@ export async function computeFinancialSummary(
       ? Math.round(((returnCents - investedCents) / investedCents) * 100)
       : null;
 
+  // Sem valor por lead definido, nenhuma das séries abaixo é uma estimativa —
+  // é um zero inventado. A UI mostra o estado vazio (chamada para definir o
+  // valor), não um gráfico zerado (regra do plano, §"Caso sem valor definido").
+  let cumulative: CumulativeReturnPoint[] | null = null;
+  let byAgent: AgentReturnPoint[] | null = null;
+  let breakEvenLeads: number | null = null;
+  let monthly: MonthlyReturnPoint[] | null = null;
+
+  if (effective) {
+    const valueCents = effective.valueCents;
+
+    // ── retorno acumulado × investido acumulado, por bucket do período ──────
+    const cumFrom =
+      range.from ?? closedAppts.reduce<Date | null>((a, ap) => (a && a <= ap.createdAt ? a : ap.createdAt), null) ?? range.to;
+    const cumBuckets = listBuckets(cumFrom, range.to, range.bucket);
+    const perBucketCount = new Map(cumBuckets.map((b) => [b.key, 0]));
+    for (const ap of closedAppts) {
+      const key = bucketStart(ap.createdAt, range.bucket).toISOString();
+      if (perBucketCount.has(key)) perBucketCount.set(key, (perBucketCount.get(key) ?? 0) + 1);
+    }
+    // Investido distribuído em partes iguais pelos buckets do período — o
+    // preço do plano é mensal, não por bucket, então divide o total de meses
+    // proporcionalmente ao número de buckets (aproximação declarada "estimado").
+    const investedPerBucket = cumBuckets.length > 0 ? investedCents / cumBuckets.length : 0;
+    let runningReturn = 0;
+    let runningInvested = 0;
+    cumulative = cumBuckets.map((b) => {
+      runningReturn += (perBucketCount.get(b.key) ?? 0) * valueCents;
+      runningInvested += investedPerBucket;
+      return { ...b, returnCents: runningReturn, investedCents: Math.round(runningInvested) };
+    });
+
+    // ── retorno por agente ────────────────────────────────────────────────
+    const countByAgent = new Map<string | null, number>();
+    for (const ap of closedAppts) {
+      countByAgent.set(ap.agentId, (countByAgent.get(ap.agentId) ?? 0) + 1);
+    }
+    const agentIds = [...countByAgent.keys()].filter((id): id is string => id !== null);
+    const agentRows = agentIds.length
+      ? await prisma.agent.findMany({ where: { id: { in: agentIds } }, select: { id: true, name: true } })
+      : [];
+    const agentNameById = new Map(agentRows.map((a) => [a.id, a.name]));
+    byAgent = [...countByAgent.entries()]
+      .map(([agentId, count]) => ({
+        name: agentId ? (agentNameById.get(agentId) ?? "Agente removido") : "Sem agente",
+        returnCents: count * valueCents,
+        closedLeads: count,
+      }))
+      .sort((a, b) => b.returnCents - a.returnCents);
+
+    // ── ponto de equilíbrio ──────────────────────────────────────────────
+    breakEvenLeads = valueCents > 0 ? Math.ceil(investedCents / valueCents) : null;
+
+    // ── retorno mês a mês (lucro/prejuízo) ──────────────────────────────
+    const monthFrom = range.from ?? tenant?.createdAt ?? range.to;
+    const monthBuckets = listBuckets(monthFrom, range.to, "mes");
+    const perMonthCount = new Map(monthBuckets.map((b) => [b.key, 0]));
+    for (const ap of closedAppts) {
+      const key = startOfMonth(ap.createdAt).toISOString();
+      if (perMonthCount.has(key)) perMonthCount.set(key, (perMonthCount.get(key) ?? 0) + 1);
+    }
+    const investedPerMonth = monthBuckets.length > 0 ? investedCents / monthBuckets.length : 0;
+    monthly = monthBuckets.map((b) => ({
+      ...b,
+      netCents: Math.round((perMonthCount.get(b.key) ?? 0) * valueCents - investedPerMonth),
+    }));
+  }
+
+  const costPerLeadCents = closedLeads > 0 ? Math.round(investedCents / closedLeads) : null;
+
   return {
     closedLeads,
     months,
@@ -635,5 +962,10 @@ export async function computeFinancialSummary(
     valueStartsAt: effective?.startsAt ?? null,
     returnCents,
     roiPercent,
+    cumulative,
+    byAgent,
+    breakEvenLeads,
+    monthly,
+    costPerLeadCents,
   };
 }

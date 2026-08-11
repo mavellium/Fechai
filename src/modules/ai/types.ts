@@ -20,7 +20,15 @@ export type LlmToolSchema = {
   parameters: Record<string, unknown>;
 };
 
-export type LlmResult = { content: string; toolCalls: LlmToolCall[] };
+/**
+ * Consumo de tokens de uma chamada, quando o provedor devolve. `undefined`
+ * (não zerado) quando não deu para capturar — ex.: resposta de demonstração
+ * sem chave configurada, ou falha ao extrair `usage` da resposta. Nunca deixar
+ * essa captura derrubar a chamada real (ver `OpenAICompatProvider.complete`).
+ */
+export type LlmUsage = { promptTokens: number; completionTokens: number; totalTokens: number };
+
+export type LlmResult = { content: string; toolCalls: LlmToolCall[]; usage?: LlmUsage };
 
 export interface LLMProvider {
   /** Chave do provedor no catálogo (ex.: "gemini"). */

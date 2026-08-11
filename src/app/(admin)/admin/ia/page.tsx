@@ -1,10 +1,15 @@
 import { requireSuperadmin } from "@/lib/session";
 import { AI_MODELS, getActiveModel, getAiSettingMeta } from "@/modules/ai";
 import { activeEmbeddingModel } from "@/modules/ai/embeddings";
+import type { ProviderKey } from "@/modules/ai/types";
+import { getUsageOverview, PROVIDER_ENV_KEY } from "@/modules/ai/usage";
 import { Alert } from "@/components/ui/alert";
 import { Card } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { ModelPicker } from "./ModelPicker";
+import { UsagePanel } from "./UsagePanel";
+
+const ALL_PROVIDERS: ProviderKey[] = ["gemini", "openai", "grok", "groq"];
 
 function Meta({ term, children }: { term: string; children: React.ReactNode }) {
   return (
@@ -17,12 +22,19 @@ function Meta({ term, children }: { term: string; children: React.ReactNode }) {
 
 export default async function AdminIaPage() {
   await requireSuperadmin();
-  const [active, meta] = await Promise.all([getActiveModel(), getAiSettingMeta()]);
+  const [active, meta, usage] = await Promise.all([
+    getActiveModel(),
+    getAiSettingMeta(),
+    getUsageOverview(),
+  ]);
 
   // A chave vive só no servidor — mandamos ao client apenas "existe ou não".
   const models = AI_MODELS.map((m) => ({ ...m, keyConfigured: Boolean(process.env[m.envKey]) }));
   const activeKeyOk = Boolean(process.env[active.envKey]);
   const embedding = activeEmbeddingModel();
+  const keyConfigured = Object.fromEntries(
+    ALL_PROVIDERS.map((p) => [p, Boolean(process.env[PROVIDER_ENV_KEY[p]])]),
+  ) as Record<ProviderKey, boolean>;
 
   return (
     <div className="mx-auto max-w-3xl space-y-8">
@@ -64,6 +76,12 @@ export default async function AdminIaPage() {
           </Alert>
         )}
       </Card>
+
+      <UsagePanel
+        providers={usage.providers}
+        historicalEstimateTokens={usage.historicalEstimateTokens}
+        keyConfigured={keyConfigured}
+      />
 
       <section>
         <h2 className="font-display text-lg font-semibold text-white">Trocar modelo</h2>

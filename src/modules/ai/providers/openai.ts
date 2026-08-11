@@ -12,6 +12,7 @@ import {
   type LlmToolSchema,
   type ProviderKey,
 } from "../types";
+import { recordRateLimitHeaders } from "../usage";
 
 /**
  * Base para provedores com API compatível com a OpenAI (OpenAI, xAI/Grok, ...).
@@ -63,11 +64,18 @@ export class OpenAICompatProvider implements LLMProvider {
     }));
 
     try {
-      const res = await this.getClient().chat.completions.create({
-        model: this.model,
-        messages: messages.map(toOpenAIMessage),
-        tools: openaiTools.length ? openaiTools : undefined,
-      });
+      // `.withResponse()` (em vez de `await` direto) dá acesso aos headers
+      // brutos da resposta além do corpo já parseado — é a única forma de ler
+      // os headers de rate-limit (a Groq os expõe de forma confiável; ver
+      // `readRateLimitHeaders`). O corpo (`res`) tem exatamente o mesmo formato
+      // de antes, só chega dentro de `{ data, response }`.
+      const { data: res, response } = await this.getClient().chat.completions
+        .create({
+          model: this.model,
+          messages: messages.map(toOpenAIMessage),
+          tools: openaiTools.length ? openaiTools : undefined,
+        })
+        .withResponse();
 
       const msg = res.choices[0]?.message;
       const toolCalls: LlmToolCall[] = (msg?.tool_calls ?? [])
@@ -78,7 +86,25 @@ export class OpenAICompatProvider implements LLMProvider {
           arguments: safeParse(c.function.arguments),
         }));
 
-      return { content: msg?.content ?? "", toolCalls };
+      // Extração de uso isolada de propósito: se `res.usage` vier ausente ou o
+      // parse dos headers falhar por qualquer motivo, a resposta real do LLM
+      // (já obtida acima) segue intacta — só o registro de consumo fica sem
+      // esse dado. Nunca deixar isso derrubar uma resposta que já chegou.
+      let usage: LlmResult["usage"];
+      try {
+        if (res.usage) {
+          usage = {
+            promptTokens: res.usage.prompt_tokens,
+            completionTokens: res.usage.completion_tokens,
+            totalTokens: res.usage.total_tokens,
+          };
+        }
+        recordRateLimitHeaders(this.provider, response.headers);
+      } catch {
+        usage = undefined;
+      }
+
+      return { content: msg?.content ?? "", toolCalls, usage };
     } catch (err) {
       throw this.toAiError(err);
     }
