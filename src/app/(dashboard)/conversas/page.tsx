@@ -186,6 +186,7 @@ export default async function ConversasPage({
                 items={page.map((c) => ({
                   id: c.id,
                   needsHuman: c.needsHuman,
+                  agentPaused: c.agentPaused,
                   isTest: c.isTest,
                   updatedAt: c.updatedAt,
                   lead: c.lead,

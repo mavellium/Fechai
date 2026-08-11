@@ -3,11 +3,12 @@ import { ArrowLeft } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { ChatBubble } from "@/components/chat/ChatBubble";
 import { ChatLog } from "@/components/chat/ChatLog";
-import { dayLabel, phoneLabel, relativeTime } from "@/lib/format";
+import { dayLabel, phoneLabel, relativeTime, timeLabel } from "@/lib/format";
 import { leadStatusLabel } from "./leadStatus";
 import { LeadPanel, type LeadPanelData } from "./LeadPanel";
 import { SendMessageForm } from "./SendMessageForm";
 import { DeleteTestConversationButton } from "./DeleteTestConversationButton";
+import { AgentPauseButton } from "./AgentPauseButton";
 
 type ThreadMessage = {
   id: string;
@@ -36,6 +37,13 @@ export function ConversationThread({
 }) {
   const status = leadStatusLabel(conversation.lead.status);
   const name = conversation.lead.name ?? "Cliente sem nome";
+
+  // Quem escreveu cada mensagem: o lead ("user"), a IA ("assistant" de
+  // "agent") ou o dono da conta respondendo à mão ("assistant" de "human").
+  function senderLabel(m: ThreadMessage) {
+    if (m.role === "user") return conversation.lead.name ?? "cliente";
+    return m.sentBy === "human" ? "você" : "agente";
+  }
 
   return (
     <>
@@ -67,6 +75,13 @@ export function ConversationThread({
           )}
         </div>
       </header>
+
+      <div className="border-b border-white/10 px-4 py-2">
+        <AgentPauseButton
+          conversationId={conversation.id}
+          paused={conversation.agentPaused}
+        />
+      </div>
 
       {/* Abaixo de xl não há terceira coluna: o contexto do lead vira um bloco
           que a pessoa abre quando precisa, em vez de sumir da tela. */}
@@ -103,7 +118,7 @@ export function ConversationThread({
               <div className={sameSpeaker ? "mt-1" : newDay ? "" : "mt-4"}>
                 <ChatBubble
                   role={m.role === "user" ? "user" : "assistant"}
-                  footer={m.sentBy === "human" ? "você" : undefined}
+                  footer={`${senderLabel(m)} · ${timeLabel(m.createdAt)}`}
                 >
                   {m.content}
                 </ChatBubble>
@@ -115,10 +130,17 @@ export function ConversationThread({
 
       {conversation.needsHuman && (
         <div className="border-t border-white/10 bg-warn/5 px-4 py-3">
-          <p className="text-sm text-white/80">
-            O agente pediu ajuda nesta conversa. Responda abaixo ou marque como resolvida quando
-            terminar — as ações estão no painel do cliente.
-          </p>
+          {conversation.agentPaused ? (
+            <p className="text-sm text-white/80">
+              O agente está pausado nesta conversa (por reação, emoji ou você) — por isso ele não
+              respondeu. Ative-o acima para ele voltar a atender, ou responda você mesmo.
+            </p>
+          ) : (
+            <p className="text-sm text-white/80">
+              O agente pediu ajuda nesta conversa. Responda abaixo ou marque como resolvida quando
+              terminar — as ações estão no painel do cliente.
+            </p>
+          )}
         </div>
       )}
 

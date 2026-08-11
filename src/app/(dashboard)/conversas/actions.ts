@@ -72,6 +72,30 @@ export async function sendManualMessage(conversationId: string, text: string): P
 }
 
 /**
+ * Pausa/retoma o agente NESTA conversa (por conversa, não pelo agente inteiro).
+ *
+ * É a resposta ao "como faço ele voltar a responder?": a reação/emoji de parada
+ * liga `agentPaused` (e `needsHuman`) no webhook, e não havia nenhum botão que
+ * desligasse os dois de uma vez — o "Marcar como resolvida" só limpava o
+ * `needsHuman` e a IA continuava muda. `paused=false` limpa os dois juntos: a
+ * conversa sai da fila "precisa de você" e o agente volta a responder.
+ */
+export async function setConversationAgentPaused(id: string, paused: boolean): Promise<Result> {
+  const { tenantId } = await requireTenant();
+
+  const res = await prisma.conversation.updateMany({
+    where: { id, tenantId },
+    data: paused ? { agentPaused: true } : { agentPaused: false, needsHuman: false },
+  });
+
+  if (res.count === 0) return { ok: false, error: "Conversa não encontrada." };
+
+  revalidatePath("/conversas");
+  revalidatePath("/inicio");
+  return { ok: true };
+}
+
+/**
  * Excluir um chat de teste (sandbox) em definitivo: a conversa, as mensagens e
  * o lead de teste vão junto (cascade). Só conversas `isTest: true` da própria
  * conta passam por aqui — um id de conversa real retorna erro, nunca apaga.

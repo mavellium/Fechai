@@ -49,6 +49,14 @@ export function dateTimeLabel(date: Date) {
   }).format(date);
 }
 
+/** "14:32" — horário de envio de uma mensagem no histórico. */
+export function timeLabel(date: Date) {
+  return new Intl.DateTimeFormat("pt-BR", {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
 /** Moeda em reais a partir de centavos: "R$ 1.234,56". Visão Financeira de /relatorios. */
 export function formatBRL(cents: number) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(cents / 100);

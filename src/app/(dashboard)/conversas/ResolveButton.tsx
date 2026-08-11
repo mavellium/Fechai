@@ -1,15 +1,18 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { Check, Undo2 } from "lucide-react";
+import { Check, Undo2, Play } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { resolveConversation, reopenConversation } from "./actions";
+import { resolveConversation, reopenConversation, setConversationAgentPaused } from "./actions";
 
 /**
- * Tira a conversa da fila "precisa de você" (ou devolve, se a pessoa se
- * arrependeu). Sem confirmação: é reversível num clique, e a skill manda
- * reservar diálogo de confirmação para o que é destrutivo de verdade.
+ * Ação principal de fila do histórico.
+ *
+ * A prioridade é do agente pausado: quando `agentPaused` está ligado (reação/
+ * emoji de parada, ou resposta manual), o único botão que faz sentido é retomar
+ * a IA. Antes, um turno parado por emoji caía no "Marcar como resolvida", que só
+ * limpava `needsHuman` e deixava a IA muda para sempre — beco sem saída.
  */
 export function ResolveButton({
   conversationId,
@@ -27,9 +30,11 @@ export function ResolveButton({
   function run() {
     setError(null);
     start(async () => {
-      const res = await (needsHuman
-        ? resolveConversation(conversationId)
-        : reopenConversation(conversationId));
+      const res = agentPaused
+        ? await setConversationAgentPaused(conversationId, false)
+        : needsHuman
+          ? await resolveConversation(conversationId)
+          : await reopenConversation(conversationId);
       if (!res.ok) setError(res.error ?? "Não foi possível salvar agora. Tente de novo.");
     });
   }
@@ -38,22 +43,22 @@ export function ResolveButton({
     <div className="space-y-2">
       <Button
         type="button"
-        variant={needsHuman ? "default" : "ghost"}
+        variant={agentPaused ? "default" : needsHuman ? "default" : "ghost"}
         size="sm"
         className="w-full"
         onClick={run}
         loading={pending}
         loadingLabel="Salvando"
       >
-        {needsHuman ? (
+        {agentPaused ? (
+          <>
+            <Play size={14} aria-hidden />
+            Ativar agente nesta conversa
+          </>
+        ) : needsHuman ? (
           <>
             <Check size={14} aria-hidden />
             Marcar como resolvida
-          </>
-        ) : agentPaused ? (
-          <>
-            <Undo2 size={14} aria-hidden />
-            Devolver para o agente
           </>
         ) : (
           <>
@@ -62,9 +67,10 @@ export function ResolveButton({
           </>
         )}
       </Button>
-      {agentPaused && !needsHuman && (
+      {agentPaused && (
         <p className="text-xs leading-relaxed text-white/50">
-          Você respondeu manualmente — o agente não responde mais sozinho aqui até você devolver.
+          O agente está pausado nesta conversa — por reação, emoji ou resposta manual. Ative-o para
+          ele voltar a atender.
         </p>
       )}
       {error && <Alert tone="danger">{error}</Alert>}

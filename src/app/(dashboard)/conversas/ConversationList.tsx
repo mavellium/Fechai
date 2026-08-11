@@ -7,6 +7,7 @@ import { DeleteTestConversationButton } from "./DeleteTestConversationButton";
 export type ConversationListItem = {
   id: string;
   needsHuman: boolean;
+  agentPaused: boolean;
   isTest: boolean;
   updatedAt: Date;
   lead: { name: string | null; phone: string; status: string };
@@ -92,6 +93,7 @@ function Item({
             ) : (
               <Badge tone={status.tone}>{status.label}</Badge>
             )}
+            {item.agentPaused && <Badge tone="warn">agente pausado</Badge>}
             {item.needsHuman && <Badge tone="danger">precisa de você</Badge>}
           </span>
         </span>
