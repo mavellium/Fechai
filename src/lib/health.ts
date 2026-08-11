@@ -52,7 +52,7 @@ export async function tenantChecks(tenantId: string): Promise<Check[]> {
       label: "WhatsApp conectado",
       ok: wa?.status === "connected",
       detail: wa?.status ?? "disconnected",
-      href: "/whatsapp",
+      href: "/integracoes",
     },
   ];
 }

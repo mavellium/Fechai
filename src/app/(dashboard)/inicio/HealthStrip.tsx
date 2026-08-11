@@ -47,7 +47,7 @@ export function HealthStrip({
               ? "WhatsApp aguardando leitura"
               : "WhatsApp desconectado",
           tone: "warn",
-          href: "/whatsapp",
+          href: "/integracoes",
           fix: "conectar",
         },
     {

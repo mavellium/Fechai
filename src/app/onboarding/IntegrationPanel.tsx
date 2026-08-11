@@ -6,7 +6,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/copy-button";
 import { StatusDot } from "@/components/ui/badge";
-import { connectWhatsapp, refreshWhatsappStatus } from "@/app/(dashboard)/whatsapp/actions";
+import { connectWhatsapp, refreshWhatsappStatus } from "@/app/(dashboard)/integracoes/actions";
 
 /**
  * Passo 4 — as duas portas de entrada do agente: o site do cliente (snippet) e

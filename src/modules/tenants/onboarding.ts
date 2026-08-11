@@ -72,14 +72,14 @@ export async function getOnboardingSteps(tenantId: string): Promise<OnboardingSt
       key: "whatsapp",
       title: "Conectar seu número de WhatsApp",
       description: "Aponte a câmera do celular para o código e pronto.",
-      href: "/whatsapp",
+      href: "/integracoes",
       done: whatsapp?.status === "connected",
     },
     {
       key: "site",
       title: "Colocar o agente no seu site",
       description: "Copie um código pronto e envie para quem cuida do seu site.",
-      href: "/whatsapp",
+      href: "/integracoes",
       // Não há como detectar a instalação do widget no site do cliente (o
       // Milestone 5 é quem traz isso). Até lá o passo é opcional: contá-lo como
       // pendente travava o checklist em 5/6 para todo mundo, para sempre.

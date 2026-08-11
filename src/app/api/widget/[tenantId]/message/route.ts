@@ -45,8 +45,11 @@ export async function POST(
   }
   const { visitorId, message } = parsed.data;
 
-  const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { status: true } });
-  if (!tenant || tenant.status !== "active") {
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { status: true, widgetEnabled: true },
+  });
+  if (!tenant || tenant.status !== "active" || !tenant.widgetEnabled) {
     return NextResponse.json({ error: "Atendimento indisponível" }, { status: 404, headers: CORS_HEADERS });
   }
 

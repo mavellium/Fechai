@@ -3,6 +3,7 @@
 
   var API_ORIGIN = __API_ORIGIN__;
   var tenantId = __TENANT_ID__;
+  var enabled = __WIDGET_ENABLED__;
   var color = __WIDGET_COLOR__;
   var greeting = __WIDGET_GREETING__;
   var iconType = __WIDGET_ICON_TYPE__;
@@ -10,6 +11,12 @@
   var iconUrl = __WIDGET_ICON_URL__;
   var shape = __WIDGET_SHAPE__;
   var borderColor = __WIDGET_BORDER_COLOR__;
+
+  // O botão nasce desligado (widgetEnabled=false) e só aparece depois que o
+  // dono do site ativa pela tela de Integrações — então aqui nada é criado.
+  if (!enabled) {
+    return;
+  }
 
   var SHAPE_RADIUS = { circle: "999px", rounded: "16px", square: "6px" };
 

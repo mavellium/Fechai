@@ -5,7 +5,7 @@ import { z } from "zod";
 import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { getWhatsAppProvider } from "@/modules/whatsapp";
-import { deployTenantWidget } from "@/lib/widget/deploy";
+import { deployTenantWidget, WIDGET_CONFIG_SELECT } from "@/lib/widget/deploy";
 import { uploadToBunny } from "@/lib/bunny";
 
 type ConnectResult = {
@@ -35,7 +35,7 @@ export async function connectWhatsapp(): Promise<ConnectResult> {
       create: { tenantId, externalId: res.externalId, status: res.status },
       update: { externalId: res.externalId, status: res.status },
     });
-    revalidatePath("/whatsapp");
+    revalidatePath("/integracoes");
     revalidatePath("/inicio");
     return { ok: true, status: res.status, qrCode: res.qrCode };
   } catch (err) {
@@ -53,7 +53,7 @@ export async function refreshWhatsappStatus(): Promise<ConnectResult> {
   try {
     const res = await provider.getQrCode(instance.externalId);
     await prisma.whatsappInstance.update({ where: { tenantId }, data: { status: res.status } });
-    revalidatePath("/whatsapp");
+    revalidatePath("/integracoes");
     revalidatePath("/inicio");
     return { ok: true, status: res.status, qrCode: res.qrCode };
   } catch (err) {
@@ -87,7 +87,7 @@ export async function disconnectWhatsapp(): Promise<WhatsappControlResult> {
     where: { tenantId },
     data: { status: "disconnected" },
   });
-  revalidatePath("/whatsapp");
+  revalidatePath("/integracoes");
   revalidatePath("/inicio");
   return { ok: true, info: "WhatsApp desconectado. Para voltar, gere um novo código." };
 }
@@ -107,7 +107,7 @@ export async function setWhatsappAgentEnabled(enabled: boolean): Promise<Whatsap
   if (!agent) return { ok: false, error: "Nenhum agente nesta conta." };
 
   await prisma.agent.update({ where: { id: agent.id }, data: { enabled } });
-  revalidatePath("/whatsapp");
+  revalidatePath("/integracoes");
   revalidatePath("/agentes");
   revalidatePath("/inicio");
   return { ok: true, info: enabled ? `${agent.name} voltou a responder.` : `${agent.name} parou de responder.` };
@@ -117,7 +117,7 @@ export async function setWhatsappAgentEnabled(enabled: boolean): Promise<Whatsap
 export async function setWhatsappIgnoreGroups(ignore: boolean): Promise<WhatsappControlResult> {
   const { tenantId } = await requireTenant();
   await prisma.tenant.update({ where: { id: tenantId }, data: { whatsappIgnoreGroups: ignore } });
-  revalidatePath("/whatsapp");
+  revalidatePath("/integracoes");
   return {
     ok: true,
     info: ignore ? "O agente ignora mensagens de grupos." : "O agente passa a responder em grupos.",
@@ -157,6 +157,11 @@ export async function updateWidgetConfig(
   formData: FormData,
 ): Promise<WidgetConfigResult> {
   const { tenantId } = await requireTenant();
+
+  const currentTenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { widgetEnabled: true },
+  });
 
   const parsed = widgetConfigSchema.safeParse({
     widgetColor: formData.get("widgetColor"),
@@ -200,6 +205,7 @@ export async function updateWidgetConfig(
 
   const deployed = await deployTenantWidget({
     tenantId,
+    enabled: currentTenant?.widgetEnabled ?? false,
     color: parsed.data.widgetColor,
     greeting: parsed.data.widgetGreeting,
     iconType: parsed.data.widgetIconType,
@@ -225,6 +231,44 @@ export async function updateWidgetConfig(
       widgetDeployedAt: new Date(),
     },
   });
-  revalidatePath("/whatsapp");
+  revalidatePath("/integracoes");
   return { ok: true, info: "Personalização salva e publicada." };
+}
+
+/**
+ * Liga/desliga o botão no site do cliente. Por padrão ele nasce desativado
+ * (`widgetEnabled = false`): colar o snippet só instala o script, e o botão
+ * só aparece depois deste comando — republica o widget.js com a flag nova
+ * embutida, sem mudar nada no site do cliente.
+ */
+export async function setWidgetEnabled(enabled: boolean): Promise<WidgetConfigResult> {
+  const { tenantId } = await requireTenant();
+
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { ...WIDGET_CONFIG_SELECT, widgetDeployedAt: true },
+  });
+  if (!tenant) return { ok: false, error: "Conta não encontrada." };
+
+  const deployed = await deployTenantWidget({
+    tenantId,
+    enabled,
+    color: tenant.widgetColor,
+    greeting: tenant.widgetGreeting,
+    iconType: tenant.widgetIconType,
+    iconEmoji: tenant.widgetIconEmoji,
+    iconUrl: tenant.widgetIconUrl,
+    shape: tenant.widgetShape,
+    borderColor: tenant.widgetBorderColor,
+  });
+  if (!deployed.ok) {
+    return { ok: false, error: `Não consegui publicar o widget na CDN: ${deployed.error}` };
+  }
+
+  await prisma.tenant.update({
+    where: { id: tenantId },
+    data: { widgetEnabled: enabled, widgetDeployedAt: new Date() },
+  });
+  revalidatePath("/integracoes");
+  return { ok: true, info: enabled ? "O botão agora aparece no seu site." : "O botão foi desativado no seu site." };
 }

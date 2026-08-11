@@ -4,6 +4,7 @@ import { uploadToBunny } from "@/lib/bunny";
 import { prisma } from "@/lib/prisma";
 
 export type WidgetConfig = {
+  enabled: boolean;
   color: string;
   greeting: string;
   iconType: string; // "emoji" | "image"
@@ -13,7 +14,8 @@ export type WidgetConfig = {
   borderColor: string | null;
 };
 
-const WIDGET_CONFIG_SELECT = {
+export const WIDGET_CONFIG_SELECT = {
+  widgetEnabled: true,
   widgetColor: true,
   widgetGreeting: true,
   widgetIconType: true,
@@ -30,7 +32,8 @@ const WIDGET_CONFIG_SELECT = {
  * não precisa de `data-*` nem de uma chamada extra pra buscar config.
  *
  * Chamado automaticamente: na primeira vez que a tela de instalação é aberta
- * (whatsapp/page.tsx) e sempre que a personalização é salva (updateWidgetConfig).
+ * (integracoes/page.tsx) e sempre que a personalização é salva (updateWidgetConfig)
+ * ou o botão é ligado/desligado (setWidgetEnabled).
  */
 export async function deployTenantWidget(
   input: { tenantId: string } & WidgetConfig,
@@ -44,6 +47,7 @@ export async function deployTenantWidget(
   const content = template
     .replace("__API_ORIGIN__", JSON.stringify(origin.replace(/\/$/, "")))
     .replace("__TENANT_ID__", JSON.stringify(input.tenantId))
+    .replace("__WIDGET_ENABLED__", JSON.stringify(input.enabled))
     .replace("__WIDGET_COLOR__", JSON.stringify(input.color))
     .replace("__WIDGET_GREETING__", JSON.stringify(input.greeting))
     .replace("__WIDGET_ICON_TYPE__", JSON.stringify(input.iconType))
@@ -74,6 +78,7 @@ export async function ensureTenantWidgetDeployed(tenantId: string): Promise<void
 
   const deployed = await deployTenantWidget({
     tenantId,
+    enabled: tenant.widgetEnabled,
     color: tenant.widgetColor,
     greeting: tenant.widgetGreeting,
     iconType: tenant.widgetIconType,

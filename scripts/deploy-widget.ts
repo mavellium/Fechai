@@ -18,6 +18,7 @@ async function main() {
   const tenants = await prisma.tenant.findMany({
     select: {
       id: true,
+      widgetEnabled: true,
       widgetColor: true,
       widgetGreeting: true,
       widgetIconType: true,
@@ -33,6 +34,7 @@ async function main() {
   for (const tenant of tenants) {
     const result = await deployTenantWidget({
       tenantId: tenant.id,
+      enabled: tenant.widgetEnabled,
       color: tenant.widgetColor,
       greeting: tenant.widgetGreeting,
       iconType: tenant.widgetIconType,

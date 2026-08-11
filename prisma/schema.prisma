@@ -52,6 +52,9 @@ model Tenant {
   // tem seu próprio widget.js publicado na CDN (ver src/lib/widget/deploy.ts),
   // gerado automaticamente — sem comando manual. `widgetDeployedAt` marca se
   // esse arquivo já existe; null = ainda não foi publicado nenhuma vez.
+  // `widgetEnabled` nasce falso: o botão só aparece no site depois de ativado
+  // na tela de Integrações (setWidgetEnabled).
+  widgetEnabled    Boolean   @default(false)
   widgetColor       String    @default("#6d5ef8")
   widgetGreeting    String    @default("Olá! Como posso ajudar?")
   widgetIconType    String    @default("emoji") // "emoji" | "image"

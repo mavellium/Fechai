@@ -1,14 +1,15 @@
 "use client";
 
-import { useActionState, useState, type ChangeEvent } from "react";
+import { useActionState, useState, useTransition, type ChangeEvent } from "react";
 import { Alert, FormFeedback } from "@/components/ui/alert";
+import { StatusDot } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/copy-button";
 import { Field, fieldProps } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { Switch } from "@/components/ui/switch";
-import { updateWidgetConfig } from "./actions";
+import { setWidgetEnabled, updateWidgetConfig } from "./actions";
 
 const MAX_ICON_BYTES = 5 * 1024 * 1024;
 
@@ -23,6 +24,7 @@ type Shape = "circle" | "rounded" | "square";
  */
 export function SnippetBox({
   tenantId,
+  widgetEnabled,
   widgetColor,
   widgetGreeting,
   widgetIconType,
@@ -32,6 +34,7 @@ export function SnippetBox({
   widgetBorderColor,
 }: {
   tenantId: string;
+  widgetEnabled: boolean;
   widgetColor: string;
   widgetGreeting: string;
   widgetIconType: string;
@@ -43,6 +46,7 @@ export function SnippetBox({
   const [copyError, setCopyError] = useState<string | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
   const [state, formAction, pending] = useActionState(updateWidgetConfig, null);
+  const [togglePending, startToggle] = useTransition();
   const pullZone = process.env.NEXT_PUBLIC_BUNNY_PULL_ZONE;
 
   const [iconType, setIconType] = useState<IconType>(
@@ -77,6 +81,29 @@ export function SnippetBox({
 
   return (
     <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <StatusDot tone={widgetEnabled ? "success" : "neutral"}>
+          {widgetEnabled ? "Botão ativo no seu site" : "Botão desativado"}
+        </StatusDot>
+        <Button
+          type="button"
+          variant={widgetEnabled ? "outline" : "default"}
+          size="sm"
+          loading={togglePending}
+          loadingLabel={widgetEnabled ? "Desativando" : "Ativando"}
+          onClick={() => startToggle(async () => { await setWidgetEnabled(!widgetEnabled); })}
+        >
+          {widgetEnabled ? "Desativar botão" : "Ativar botão"}
+        </Button>
+      </div>
+
+      {!widgetEnabled && (
+        <Alert tone="warn" title="O botão ainda não aparece no seu site">
+          O código abaixo já pode ser instalado, mas o botão só passa a aparecer depois que você
+          ativar — quem visita o site conversa com o agente sem sair da página.
+        </Alert>
+      )}
+
       <div className="space-y-3">
         <pre className="overflow-x-auto rounded-control border border-white/10 bg-black/40 p-4 font-mono text-xs text-white/80">
           {snippet}
