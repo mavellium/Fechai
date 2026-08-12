@@ -57,11 +57,12 @@ export async function scanAndSendFollowUps(now: Date = new Date()) {
     const cutoff = new Date(now.getTime() - config.delayHours * 60 * 60_000);
     if (!isEligible({ ...c, lastRole: c.messages[0]?.role }, cutoff)) continue;
 
+    let keyId: string | null = null;
     if (provider.isConfigured() && !c.lead.isTest) {
       const instance = await prisma.whatsappInstance.findUnique({ where: { tenantId: c.tenantId } });
       if (instance?.externalId && instance.status === "connected") {
         try {
-          await provider.sendMessage(instance.externalId, c.lead.phone, config.message);
+          keyId = await provider.sendMessage(instance.externalId, c.lead.phone, config.message);
         } catch (err) {
           console.error("[follow-up] falha ao enviar", c.id, err);
         }
@@ -69,7 +70,12 @@ export async function scanAndSendFollowUps(now: Date = new Date()) {
     }
 
     await prisma.message.create({
-      data: { conversationId: c.id, role: "assistant", content: config.message },
+      data: {
+        conversationId: c.id,
+        role: "assistant",
+        content: config.message,
+        whatsappMessageId: keyId ?? undefined,
+      },
     });
     await prisma.conversation.update({ where: { id: c.id }, data: { followUpSentAt: now } });
     sent++;

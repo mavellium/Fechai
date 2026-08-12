@@ -20,6 +20,8 @@ export type IncomingMessage = {
   hasAudio: boolean;
   /** Reação a uma mensagem (emoji sobreposta) — não é uma mensagem do cliente. */
   isReaction?: boolean;
+  /** A mensagem foi enviada pela própria instância (o número do tenant). */
+  isFromMe?: boolean;
   /** id da mensagem no WhatsApp (key.id) — necessário para baixar a mídia. */
   messageKeyId?: string;
 };
@@ -29,7 +31,8 @@ export interface WhatsAppProvider {
   isConfigured(): boolean;
   createInstance(tenantId: string): Promise<CreateInstanceResult>;
   getQrCode(externalId: string): Promise<{ status: WhatsAppStatus; qrCode?: string }>;
-  sendMessage(externalId: string, toPhone: string, text: string): Promise<void>;
+  /** Envia e devolve o key.id da mensagem no WhatsApp (null se o provedor não o expuser). */
+  sendMessage(externalId: string, toPhone: string, text: string): Promise<string | null>;
   /** Desloga o número da instância (exige novo QR para voltar). */
   disconnect(externalId: string): Promise<void>;
   /** Baixa a mídia de uma mensagem recebida em base64 (ex.: mensagem de voz). */

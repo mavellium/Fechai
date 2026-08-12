@@ -75,14 +75,19 @@ export async function appendMessage(
   content: string,
   /** Só relevante em `role: "assistant"` — quem gerou a resposta. Ver schema.prisma. */
   sentBy?: "agent" | "human",
+  /** key.id no WhatsApp — só existe quando a mensagem foi enviada de verdade pela instância. */
+  externalId?: string,
 ) {
-  await prisma.message.create({ data: { conversationId, role, content, sentBy } });
+  const message = await prisma.message.create({
+    data: { conversationId, role, content, sentBy, whatsappMessageId: externalId },
+  });
   if (role === "user") {
     await prisma.conversation.update({
       where: { id: conversationId },
       data: { lastInboundAt: new Date() },
     });
   }
+  return message;
 }
 
 export type SendManualReplyResult = { ok: true } | { ok: false; error: string };
@@ -114,6 +119,7 @@ export async function sendManualReply(
   });
   if (!conversation) return { ok: false, error: "Conversa não encontrada." };
 
+  let externalId: string | null = null;
   if (!conversation.isTest) {
     const instance = await prisma.whatsappInstance.findUnique({
       where: { tenantId },
@@ -123,14 +129,21 @@ export async function sendManualReply(
       return { ok: false, error: "O WhatsApp não está conectado. Conecte na tela WhatsApp antes de enviar." };
     }
     try {
-      await getWhatsAppProvider().sendMessage(instance.externalId, conversation.lead!.phone, trimmed);
+      // Grava o key.id da mensagem que acabamos de enviar: o webhook reentrega
+      // tudo que a instância manda como fromMe, e sem esse id a resposta
+      // manual apareceria duas vezes no histórico.
+      externalId = await getWhatsAppProvider().sendMessage(
+        instance.externalId,
+        conversation.lead!.phone,
+        trimmed,
+      );
     } catch (err) {
       console.error("[agent-engine] falha ao enviar mensagem manual", err);
       return { ok: false, error: "Não foi possível enviar pelo WhatsApp. Tente de novo." };
     }
   }
 
-  await appendMessage(conversationId, "assistant", trimmed, "human");
+  await appendMessage(conversationId, "assistant", trimmed, "human", externalId ?? undefined);
   await prisma.conversation.update({
     where: { id: conversationId },
     data: { needsHuman: false, agentPaused: true },

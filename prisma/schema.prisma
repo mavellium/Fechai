@@ -278,6 +278,13 @@ model Message {
   /// (o histórico que vai pro LLM continua "assistant", que é o que importa
   /// pro contexto) e só a UI e a auditoria usam este campo pra diferenciar.
   sentBy         String?
+  /// id da mensagem no WhatsApp (key.id da Evolution). Só mensagens enviadas
+  /// ou recebidas pelo WhatsApp têm. Serve para **deduplicar o webhook**: a
+  /// Evolution reentrega o que a própria instância enviou (ex.: resposta do
+  /// agente) como `messages.upsert` com `fromMe: true`, e sem esse id cada
+  /// resposta sairia gravada duas vezes — uma pelo orquestrador, outra pelo
+  /// webhook. Null em mensagens de sandbox e nas manuais antes deste campo.
+  whatsappMessageId String? @unique
   createdAt      DateTime     @default(now())
 
   @@index([conversationId])

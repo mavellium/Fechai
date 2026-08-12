@@ -32,7 +32,13 @@ const DEFAULT_SYSTEM =
  */
 export type TurnStatus = "ok" | "agent_off" | "human_handling" | "no_agent" | "limit_reached";
 
-export type AgentTurn = { reply: string; toolsUsed: string[]; status: TurnStatus };
+export type AgentTurn = {
+  reply: string;
+  toolsUsed: string[];
+  status: TurnStatus;
+  /** id da mensagem da resposta gravada no histórico — o webhook usa para anexar o key.id do WhatsApp e não duplicar o eco fromMe. */
+  replyMessageId?: string;
+};
 
 // Monta o contexto (persona + RAG + histórico), roda o loop de function calling
 // e persiste as mensagens. Retorna a resposta final do agente.
@@ -212,13 +218,13 @@ export async function runAgentTurn(input: {
         .update({ where: { id: conversationId }, data: { needsHuman: true } })
         .catch(() => {});
     }
-    await appendMessage(conversationId, "assistant", err.userMessage, "agent");
-    return { reply: err.userMessage, toolsUsed, status: "ok" };
+    const replyMsg = await appendMessage(conversationId, "assistant", err.userMessage, "agent");
+    return { reply: err.userMessage, toolsUsed, status: "ok", replyMessageId: replyMsg.id };
   }
 
   if (!finalReply) finalReply = "Certo!";
-  await appendMessage(conversationId, "assistant", finalReply, "agent");
-  return { reply: finalReply, toolsUsed, status: agent ? "ok" : "no_agent" };
+  const replyMsg = await appendMessage(conversationId, "assistant", finalReply, "agent");
+  return { reply: finalReply, toolsUsed, status: agent ? "ok" : "no_agent", replyMessageId: replyMsg.id };
 }
 
 /**

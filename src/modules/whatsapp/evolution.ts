@@ -57,13 +57,17 @@ export class EvolutionProvider implements WhatsAppProvider {
     return { status: connected ? "connected" : qrCode ? "pending_qr" : "disconnected", qrCode };
   }
 
-  async sendMessage(externalId: string, toPhone: string, text: string): Promise<void> {
+  async sendMessage(externalId: string, toPhone: string, text: string): Promise<string | null> {
     const res = await fetch(`${this.baseUrl}/message/sendText/${externalId}`, {
       method: "POST",
       headers: this.headers(),
       body: JSON.stringify({ number: toPhone, text }),
     });
     if (!res.ok) throw new Error(`Evolution sendMessage falhou (${res.status})`);
+    // A resposta traz o key.id da mensagem criada — usado pelo webhook para
+    // não gravar duas vezes o que a própria instância enviou (fromMe).
+    const data = (await res.json()) as { key?: { id?: string } };
+    return data.key?.id ?? null;
   }
 
   async disconnect(externalId: string): Promise<void> {
@@ -109,7 +113,11 @@ export class EvolutionProvider implements WhatsAppProvider {
       };
     };
     const data = p?.data;
-    if (!data || data.key?.fromMe) return null; // ignora o que nós mesmos enviamos
+    // Sem data não dá para processar nada. `fromMe` agora DESCE até o webhook:
+    // o dono respondendo pelo próprio WhatsApp é uma mensagem de ida, mas o
+    // painel precisa dela no histórico — quem decide é a rota, que deduplica
+    // pelo key.id contra o que o app já gravou ao enviar.
+    if (!data) return null;
 
     // Reação (emoji sobreposta a uma mensagem): não é uma mensagem do cliente.
     // O webhook encerra a conversa com a opção "Encerrar conversa com emoji",
@@ -136,6 +144,7 @@ export class EvolutionProvider implements WhatsAppProvider {
       hasAudio,
       messageKeyId: data.key?.id,
       isReaction: Boolean(reaction),
+      isFromMe: Boolean(data.key?.fromMe),
     };
   }
 }
