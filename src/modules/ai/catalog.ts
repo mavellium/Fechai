@@ -97,14 +97,15 @@ export const AI_MODELS: AiModelInfo[] = [
     envKey: "XAI_API_KEY",
   },
   {
-    id: "llama-3.3-70b-versatile",
+    id: "openai/gpt-oss-120b",
     provider: "groq",
-    label: "Llama 3.3 70B Versatile",
+    label: "GPT-OSS 120B",
     tier: "paid",
     description:
-      "Terceiro fallback da chain (Gemini → Grok → Groq). Requer GROQ_API_KEY.",
+      "Terceiro fallback da chain (Gemini → Grok → Groq). Requer GROQ_API_KEY. " +
+      "Substituiu o llama-3.3-70b-versatile, descontinuado pela Groq em 2026-08-16.",
     limits: "Rate limit por tier da conta Groq",
-    pricing: "US$ 0,59 / US$ 0,79",
+    pricing: "US$ 0,15 / US$ 0,60",
     envKey: "GROQ_API_KEY",
   },
 ];
@@ -116,7 +117,7 @@ export const DEFAULT_MODEL_ID = "gemini-2.5-flash";
 export const GROK_FALLBACK_MODEL_ID = "grok-4.3";
 
 /** Modelo Groq usado como 3º fallback quando Grok também falha. */
-export const GROQ_FALLBACK_MODEL_ID = "llama-3.3-70b-versatile";
+export const GROQ_FALLBACK_MODEL_ID = "openai/gpt-oss-120b";
 
 /**
  * Chain de fallback de um Gemini do free tier: Grok → Groq.
