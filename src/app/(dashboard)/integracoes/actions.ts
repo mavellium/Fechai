@@ -109,6 +109,7 @@ export async function setWhatsappAgentEnabled(enabled: boolean): Promise<Whatsap
   await prisma.agent.update({ where: { id: agent.id }, data: { enabled } });
   revalidatePath("/integracoes");
   revalidatePath("/agentes");
+  revalidatePath(`/agentes/${agent.id}`);
   revalidatePath("/inicio");
   return { ok: true, info: enabled ? `${agent.name} voltou a responder.` : `${agent.name} parou de responder.` };
 }
