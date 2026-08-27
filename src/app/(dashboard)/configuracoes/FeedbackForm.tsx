@@ -2,6 +2,7 @@
 
 import { useActionState, useId, useState } from "react";
 import { Star } from "lucide-react";
+import posthog from "posthog-js";
 import { FormFeedback } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field, fieldProps } from "@/components/ui/field";
@@ -14,7 +15,11 @@ export function FeedbackForm() {
   const messageId = useId();
 
   return (
-    <form action={formAction} className="space-y-5">
+    <form
+      action={formAction}
+      className="space-y-5"
+      onSubmit={() => posthog.capture("feedback_submitted", { has_rating: rating > 0, rating: rating || undefined })}
+    >
       {/*
         Antes eram cinco <button> com aria-label, fora de qualquer grupo: o
         leitor de tela não anunciava a nota escolhida e o teclado passava por

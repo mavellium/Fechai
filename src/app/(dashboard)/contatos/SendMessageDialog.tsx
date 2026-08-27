@@ -2,6 +2,7 @@
 
 import { useId, useRef, useState, useTransition } from "react";
 import { Send, X } from "lucide-react";
+import posthog from "posthog-js";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Textarea } from "@/components/ui/textarea";
@@ -46,7 +47,10 @@ export function SendMessageDialog({
     start(async () => {
       const res = await sendMessageToContact(contact.id, text);
       setResult(res);
-      if (res.ok && textRef.current) textRef.current.value = "";
+      if (res.ok) {
+        posthog.capture("manual_message_sent", { channel: "whatsapp" });
+        if (textRef.current) textRef.current.value = "";
+      }
     });
   }
 

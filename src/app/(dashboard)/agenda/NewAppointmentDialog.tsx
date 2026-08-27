@@ -3,6 +3,7 @@
 import { useActionState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { CalendarPlus, X } from "lucide-react";
+import posthog from "posthog-js";
 import { Button } from "@/components/ui/button";
 import { Field, fieldProps } from "@/components/ui/field";
 import { FormFeedback } from "@/components/ui/alert";
@@ -73,7 +74,11 @@ export function NewAppointmentDialog({
           </button>
         </div>
 
-        <form action={formAction} className="space-y-5">
+        <form
+          action={formAction}
+          className="space-y-5"
+          onSubmit={() => posthog.capture("appointment_creation_submitted")}
+        >
           <Field label="Assunto" htmlFor="ag-title">
             <Input
               {...fieldProps("ag-title")}

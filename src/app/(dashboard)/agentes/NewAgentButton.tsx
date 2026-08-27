@@ -2,6 +2,7 @@
 
 import { useActionState, useRef } from "react";
 import { Plus } from "lucide-react";
+import posthog from "posthog-js";
 import { Button } from "@/components/ui/button";
 import { Field, fieldProps } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -52,7 +53,11 @@ export function NewAgentButton({ usage }: { usage: AgentUsage }) {
           Dê um nome que diga o que ele faz — “Vendas”, “Suporte”, “Unidade Centro”.
         </p>
 
-        <form action={formAction} className="mt-5 space-y-4">
+        <form
+          action={formAction}
+          className="mt-5 space-y-4"
+          onSubmit={() => posthog.capture("agent_creation_submitted")}
+        >
           <Field label="Nome do agente" htmlFor="novo-agente-nome">
             <Input
               {...fieldProps("novo-agente-nome")}

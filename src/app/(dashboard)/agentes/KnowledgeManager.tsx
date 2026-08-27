@@ -2,6 +2,7 @@
 
 import { useActionState, useEffect, useRef, useState, useTransition, type ChangeEvent } from "react";
 import { Download, FileText, Trash2 } from "lucide-react";
+import posthog from "posthog-js";
 import { Alert, FormFeedback } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -67,6 +68,7 @@ export function KnowledgeManager({ agentId, documents }: { agentId: string; docu
     setRemoveError(null);
     setRemovingId(doc.id);
     startRemove(async () => {
+      posthog.capture("knowledge_document_removed");
       const res = await removeDocument(agentId, doc.id);
       // O retorno da action era descartado com `void`: falha ao apagar sumia
       // em silêncio e o documento continuava na lista sem explicação.
@@ -80,7 +82,12 @@ export function KnowledgeManager({ agentId, documents }: { agentId: string; docu
       key: "adicionar",
       label: "Adicionar",
       content: (
-        <form ref={formRef} action={formAction} className="space-y-4">
+        <form
+          ref={formRef}
+          action={formAction}
+          className="space-y-4"
+          onSubmit={() => posthog.capture("knowledge_document_submitted")}
+        >
           <input type="hidden" name="agentId" value={agentId} />
           <Field label="Título do documento" htmlFor="kb-title">
             <Input {...fieldProps("kb-title")} name="title" placeholder="Ex: Tabela de preços" required />

@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { signIn } from "next-auth/react";
+import posthog from "posthog-js";
 import { Button } from "@/components/ui/button";
 import { TypingToCheck } from "@/components/ui/TypingToCheck";
 import { EmailField, PasswordField } from "../_components/fields";
@@ -35,7 +36,17 @@ export default function LoginPage() {
     setPhase("done");
     // Superadmin vai direto para o painel dele; usuário comum, para o dashboard.
     const session = await fetch("/api/auth/session").then((r) => r.json()).catch(() => null);
-    const dest = session?.user?.role === "SUPERADMIN" ? "/admin/contas" : "/inicio";
+    if (!session?.user?.id) {
+      setFormError("Não foi possível iniciar sua sessão. Tente entrar novamente.");
+      setPhase("idle");
+      return;
+    }
+    posthog.identify(session.user.id, {
+      ...(session.user.email ? { email: session.user.email } : {}),
+      role: session.user.role,
+    });
+    posthog.capture("user_logged_in", { role: session.user.role });
+    const dest = session.user.role === "SUPERADMIN" ? "/admin/contas" : "/inicio";
     setTimeout(() => {
       router.push(dest);
       router.refresh();

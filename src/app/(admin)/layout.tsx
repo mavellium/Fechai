@@ -30,6 +30,9 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       brandSubtitle="painel do admin"
       footerLabel="acesso restrito"
       userLabel={`${session.user.email} · superadmin`}
+      userId={session.user.id}
+      userEmail={session.user.email}
+      userRole={session.user.role}
       signOutAction={signOutAction}
       accent="signal"
     >

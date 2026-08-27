@@ -1,3 +1,7 @@
+"use client";
+
+import { useEffect, useRef } from "react";
+import posthog from "posthog-js";
 import { Button } from "@/components/ui/button";
 import { type NavItem } from "./ShellNav";
 import { Sidebar } from "./Sidebar";
@@ -18,6 +22,9 @@ export function PanelShell({
   brandSubtitle,
   footerLabel,
   userLabel,
+  userId,
+  userEmail,
+  userRole,
   signOutAction,
   usage,
   accent = "iris",
@@ -31,6 +38,9 @@ export function PanelShell({
   /** Rodapé da barra lateral (plano atual, "acesso restrito"). */
   footerLabel: string;
   userLabel: string;
+  userId: string;
+  userEmail?: string | null;
+  userRole: string;
   signOutAction: () => Promise<void>;
   /** Uso de conversas do mês, mostrado na navegação (link para /configuracoes). */
   usage?: {
@@ -44,6 +54,34 @@ export function PanelShell({
   banner?: React.ReactNode;
   children: React.ReactNode;
 }) {
+  const identifiedUserId = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!userId || identifiedUserId.current === userId) return;
+
+    // A direct switch (such as superadmin impersonation) must not merge two
+    // known people. An anonymous visitor is deliberately kept so identify()
+    // can merge their pre-login activity into this account.
+    const hasDifferentPersistedIdentity =
+      identifiedUserId.current === null &&
+      posthog.get_property("$user_state") === "identified" &&
+      posthog.get_distinct_id() !== userId;
+
+    if (identifiedUserId.current !== null || hasDifferentPersistedIdentity) {
+      posthog.reset();
+    }
+
+    posthog.identify(userId, {
+      ...(userEmail ? { email: userEmail } : {}),
+      role: userRole,
+    });
+    identifiedUserId.current = userId;
+  }, [userEmail, userId, userRole]);
+
+  function handleSignOut() {
+    posthog.reset();
+  }
+
   return (
     // `h-screen` + `overflow-hidden` (em vez do `min-h-screen` antigo): a
     // sidebar é irmã do `main` no mesmo flex, então com `min-h-screen` ela
@@ -82,7 +120,7 @@ export function PanelShell({
               {userLabel}
             </span>
           </div>
-          <form action={signOutAction}>
+          <form action={signOutAction} onSubmit={handleSignOut}>
             <Button variant="outline" size="sm" type="submit">
               Sair
             </Button>

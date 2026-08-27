@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Check } from "lucide-react";
+import posthog from "posthog-js";
 import type { PlanKey } from "@prisma/client";
 import { PLANS } from "@/modules/billing/plans";
 import { Button } from "@/components/ui/button";
@@ -20,6 +21,7 @@ export function PlanPicker({ currentPlan }: { currentPlan: PlanKey }) {
       if (planKey === "FREE") {
         const res = await fetch("/api/plan/free", { method: "POST" });
         if (!res.ok) throw new Error("Falha ao ativar plano grátis");
+        posthog.capture("plan_selected", { plan_key: planKey, checkout_required: false });
         // Conta nova cai no onboarding; quem já passou por ele é levado ao
         // painel pelo próprio /onboarding.
         router.push("/onboarding");
@@ -33,6 +35,7 @@ export function PlanPicker({ currentPlan }: { currentPlan: PlanKey }) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.url) throw new Error(data.error ?? "Falha ao iniciar pagamento");
+      posthog.capture("plan_selected", { plan_key: planKey, checkout_required: true });
       // `assign()` em vez de `location.href = ...`: mesmo efeito, mas a regra
       // react-hooks/immutability trata a atribuição como mutação de valor
       // externo e quebrava o `npm run lint` do repositório inteiro.

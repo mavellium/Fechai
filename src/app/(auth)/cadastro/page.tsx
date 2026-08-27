@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { signIn } from "next-auth/react";
+import posthog from "posthog-js";
 import { useId } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -42,6 +43,13 @@ export default function CadastroPage() {
       }
       const result = await signIn("credentials", { email, password, redirect: false });
       if (result?.error) throw new Error("Conta criada, mas o login falhou — entre pela tela de login.");
+      const session = await fetch("/api/auth/session").then((r) => r.json()).catch(() => null);
+      if (!session?.user?.id) throw new Error("Não foi possível iniciar sua sessão. Tente entrar novamente.");
+      posthog.identify(session.user.id, {
+        ...(session.user.email ? { email: session.user.email } : {}),
+        role: session.user.role,
+      });
+      posthog.capture("account_registered", { role: session.user.role });
       setPhase("done"); // digitando → check antes de navegar
       setTimeout(() => {
         router.push("/planos");
