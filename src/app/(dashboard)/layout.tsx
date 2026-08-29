@@ -87,6 +87,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
       brandSubtitle={tenant?.name ?? "seu painel"}
       footerLabel={`plano · ${tenant?.planKey ?? "FREE"}`}
       userLabel={session.user.email ?? ""}
+      userId={session.user.id}
+      userEmail={session.user.email}
+      userRole={session.user.role}
       signOutAction={signOutAction}
       usage={usage}
       banner={impersonating ? <ImpersonationBanner email={session.user.email ?? ""} /> : undefined}

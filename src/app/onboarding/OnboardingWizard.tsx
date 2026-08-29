@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion, useReducedMotion } from "motion/react";
 import { ArrowLeft, ArrowRight, Check, MessageSquare, Sparkles, Zap } from "lucide-react";
+import posthog from "posthog-js";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -121,6 +122,7 @@ export function OnboardingWizard({
       setFinishing(false);
       return;
     }
+    posthog.capture("onboarding_completed", { process_count: draft.processes.length });
     router.push("/inicio");
     router.refresh();
   }

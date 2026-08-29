@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useState, useTransition, type ChangeEvent } from "react";
+import posthog from "posthog-js";
 import { Alert, FormFeedback } from "@/components/ui/alert";
 import { StatusDot } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -91,7 +92,12 @@ export function SnippetBox({
           size="sm"
           loading={togglePending}
           loadingLabel={widgetEnabled ? "Desativando" : "Ativando"}
-          onClick={() => startToggle(async () => { await setWidgetEnabled(!widgetEnabled); })}
+          onClick={() =>
+            startToggle(async () => {
+              posthog.capture("widget_enabled_toggled", { enabled: !widgetEnabled });
+              await setWidgetEnabled(!widgetEnabled);
+            })
+          }
         >
           {widgetEnabled ? "Desativar botão" : "Ativar botão"}
         </Button>

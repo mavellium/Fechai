@@ -2,6 +2,7 @@
 
 import { useActionState, useEffect, useRef } from "react";
 import { Send } from "lucide-react";
+import posthog from "posthog-js";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,7 +37,12 @@ export function SendMessageForm({ conversationId }: { conversationId: string }) 
           {state.error}
         </Alert>
       )}
-      <form ref={formRef} action={formAction} className="flex gap-2">
+      <form
+        ref={formRef}
+        action={formAction}
+        className="flex gap-2"
+        onSubmit={() => posthog.capture("manual_message_submitted")}
+      >
         <input type="hidden" name="conversationId" value={conversationId} />
         <label htmlFor="manual-message" className="sr-only">
           Responder manualmente

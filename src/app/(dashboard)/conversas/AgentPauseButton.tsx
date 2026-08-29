@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { Pause, Play } from "lucide-react";
+import posthog from "posthog-js";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { setConversationAgentPaused } from "./actions";
@@ -28,8 +29,13 @@ export function AgentPauseButton({
   function toggle() {
     setError(null);
     start(async () => {
-      const res = await setConversationAgentPaused(conversationId, !paused);
-      if (!res.ok) setError(res.error ?? "Não foi possível salvar agora. Tente de novo.");
+      const nextPaused = !paused;
+      const res = await setConversationAgentPaused(conversationId, nextPaused);
+      if (!res.ok) {
+        setError(res.error ?? "Não foi possível salvar agora. Tente de novo.");
+        return;
+      }
+      posthog.capture("conversation_agent_pause_toggled", { paused: nextPaused });
     });
   }
 

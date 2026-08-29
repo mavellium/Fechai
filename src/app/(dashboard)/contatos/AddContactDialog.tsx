@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { useActionState } from "react";
 import { Plus, X } from "lucide-react";
+import posthog from "posthog-js";
 import { Button } from "@/components/ui/button";
 import { Field, fieldProps } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -52,7 +53,11 @@ export function AddContactDialog({ label = "Novo contato" }: { label?: string })
           </button>
         </div>
 
-        <form action={formAction} className="space-y-4">
+        <form
+          action={formAction}
+          className="space-y-4"
+          onSubmit={() => posthog.capture("contact_creation_submitted")}
+        >
           <Field label="Nome" htmlFor="novo-contato-nome" optional>
             <Input
               {...fieldProps("novo-contato-nome")}

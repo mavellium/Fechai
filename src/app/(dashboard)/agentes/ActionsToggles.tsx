@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { ArrowRight, Settings2 } from "lucide-react";
 import Link from "next/link";
+import posthog from "posthog-js";
 import { AVAILABLE_ACTIONS, type ActionKey } from "@/modules/agent-engine/actions";
 import type { ScheduleConfig } from "@/modules/scheduling/config";
 import { describeSchedule } from "@/modules/scheduling/config";
@@ -61,6 +62,7 @@ export function ActionsToggles({
           return copy;
         });
         if (next && key === "schedule_meeting") setOpenConfig(key);
+        posthog.capture("agent_action_toggled", { action_key: key, enabled: next });
       } else {
         setError(res.error ?? "Não foi possível atualizar esta ação. Tente de novo.");
       }

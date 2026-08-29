@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { RotateCcw } from "lucide-react";
+import posthog from "posthog-js";
 import { Button, ButtonLink } from "@/components/ui/button";
 
 /**
@@ -19,6 +20,7 @@ export function PanelError({
   supportHref?: string;
 }) {
   useEffect(() => {
+    posthog.captureException(error);
     console.error(error);
   }, [error]);
 

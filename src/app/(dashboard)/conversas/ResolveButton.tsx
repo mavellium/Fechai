@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { Check, Undo2, Play } from "lucide-react";
+import posthog from "posthog-js";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { resolveConversation, reopenConversation, setConversationAgentPaused } from "./actions";
@@ -30,12 +31,17 @@ export function ResolveButton({
   function run() {
     setError(null);
     start(async () => {
+      const status = agentPaused ? "agent_resumed" : needsHuman ? "resolved" : "reopened";
       const res = agentPaused
         ? await setConversationAgentPaused(conversationId, false)
         : needsHuman
           ? await resolveConversation(conversationId)
           : await reopenConversation(conversationId);
-      if (!res.ok) setError(res.error ?? "Não foi possível salvar agora. Tente de novo.");
+      if (!res.ok) {
+        setError(res.error ?? "Não foi possível salvar agora. Tente de novo.");
+        return;
+      }
+      posthog.capture("conversation_status_changed", { status });
     });
   }
 
