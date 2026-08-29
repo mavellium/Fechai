@@ -4,6 +4,7 @@ import { useId, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { signIn } from "next-auth/react";
+import posthog from "posthog-js";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   ArrowLeft,
@@ -225,6 +226,14 @@ export default function CadastroPage() {
       });
       if (result?.error)
         throw new Error("Conta criada, mas o login falhou — entre pela tela de login.");
+      const session = await fetch("/api/auth/session").then((r) => r.json()).catch(() => null);
+      if (session?.user?.id) {
+        posthog.identify(session.user.id, {
+          ...(session.user.email ? { email: session.user.email } : {}),
+          role: session.user.role,
+        });
+        posthog.capture("account_registered", { role: session.user.role });
+      }
       setPhase("done"); // digitando → check antes de navegar
       setTimeout(() => {
         router.push("/planos");
