@@ -7,7 +7,14 @@ import type { PlanKey } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireSuperadmin } from "@/lib/session";
 import { setImpersonation, clearImpersonation } from "@/lib/impersonation";
-import { setTenantStatus, adminSetPlan, adminSetUsageLimit, adminCreateAccount } from "@/modules/admin/service";
+import {
+  setTenantStatus,
+  adminSetPlan,
+  adminSetUsageLimit,
+  adminSetTrialUnlimitedUntil,
+  adminCreateAccount,
+} from "@/modules/admin/service";
+import { strongPassword } from "@/lib/password-schema";
 import { setFeedbackStatus, type FeedbackStatus } from "@/modules/feedback/service";
 import { setActiveModelId } from "@/modules/ai";
 
@@ -37,6 +44,17 @@ export async function setTenantUsageLimit(
   revalidatePath("/admin/contas");
 }
 
+/**
+ * Ajusta o trial de uso ilimitado da conta. `days` é a partir de agora
+ * (null = encerra o trial imediatamente, voltando ao enforcement normal).
+ */
+export async function setTenantTrial(tenantId: string, days: number | null) {
+  await requireSuperadmin();
+  const until = days == null ? null : new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+  await adminSetTrialUnlimitedUntil(tenantId, until);
+  revalidatePath("/admin/contas");
+}
+
 export async function markFeedback(feedbackId: string, status: FeedbackStatus) {
   await requireSuperadmin();
   await setFeedbackStatus(feedbackId, status);
@@ -54,10 +72,9 @@ export type CreateAccountResult = {
 const createAccountSchema = z.object({
   tenantName: z.string().trim().min(1, "Informe o nome da conta"),
   email: z.string().trim().toLowerCase().email("E-mail inválido"),
-  // Vazio = gerar senha provisória.
-  password: z
-    .string()
-    .refine((v) => v === "" || v.length >= 6, "A senha precisa ter ao menos 6 caracteres"),
+  // Vazio = gerar senha provisória (que já nasce dentro da política); qualquer
+  // senha digitada segue a mesma regra de todo mundo.
+  password: z.union([z.literal(""), strongPassword()]),
   role: z.enum(["OWNER", "SUPERADMIN"]),
   planKey: z.enum(["FREE", "STARTER", "PRO", "BUSINESS"]),
 });

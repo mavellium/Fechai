@@ -38,6 +38,7 @@ export function PanelShell({
     limit: number;
     perConversationCap: number;
     perConversationUsed: number;
+    unlimitedTrial?: boolean;
   } | null;
   accent?: "iris" | "signal";
   /** Aviso global fixo acima do cabeçalho (ex.: personificação em andamento). */

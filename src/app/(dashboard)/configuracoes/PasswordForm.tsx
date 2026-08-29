@@ -1,29 +1,42 @@
 "use client";
 
-import { useActionState, useEffect, useId, useRef, useState } from "react";
+import { useActionState, useId, useState } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import { FormFeedback } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field, fieldProps } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { PasswordStrength } from "@/components/ui/password-strength";
+import { MIN_PASSWORD_LENGTH } from "@/lib/password";
 import { changePassword } from "./actions";
 
 export function PasswordForm() {
   const [state, formAction, pending] = useActionState(changePassword, null);
   const [show, setShow] = useState(false);
-  const formRef = useRef<HTMLFormElement>(null);
+  // Só para alimentar a checklist de força — o valor enviado sai do FormData.
+  const [newPassword, setNewPassword] = useState("");
   const currentId = useId();
   const newId = useId();
   const confirmId = useId();
   const type = show ? "text" : "password";
 
-  // Sucesso limpa os campos — senha antiga/nova não devem continuar visíveis no form.
-  useEffect(() => {
-    if (state?.ok) formRef.current?.reset();
-  }, [state]);
+  /*
+   * Sucesso limpa o formulário: senha antiga e nova não podem continuar
+   * legíveis na tela depois de trocadas. Em vez de um efeito com `reset()`
+   * (que dispararia `setState` dentro do efeito, além de não zerar o campo
+   * controlado), a `key` remonta o formulário inteiro — os campos não
+   * controlados voltam a vazio sozinhos e o controlado é zerado abaixo.
+   */
+  const [lastCleared, setLastCleared] = useState<typeof state>(null);
+  const [clearCount, setClearCount] = useState(0);
+  if (state?.ok && state !== lastCleared) {
+    setLastCleared(state);
+    setClearCount((c) => c + 1); // contador, não booleano: a 2ª troca também precisa remontar
+    setNewPassword("");
+  }
 
   return (
-    <form ref={formRef} action={formAction} className="space-y-5">
+    <form key={clearCount} action={formAction} className="space-y-5">
       <Field label="Senha atual" htmlFor={currentId}>
         <Input
           {...fieldProps(currentId)}
@@ -34,16 +47,21 @@ export function PasswordForm() {
         />
       </Field>
 
-      <Field label="Nova senha" htmlFor={newId} hint="Mínimo de 6 caracteres.">
-        <Input
-          {...fieldProps(newId, { hint: true })}
-          type={type}
-          name="newPassword"
-          autoComplete="new-password"
-          minLength={6}
-          required
-        />
-      </Field>
+      <div>
+        <Field label="Nova senha" htmlFor={newId}>
+          <Input
+            {...fieldProps(newId)}
+            type={type}
+            name="newPassword"
+            autoComplete="new-password"
+            minLength={MIN_PASSWORD_LENGTH}
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.currentTarget.value)}
+            required
+          />
+        </Field>
+        <PasswordStrength password={newPassword} />
+      </div>
 
       <Field label="Confirmar nova senha" htmlFor={confirmId}>
         <Input
@@ -51,7 +69,7 @@ export function PasswordForm() {
           type={type}
           name="confirmPassword"
           autoComplete="new-password"
-          minLength={6}
+          minLength={MIN_PASSWORD_LENGTH}
           required
         />
       </Field>

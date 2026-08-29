@@ -8,6 +8,20 @@ export type Plan = {
   priceLabel: string; // exibição na UI
   priceCents: number; // 0 = grátis
   conversationsPerMonth: number;
+  /**
+   * Teto de respostas da IA numa ÚNICA conversa por mês.
+   *
+   * Fixo por plano, e não derivado do limite de conversas. Já foi
+   * `limite × 3`, o que só fazia sentido enquanto os volumes eram pequenos:
+   * com 1.000 conversas/mês o multiplicador liberava 3.000 respostas num único
+   * chat — mais do que a conta inteira deveria gastar, ou seja, um freio que
+   * não freava nada. Uma conversa real de WhatsApp tem dezenas de respostas,
+   * não milhares; estourar isso é loop ou abuso, e é o que o teto pega.
+   *
+   * `usage.ts` ainda tem o fallback `limite × 3` para o caso de um plano novo
+   * entrar sem este campo — mas hoje todos os planos o definem.
+   */
+  perConversationCapDefault: number;
   maxActiveActions: number;
   /** Teto de agentes ativos (não arquivados) por conta. */
   maxAgents: number;
@@ -21,41 +35,45 @@ export const PLANS: Plan[] = [
     name: "Grátis",
     priceLabel: "R$ 0",
     priceCents: 0,
-    conversationsPerMonth: 50,
+    conversationsPerMonth: 10,
+    perConversationCapDefault: 100,
     maxActiveActions: 2,
     maxAgents: 1,
-    features: ["1 agente", "50 conversas/mês", "2 ações ativas", "Sandbox de teste"],
+    features: ["1 agente", "10 conversas/mês", "2 ações ativas", "7 dias ilimitado", "Sandbox de teste"],
   },
   {
     key: "STARTER",
     name: "Starter",
-    priceLabel: "R$ 97",
-    priceCents: 9700,
-    conversationsPerMonth: 500,
+    priceLabel: "R$ 199",
+    priceCents: 19900,
+    conversationsPerMonth: 1000,
+    perConversationCapDefault: 150,
     maxActiveActions: 3,
-    maxAgents: 2,
-    features: ["2 agentes", "500 conversas/mês", "3 ações ativas", "Follow-up automático"],
+    maxAgents: 3,
+    features: ["3 agentes", "1.000 conversas/mês", "3 ações ativas", "Follow-up automático"],
   },
   {
     key: "PRO",
     name: "Pro",
-    priceLabel: "R$ 247",
-    priceCents: 24700,
-    conversationsPerMonth: 2000,
+    priceLabel: "R$ 399",
+    priceCents: 39900,
+    conversationsPerMonth: 3000,
+    perConversationCapDefault: 200,
     maxActiveActions: 5,
     maxAgents: 5,
     highlight: true,
-    features: ["5 agentes", "2.000 conversas/mês", "Todas as ações", "Suporte prioritário"],
+    features: ["5 agentes", "3.000 conversas/mês", "Todas as ações", "Suporte prioritário"],
   },
   {
     key: "BUSINESS",
     name: "Business",
-    priceLabel: "R$ 597",
-    priceCents: 59700,
+    priceLabel: "R$ 899",
+    priceCents: 89900,
     conversationsPerMonth: 10000,
+    perConversationCapDefault: 300,
     maxActiveActions: 5,
-    maxAgents: 15,
-    features: ["15 agentes", "10.000 conversas/mês", "Todas as ações", "Onboarding assistido"],
+    maxAgents: 10,
+    features: ["10 agentes", "10.000 conversas/mês", "Todas as ações", "Onboarding assistido"],
   },
 ];
 

@@ -36,10 +36,17 @@ model Tenant {
   // plano — usado pelo enforcement (runAgentTurn) e pelos indicadores de uso.
   conversationLimitOverride Int?
 
-  // Teto de respostas da IA por conversa/mês: null = deriva do limite efetivo
-  // de conversas (× 3). Override próprio permite o admin fixar as duas cotas
-  // independentes — a conta (conversas) e o uso por conversa (respostas).
+  // Teto de respostas da IA por conversa/mês: null = deriva do plano
+  // (`perConversationCapDefault`, senão limite efetivo × 3). Override próprio
+  // permite o admin fixar as duas cotas independentes — a conta (conversas) e
+  // o uso por conversa (respostas).
   perConversationCapOverride Int?
+
+  // Trial de uso ilimitado (sem checagem de cota): enquanto for uma data
+  // futura, `runAgentTurn` pula o enforcement inteiro pra esse tenant. Todo
+  // tenant FREE novo nasce com 7 dias (ver provision.ts); o superadmin pode
+  // estender, encurtar ou zerar em /admin/contas.
+  trialUnlimitedUntil DateTime?
 
   // Onboarding guiado (/onboarding). Enquanto `onboardingCompleted` for false, o
   // dashboard redireciona para o wizard; `onboardingStep` + `onboardingDraft`
@@ -67,6 +74,15 @@ model Tenant {
   // WhatsApp: se verdadeiro (padrão), o agente ignora mensagens de grupos.
   whatsappIgnoreGroups Boolean @default(true)
 
+  // Qualificação do lead (o próprio dono do negócio que assina o fechai),
+  // capturada no /cadastro a partir desta reformulação — contas criadas antes
+  // ficam null, não é retroativo. Dados sobre o NEGÓCIO ficam aqui no Tenant;
+  // dados PESSOAIS de quem preencheu o formulário ficam no User (ver abaixo).
+  city             String? // cidade do negócio
+  state            String? // UF (2 letras)
+  businessSegment  String? // ex: "estetica", "advocacia", "imobiliaria" — ver BUSINESS_SEGMENTS
+  referralSource   String? // como conheceu o fechai — ver REFERRAL_SOURCES
+
   users            User[]
   agents           Agent[]
   knowledgeDocs    KnowledgeDocument[]
@@ -89,6 +105,26 @@ model User {
   tenantId     String
   tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt    DateTime  @default(now())
+
+  // Dados pessoais de quem preencheu o /cadastro — exigidos no formulário
+  // desde a reformulação (ver AGENTS.md), mas nulos em contas anteriores (não
+  // é retroativo) e em contas criadas pelo admin (/admin/contas), que não
+  // passam pelo formulário público. Só dígitos em `document` e nos telefones —
+  // a formatação é aplicada na exibição, não no armazenamento.
+  document       String? // CPF (11 dígitos) ou CNPJ (14 dígitos), sem máscara
+  phone          String? // telefone principal, sem máscara
+  phoneSecondary String? // telefone secundário (opcional mesmo no cadastro novo)
+  birthDate      DateTime? // data de nascimento
+  gender         String? // ver GENDER_OPTIONS em lib/br-lead.ts
+
+  // Login com Google (NextAuth). Só VINCULA uma conta que já existe — o
+  // provider não cria tenant: o /cadastro exige CPF/CNPJ, telefone e segmento,
+  // dados que o Google não fornece. `googleId` é o `sub` do Google, estável
+  // mesmo se a pessoa trocar o e-mail da conta Google.
+  googleId       String?   @unique
+  googleLinkedAt DateTime?
+
+  passwordResetTokens PasswordResetToken[]
 
   @@index([tenantId])
 }
@@ -393,4 +429,50 @@ model TenantLeadValue {
   createdAt  DateTime @default(now())
 
   @@index([tenantId, startsAt])
+}
+
+/// Token de "esqueci minha senha". Guardamos só o SHA-256 do token — o valor
+/// que vai no link do e-mail nunca toca o banco, então um dump vazado não
+/// permite redefinir a senha de ninguém.
+///
+/// Uso único e com validade curta (`PASSWORD_RESET_TTL_MINUTES`): pedir um novo
+/// link invalida os anteriores, e usar um invalida todos os que sobraram.
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  /// Quem pediu — para investigar um pedido que o dono da conta não reconhece.
+  ip        String?
+  userAgent String?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+/// Trilha de auditoria das tentativas de login (credenciais e Google).
+///
+/// O bloqueio em si NÃO sai daqui — ele vive no Redis (`lib/login-throttle`),
+/// que é rápido e expira sozinho. Esta tabela existe para a pergunta que o
+/// Redis não responde depois do fato: "quem tentou entrar nessa conta na
+/// terça?". Escrita best-effort: falha aqui nunca derruba o login.
+model LoginAttempt {
+  id        String   @id @default(cuid())
+  ip        String
+  /// Null quando o payload nem tinha e-mail válido.
+  email     String?
+  success   Boolean  @default(false)
+  /// credentials | google
+  provider  String   @default("credentials")
+  /// Por que falhou (bad_password, no_account, blocked…) — null em sucesso.
+  reason    String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([email, createdAt])
+  @@index([ip, createdAt])
+  @@index([createdAt])
 }

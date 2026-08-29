@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import bcrypt from "bcryptjs";
 import type { PlanKey, UserRole } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { generateStrongPassword } from "@/lib/password";
 import { createTenantWithOwner } from "@/modules/tenants/provision";
 
 // Funções cross-tenant do painel admin. Autorização (SUPERADMIN) é garantida
@@ -61,6 +62,16 @@ export async function adminSetUsageLimit(
 }
 
 /**
+ * Fixa (ou limpa, com `null`) o fim do trial de uso ilimitado da conta.
+ * Enquanto a data estiver no futuro, `runAgentTurn` pula as duas cotas
+ * inteiras — usado pro trial de 7 dias do plano grátis (ver provision.ts),
+ * mas o admin pode estender/encurtar/zerar em qualquer plano.
+ */
+export async function adminSetTrialUnlimitedUntil(tenantId: string, until: Date | null) {
+  await prisma.tenant.update({ where: { id: tenantId }, data: { trialUnlimitedUntil: until } });
+}
+
+/**
  * Cria uma conta pelo painel admin — qualquer papel, qualquer plano.
  *
  * Diferente do cadastro público (`/api/register`, que só faz OWNER + FREE):
@@ -94,10 +105,12 @@ export async function adminCreateAccount(input: {
   return { ok: true, tempPassword: generated };
 }
 
-// Sem caracteres ambíguos (0/O, 1/l/I) — a senha vai ser lida e digitada por alguém.
-const ALPHABET = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-
-function generatePassword(length = 14): string {
-  const bytes = randomBytes(length);
-  return Array.from(bytes, (b) => ALPHABET[b % ALPHABET.length]).join("");
+/**
+ * Senha provisória do admin. Delega para `generateStrongPassword` porque a
+ * gerada antes (só letras e dígitos) não passaria na política que agora vale
+ * para todo mundo — o admin criaria contas com senha que o próprio produto
+ * recusa na troca.
+ */
+function generatePassword(): string {
+  return generateStrongPassword((n) => new Uint8Array(randomBytes(n)));
 }

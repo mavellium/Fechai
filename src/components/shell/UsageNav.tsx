@@ -18,22 +18,27 @@ export function UsageNav({
   limit,
   perConversationCap,
   perConversationUsed,
+  unlimitedTrial,
   collapsed,
   onNavigate,
 }: {
   used: number;
   limit: number;
-  /** Teto de respostas da IA por conversa/mês (limite × 3). */
+  /** Teto de respostas da IA por conversa/mês (padrão do plano, ou limite × 3). */
   perConversationCap: number;
   /** Uso real do teto: respostas da conversa mais ativa neste mês. */
   perConversationUsed: number;
+  /** Trial de uso ilimitado ativo: as cotas abaixo são só informativas. */
+  unlimitedTrial?: boolean;
   collapsed?: boolean;
   onNavigate?: () => void;
 }) {
-  const atLimit = used >= limit;
-  const warning = used >= limit * 0.8;
+  const atLimit = !unlimitedTrial && used >= limit;
+  const warning = !unlimitedTrial && used >= limit * 0.8;
   const pct = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 100;
-  const label = `${used.toLocaleString("pt-BR")}/${limit.toLocaleString("pt-BR")} conversas`;
+  const label = unlimitedTrial
+    ? "Uso ilimitado (trial)"
+    : `${used.toLocaleString("pt-BR")}/${limit.toLocaleString("pt-BR")} conversas`;
   const capLabel = `${perConversationUsed.toLocaleString("pt-BR")}/${perConversationCap.toLocaleString("pt-BR")} respostas/conversa`;
 
   const tone = atLimit
@@ -70,9 +75,12 @@ export function UsageNav({
             aria-hidden
             className="mt-1.5 block h-1 w-full overflow-hidden rounded-full bg-white/10"
           >
-            <span className={cn("block h-full rounded-full", fill)} style={{ width: `${pct}%` }} />
+            <span
+              className={cn("block h-full rounded-full", fill)}
+              style={{ width: `${unlimitedTrial ? 100 : pct}%` }}
+            />
           </span>
-          <span className="mt-1 block truncate text-white/40">{capLabel}</span>
+          {!unlimitedTrial && <span className="mt-1 block truncate text-white/40">{capLabel}</span>}
         </span>
       )}
     </Link>

@@ -30,13 +30,25 @@ export type UsageSummary = {
   perConversationUsed: number;
   /** Próximo plano com cota maior que a atual (recomendação de upgrade). */
   nextPlan: Plan | null;
+  /** Trial de uso ilimitado ativo (`Tenant.trialUnlimitedUntil` no futuro): as
+   *  duas cotas ficam informativas só, o enforcement não bloqueia. */
+  unlimitedTrial: boolean;
+  /** Fim do trial ilimitado, se houver (passado ou futuro). */
+  trialEndsAt: Date | null;
 };
 
 export async function getUsageSummary(tenantId: string): Promise<UsageSummary> {
   const tenant = await prisma.tenant.findUnique({
     where: { id: tenantId },
-    select: { planKey: true, conversationLimitOverride: true, perConversationCapOverride: true },
+    select: {
+      planKey: true,
+      conversationLimitOverride: true,
+      perConversationCapOverride: true,
+      trialUnlimitedUntil: true,
+    },
   });
+
+  const unlimitedTrial = Boolean(tenant?.trialUnlimitedUntil && tenant.trialUnlimitedUntil > new Date());
 
   const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
   const used = await prisma.conversation.count({
@@ -67,12 +79,14 @@ export async function getUsageSummary(tenantId: string): Promise<UsageSummary> {
     used,
     limit,
     plan,
-    atLimit: used >= limit,
+    atLimit: !unlimitedTrial && used >= limit,
     override: tenant?.conversationLimitOverride != null,
-    // Teto por conversa: override próprio do admin, senão deriva do limite
-    // efetivo de conversas (× 3).
-    perConversationCap: tenant?.perConversationCapOverride ?? limit * 3,
+    // Teto por conversa: override próprio do admin, senão o padrão do plano,
+    // senão deriva do limite efetivo de conversas (× 3).
+    perConversationCap: tenant?.perConversationCapOverride ?? plan.perConversationCapDefault ?? limit * 3,
     perConversationUsed,
     nextPlan,
+    unlimitedTrial,
+    trialEndsAt: tenant?.trialUnlimitedUntil ?? null,
   };
 }

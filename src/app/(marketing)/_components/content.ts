@@ -14,7 +14,7 @@ export const PERGUNTAS = [
   },
   {
     q: "Quanto custa o fechai?",
-    a: "O fechai tem plano grátis com 1 agente e 50 conversas por mês, sem cartão de crédito. Os planos pagos começam em R$ 97/mês (Starter, 500 conversas), R$ 247/mês (Pro, 2.000 conversas) e R$ 597/mês (Business, 10.000 conversas).",
+    a: "O fechai tem plano grátis com 1 agente, 7 dias de uso ilimitado e depois 10 conversas por mês, sem cartão de crédito. Os planos pagos são R$ 199/mês (Starter, 1.000 conversas), R$ 399/mês (Pro, 3.000 conversas) e R$ 899/mês (Business, 10.000 conversas).",
   },
   {
     q: "Preciso saber programar?",

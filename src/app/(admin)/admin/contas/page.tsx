@@ -100,6 +100,7 @@ export default async function ContasPage({
                   whatsappStatus={t.whatsappInstance?.status ?? "—"}
                   conversationLimitOverride={t.conversationLimitOverride}
                   perConversationCapOverride={t.perConversationCapOverride}
+                  trialUnlimitedUntil={t.trialUnlimitedUntil ? t.trialUnlimitedUntil.toISOString() : null}
                   isAdminAccount={t.users.some((u) => u.role === "SUPERADMIN")}
                   ownerUserId={t.users.find((u) => u.role === "OWNER")?.id ?? t.users[0]?.id}
                   createdAt={t.createdAt.toLocaleDateString("pt-BR")}

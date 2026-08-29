@@ -178,7 +178,7 @@ export function Sandbox({ agentId }: { agentId?: string } = {}) {
           ref={inputRef}
           placeholder="Escreva como um cliente escreveria..."
           autoComplete="off"
-          disabled={pending}
+          autoFocus
         />
         <Button type="submit" loading={pending} loadingLabel="Aguardando o agente">
           Enviar

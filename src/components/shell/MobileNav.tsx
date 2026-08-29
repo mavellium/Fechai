@@ -32,6 +32,7 @@ export function MobileNav({
     limit: number;
     perConversationCap: number;
     perConversationUsed: number;
+    unlimitedTrial?: boolean;
   } | null;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -93,6 +94,7 @@ export function MobileNav({
                   limit={usage.limit}
                   perConversationCap={usage.perConversationCap}
                   perConversationUsed={usage.perConversationUsed}
+                  unlimitedTrial={usage.unlimitedTrial}
                   onNavigate={() => ref.current?.close()}
                 />
               </div>

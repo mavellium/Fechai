@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { HeroChat } from "../(marketing)/_components/HeroChat";
 import { FadeIn } from "@/components/ui/FadeIn";
-import { requireGuest } from "@/lib/session";
 
 /**
  * As telas de auth são client components, que não podem exportar `metadata` —
@@ -21,10 +20,10 @@ export const metadata: Metadata = {
  * Desktop: split — form à esquerda (paper), demo ao vivo do produto à direita (ink).
  * Mobile: só o form, com o wordmark no topo.
  */
-export default async function AuthLayout({ children }: { children: React.ReactNode }) {
-  // Quem já tem sessão ativa não deve ver /login ou /cadastro de novo.
-  await requireGuest();
-
+export default function AuthLayout({ children }: { children: React.ReactNode }) {
+  // O bloqueio de quem já tem sessão mora no layout de `(guest)`: /login,
+  // /cadastro e /esqueci-senha redirecionam, mas /redefinir-senha não pode —
+  // o link do e-mail costuma ser aberto com a sessão antiga ainda de pé.
   return (
     <div className="grid min-h-screen bg-paper lg:grid-cols-[1fr_1.05fr]">
       {/* Coluna do formulário */}
@@ -33,7 +32,9 @@ export default async function AuthLayout({ children }: { children: React.ReactNo
           fechai<span className="text-signal">.</span>
         </Link>
         <div className="flex flex-1 items-center justify-center py-10">
-          <FadeIn className="w-full max-w-sm">{children}</FadeIn>
+          {/* `max-w-md` (e não `sm`): o cadastro virou um wizard com pares de
+              campos lado a lado — em 384px eles ficavam espremidos demais. */}
+          <FadeIn className="w-full max-w-md">{children}</FadeIn>
         </div>
         <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-neutral">
           atendimento com ia · 24/7

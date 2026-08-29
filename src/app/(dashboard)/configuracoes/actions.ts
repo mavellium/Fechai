@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
+import { strongPassword } from "@/lib/password-schema";
 import { createFeedback } from "@/modules/feedback/service";
 
 const schema = z.object({
@@ -52,7 +53,9 @@ export async function updateProfile(_prev: Result | null, formData: FormData): P
 const passwordSchema = z
   .object({
     currentPassword: z.string().min(1, "Informe a senha atual"),
-    newPassword: z.string().min(6, "Mínimo de 6 caracteres"),
+    // Mesma política do cadastro (lib/password): senha NOVA nasce sob a regra
+    // nova, mesmo que a atual seja de antes dela.
+    newPassword: strongPassword(),
     confirmPassword: z.string().min(1, "Confirme a nova senha"),
   })
   .refine((d) => d.newPassword === d.confirmPassword, {

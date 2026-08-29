@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmButton } from "@/components/ui/confirm-dialog";
 import { Select } from "@/components/ui/select";
-import { suspendTenant, changePlan, setTenantUsageLimit, impersonateUser } from "../../actions";
+import { suspendTenant, changePlan, setTenantUsageLimit, setTenantTrial, impersonateUser } from "../../actions";
 
 type Props = {
   id: string;
@@ -20,6 +20,8 @@ type Props = {
   conversationLimitOverride: number | null;
   /** Teto de respostas da IA por conversa fixado fora do padrão (null = limite × 3). */
   perConversationCapOverride: number | null;
+  /** Fim do trial de uso ilimitado (ISO), ou null = sem trial ativo. */
+  trialUnlimitedUntil: string | null;
   /** Tenant que contém um SUPERADMIN — conta de plataforma, não cliente. */
   isAdminAccount?: boolean;
   /** Usuário usado ao clicar em "Ver como" (dono da conta). */
@@ -41,7 +43,11 @@ export function TenantRow(t: Props) {
     String(t.conversationLimitOverride ?? planOf(t.planKey).conversationsPerMonth),
   );
   const [capInput, setCapInput] = useState<string>(
-    String(t.perConversationCapOverride ?? planOf(t.planKey).conversationsPerMonth * 3),
+    String(
+      t.perConversationCapOverride ??
+        planOf(t.planKey).perConversationCapDefault ??
+        planOf(t.planKey).conversationsPerMonth * 3,
+    ),
   );
   const suspended = t.status === "suspended";
   const planDirty = plan !== t.planKey;
@@ -56,13 +62,19 @@ export function TenantRow(t: Props) {
   }
 
   const planDefault = planOf(t.planKey).conversationsPerMonth;
-  const capDefault = planDefault * 3;
+  const capDefault = planOf(t.planKey).perConversationCapDefault ?? planDefault * 3;
   const limitValue = Math.trunc(Number(limitInput));
   const limitDirty =
     !Number.isInteger(limitValue) || limitValue < 0 || limitValue !== (t.conversationLimitOverride ?? planDefault);
   const capValue = Math.trunc(Number(capInput));
   const capDirty =
     !Number.isInteger(capValue) || capValue < 0 || capValue !== (t.perConversationCapOverride ?? capDefault);
+
+  const trialUntil = t.trialUnlimitedUntil ? new Date(t.trialUnlimitedUntil) : null;
+  const trialActive = Boolean(trialUntil && trialUntil > new Date());
+  const trialDaysLeft = trialActive
+    ? Math.ceil((trialUntil!.getTime() - new Date().getTime()) / 86_400_000)
+    : 0;
 
   function saveLimits() {
     if (limitDirty || capDirty) return;
@@ -203,6 +215,35 @@ export function TenantRow(t: Props) {
             </>
           )}
         </p>
+
+        {/* Trial de uso ilimitado: enquanto ativo, as duas cotas acima viram
+            informativas — o enforcement (runAgentTurn) não bloqueia. */}
+        <div className="mt-2 flex items-center gap-1.5">
+          {trialActive ? (
+            <>
+              <Badge tone="signal">
+                ilimitado · {trialDaysLeft} dia{trialDaysLeft === 1 ? "" : "s"}
+              </Badge>
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() => start(() => setTenantTrial(t.id, null))}
+                className="font-mono text-micro uppercase tracking-wide text-white/55 underline underline-offset-2 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris"
+              >
+                encerrar
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => start(() => setTenantTrial(t.id, 7))}
+              className="font-mono text-micro uppercase tracking-wide text-white/55 underline underline-offset-2 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris"
+            >
+              dar 7 dias ilimitado
+            </button>
+          )}
+        </div>
       </td>
 
       <td className="px-4 py-4">

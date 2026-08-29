@@ -63,6 +63,10 @@ function UsageCard({ usage }: { usage: UsageSummary }) {
       : 100;
   const capBarTone = capAt ? "bg-danger" : capPct >= 80 ? "bg-warn" : "bg-iris";
 
+  const trialDaysLeft = usage.trialEndsAt
+    ? Math.max(1, Math.ceil((usage.trialEndsAt.getTime() - new Date().getTime()) / 86_400_000))
+    : 0;
+
   return (
     <Card>
       <CardTitle
@@ -70,17 +74,27 @@ function UsageCard({ usage }: { usage: UsageSummary }) {
         action={
           <span
             className={`font-mono text-micro uppercase tracking-[0.15em] ${
-              usage.atLimit ? "text-danger" : "text-white/60"
+              usage.unlimitedTrial ? "text-signal" : usage.atLimit ? "text-danger" : "text-white/60"
             }`}
           >
-            {usage.atLimit
-              ? "limite atingido"
-              : `${usage.used.toLocaleString("pt-BR")} de ${usage.limit.toLocaleString("pt-BR")}`}
+            {usage.unlimitedTrial
+              ? `ilimitado · ${trialDaysLeft} dia${trialDaysLeft === 1 ? "" : "s"}`
+              : usage.atLimit
+                ? "limite atingido"
+                : `${usage.used.toLocaleString("pt-BR")} de ${usage.limit.toLocaleString("pt-BR")}`}
           </span>
         }
       >
         Uso atual
       </CardTitle>
+
+      {usage.unlimitedTrial && (
+        <p className="mb-5 text-sm leading-relaxed text-white/85">
+          Sua conta está em período de teste ilimitado até{" "}
+          {usage.trialEndsAt?.toLocaleDateString("pt-BR")} — a IA responde sem checar as cotas
+          abaixo. Depois disso, o plano {usage.plan.name} volta a valer normalmente.
+        </p>
+      )}
 
       <div className="grid gap-5 sm:grid-cols-2 sm:gap-8">
         {/* Cota da conta: conversas/mês */}

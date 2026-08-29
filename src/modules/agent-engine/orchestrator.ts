@@ -94,7 +94,7 @@ export async function runAgentTurn(input: {
         createdAt: { gte: monthStart },
       },
     });
-    if (aiRepliesThisConversation >= usage.perConversationCap) {
+    if (!usage.unlimitedTrial && aiRepliesThisConversation >= usage.perConversationCap) {
       await prisma.conversation
         .update({ where: { id: conversationId }, data: { needsHuman: true } })
         .catch(() => {});

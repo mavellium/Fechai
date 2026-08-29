@@ -53,6 +53,7 @@ export function Sidebar({
     limit: number;
     perConversationCap: number;
     perConversationUsed: number;
+    unlimitedTrial?: boolean;
   } | null;
 }) {
   const collapsed = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
@@ -90,6 +91,7 @@ export function Sidebar({
             limit={usage.limit}
             perConversationCap={usage.perConversationCap}
             perConversationUsed={usage.perConversationUsed}
+            unlimitedTrial={usage.unlimitedTrial}
             collapsed={collapsed}
           />
         </div>
