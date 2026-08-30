@@ -1,6 +1,8 @@
+import { Suspense } from "react";
 import { Navbar } from "./_components/Navbar";
 import { Footer } from "./_components/Footer";
 import { ScrollProgress } from "./_components/ScrollProgress";
+import { ReferralTracker } from "./_components/ReferralTracker";
 import { OrganizationJsonLd } from "@/components/seo/JsonLd";
 
 export default function MarketingLayout({ children }: { children: React.ReactNode }) {
@@ -8,6 +10,11 @@ export default function MarketingLayout({ children }: { children: React.ReactNod
     <div className="flex min-h-screen flex-col bg-ink">
       {/* Entidade da marca: vale para todas as páginas públicas. */}
       <OrganizationJsonLd />
+      {/* `useSearchParams` obriga um limite de Suspense; o componente não
+          renderiza nada, então o fallback é vazio. */}
+      <Suspense fallback={null}>
+        <ReferralTracker />
+      </Suspense>
       <ScrollProgress />
       <Navbar />
       <main id="conteudo" className="flex-1">

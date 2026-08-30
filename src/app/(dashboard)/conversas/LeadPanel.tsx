@@ -3,6 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button";
 import { dateTimeLabel, phoneLabel, relativeTime, waLink } from "@/lib/format";
 import { leadStatusLabel } from "./leadStatus";
+import { ConversationSummary } from "./ConversationSummary";
 import { ResolveButton } from "./ResolveButton";
 
 export type LeadPanelData = {
@@ -15,6 +16,9 @@ export type LeadPanelData = {
   agent: { name: string } | null;
   lead: { name: string | null; phone: string; status: string; createdAt: Date };
   messageCount: number;
+  summary: string | null;
+  summaryAt: Date | null;
+  summaryMsgCount: number | null;
 };
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
@@ -51,6 +55,18 @@ export function LeadPanel({ conversation }: { conversation: LeadPanelData }) {
           {conversation.needsHuman && <Badge tone="danger">precisa de você</Badge>}
         </div>
       </div>
+
+      {/* Antes das linhas de dados por escolha: quem abre uma conversa quer
+          primeiro saber o que rolou nela, e só depois telefone e datas. */}
+      <ConversationSummary
+        conversationId={conversation.id}
+        state={{
+          summary: conversation.summary,
+          summaryAt: conversation.summaryAt,
+          summaryMsgCount: conversation.summaryMsgCount,
+          messageCount: conversation.messageCount,
+        }}
+      />
 
       <dl>
         <Row label="Telefone">

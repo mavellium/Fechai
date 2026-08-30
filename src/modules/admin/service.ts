@@ -41,34 +41,25 @@ export async function adminSetPlan(tenantId: string, planKey: PlanKey) {
 }
 
 /**
- * Fixa limites fora do padrão do plano (override) ou restaura o padrão com
- * `null`. O admin altera as duas cotas independentes: conversas/mês da conta e
- * o teto de respostas da IA por conversa. É o "alterar o limite da conta".
+ * Fixa a cota de mensagens/mês fora do padrão do plano (override), ou restaura
+ * o padrão com `null`. É o "alterar o limite da conta" — agora uma cota só, em
+ * mensagens (a cota de conversas e o teto por conversa deixaram de existir).
  */
-export async function adminSetUsageLimit(
-  tenantId: string,
-  limit: number | null,
-  perConversationCap?: number | null,
-) {
+export async function adminSetUsageLimit(tenantId: string, limit: number | null) {
   await prisma.tenant.update({
     where: { id: tenantId },
-    data: {
-      conversationLimitOverride: limit,
-      ...(perConversationCap === undefined
-        ? {}
-        : { perConversationCapOverride: perConversationCap }),
-    },
+    data: { messageLimitOverride: limit },
   });
 }
 
 /**
- * Fixa (ou limpa, com `null`) o fim do trial de uso ilimitado da conta.
- * Enquanto a data estiver no futuro, `runAgentTurn` pula as duas cotas
- * inteiras — usado pro trial de 7 dias do plano grátis (ver provision.ts),
- * mas o admin pode estender/encurtar/zerar em qualquer plano.
+ * Fixa (ou encerra, com `null`) o fim do período de teste da conta. Passada a
+ * data, `runAgentTurn` cala a IA até a pessoa assinar — o painel segue
+ * acessível. É como o admin dá mais alguns dias a quem pediu, ou corta o teste
+ * na hora.
  */
-export async function adminSetTrialUnlimitedUntil(tenantId: string, until: Date | null) {
-  await prisma.tenant.update({ where: { id: tenantId }, data: { trialUnlimitedUntil: until } });
+export async function adminSetTrialEndsAt(tenantId: string, endsAt: Date | null) {
+  await prisma.tenant.update({ where: { id: tenantId }, data: { trialEndsAt: endsAt } });
 }
 
 /**

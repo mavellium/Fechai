@@ -6,7 +6,7 @@ Provisiona novos tenants (contas) do SaaS. Um tenant = um negócio isolado por `
 
 ## Arquivos
 
-- `provision.ts` — `createTenantWithOwner()`: cria Tenant + User dono + `AgentConfig` vazio + `WhatsappInstance` (disconnected) + `TenantAction`s padrão (todas `off`), numa transação. Exporta `DEFAULT_ACTION_KEYS`. Tenant `FREE` nasce com `trialUnlimitedUntil` = hoje + `FREE_TRIAL_DAYS` (7). O `lead?` opcional carrega a qualificação vinda do `/cadastro` (ver abaixo).
+- `provision.ts` — `createTenantWithOwner()`: cria Tenant + User dono + `AgentConfig` vazio + `WhatsappInstance` (disconnected) + `TenantAction`s padrão (todas `off`), numa transação. Exporta `DEFAULT_ACTION_KEYS`. Conta criada num plano com `trialDays` (hoje só o `FREE`) nasce com `trialEndsAt` = agora + `trialDays` — a duração vem do plano, não de uma constante local. Ver `modules/billing/README.md` para o que acontece quando o período acaba. O `lead?` opcional carrega a qualificação vinda do `/cadastro` (ver abaixo).
 - `onboarding.ts` — `getOnboardingSteps()`: checklist de progresso exibido em `/inicio`, derivado do estado real no banco. **Não** é o wizard.
 - `onboarding-wizard.ts` — domínio do wizard guiado de `/onboarding` (catálogo de passos, opções de tom/objetivo, catálogo de processos, validação por passo e tradução das respostas para persona + automações).
 

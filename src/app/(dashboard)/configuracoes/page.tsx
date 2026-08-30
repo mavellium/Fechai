@@ -6,7 +6,9 @@ import { getUsageSummary, type UsageSummary } from "@/modules/billing/usage";
 import { ButtonLink } from "@/components/ui/button";
 import { Card, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { getAccountRoles, isAffiliateOnly } from "@/modules/affiliates/roles";
 import { ProfileForm } from "./ProfileForm";
+import { RolesForm } from "./RolesForm";
 import { PasswordForm } from "./PasswordForm";
 import { FeedbackForm } from "./FeedbackForm";
 
@@ -56,30 +58,19 @@ function UsageCard({ usage }: { usage: UsageSummary }) {
   const pct = usage.limit > 0 ? Math.min(100, Math.round((usage.used / usage.limit) * 100)) : 100;
   const barTone = usage.atLimit ? "bg-danger" : pct >= 80 ? "bg-warn" : "bg-iris";
 
-  const capAt = usage.perConversationUsed >= usage.perConversationCap;
-  const capPct =
-    usage.perConversationCap > 0
-      ? Math.min(100, Math.round((usage.perConversationUsed / usage.perConversationCap) * 100))
-      : 100;
-  const capBarTone = capAt ? "bg-danger" : capPct >= 80 ? "bg-warn" : "bg-iris";
-
-  const trialDaysLeft = usage.trialEndsAt
-    ? Math.max(1, Math.ceil((usage.trialEndsAt.getTime() - new Date().getTime()) / 86_400_000))
-    : 0;
-
   return (
     <Card>
       <CardTitle
-        hint="Como sua conta consome o plano neste mês. O chat de teste não conta."
+        hint="Mensagens que a IA respondeu neste mês. O chat de teste não conta."
         action={
           <span
             className={`font-mono text-micro uppercase tracking-[0.15em] ${
-              usage.unlimitedTrial ? "text-signal" : usage.atLimit ? "text-danger" : "text-white/60"
+              usage.atLimit ? "text-danger" : "text-white/60"
             }`}
           >
-            {usage.unlimitedTrial
-              ? `ilimitado · ${trialDaysLeft} dia${trialDaysLeft === 1 ? "" : "s"}`
-              : usage.atLimit
+            {usage.trialExpired
+              ? "teste encerrado"
+              : usage.outOfMessages
                 ? "limite atingido"
                 : `${usage.used.toLocaleString("pt-BR")} de ${usage.limit.toLocaleString("pt-BR")}`}
           </span>
@@ -88,112 +79,79 @@ function UsageCard({ usage }: { usage: UsageSummary }) {
         Uso atual
       </CardTitle>
 
-      {usage.unlimitedTrial && (
-        <p className="mb-5 text-sm leading-relaxed text-white/85">
-          Sua conta está em período de teste ilimitado até{" "}
-          {usage.trialEndsAt?.toLocaleDateString("pt-BR")} — a IA responde sem checar as cotas
-          abaixo. Depois disso, o plano {usage.plan.name} volta a valer normalmente.
+      {/* Teste em andamento: o prazo pode acabar antes da cota, então ele vem
+          antes do número — é a informação que decide o que a pessoa faz agora. */}
+      {usage.isTrial && !usage.trialExpired && (
+        <p className="mb-4 rounded-surface border border-white/10 bg-white/5 px-4 py-3 text-sm leading-relaxed text-white/85">
+          Você está no período de teste: faltam{" "}
+          <strong className="font-semibold text-white">
+            {usage.trialDaysLeft} dia{usage.trialDaysLeft === 1 ? "" : "s"}
+          </strong>
+          {usage.trialEndsAt && <> (até {usage.trialEndsAt.toLocaleDateString("pt-BR")})</>}. Quando
+          o prazo acabar, a IA para de responder e você escolhe um plano para continuar — seus
+          contatos e conversas ficam salvos.
         </p>
       )}
 
-      <div className="grid gap-5 sm:grid-cols-2 sm:gap-8">
-        {/* Cota da conta: conversas/mês */}
-        <div>
-          <p className="font-mono text-micro uppercase tracking-[0.15em] text-white/55">
-            Cota da conta · conversas
+      <div>
+        <p className="font-mono text-micro uppercase tracking-[0.15em] text-white/55">
+          Mensagens da IA · este mês
+        </p>
+        <div className="mt-2 flex items-baseline justify-between gap-2">
+          <p className="font-display text-lg font-semibold text-white">
+            {usage.used.toLocaleString("pt-BR")}
+            <span className="text-white/55"> de {usage.limit.toLocaleString("pt-BR")}</span>
           </p>
-          <div className="mt-2 flex items-baseline justify-between gap-2">
-            <p className="font-display text-lg font-semibold text-white">
-              {usage.used.toLocaleString("pt-BR")}
-              <span className="text-white/55"> de {usage.limit.toLocaleString("pt-BR")}</span>
-            </p>
-            <span
-              className={`font-mono text-micro uppercase tracking-[0.15em] ${
-                usage.atLimit ? "text-danger" : "text-white/45"
-              }`}
-            >
-              {pct}%
-            </span>
-          </div>
-          <div aria-hidden className="mt-2 h-2 w-full overflow-hidden rounded-full bg-white/10">
-            <div className={`h-full rounded-full ${barTone}`} style={{ width: `${pct}%` }} />
-          </div>
-          <p className="mt-2 text-sm leading-relaxed text-white/85">
-            {usage.atLimit ? (
-              <>
-                Você chegou ao limite de {usage.limit.toLocaleString("pt-BR")} conversas do plano{" "}
-                {usage.plan.name} neste mês. A IA parou de responder automaticamente — as novas
-                mensagens ficam registradas em Conversas, marcadas como “precisa de você”.
-              </>
-            ) : (
-              <>
-                Você usou {pct}% da cota do plano {usage.plan.name} neste mês.
-                {usage.override && " (limite definido pelo suporte)"}
-              </>
-            )}
-          </p>
+          <span
+            className={`font-mono text-micro uppercase tracking-[0.15em] ${
+              usage.outOfMessages ? "text-danger" : "text-white/45"
+            }`}
+          >
+            {pct}%
+          </span>
+        </div>
+        <div aria-hidden className="mt-2 h-2 w-full overflow-hidden rounded-full bg-white/10">
+          <div className={`h-full rounded-full ${barTone}`} style={{ width: `${pct}%` }} />
+        </div>
 
-          {usage.atLimit ? (
-            usage.nextPlan ? (
-              <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-surface border border-white/10 bg-white/5 p-4">
-                <p className="text-sm text-white/75">
-                  O plano{" "}
-                  <span className="font-medium text-white">{usage.nextPlan.name}</span> oferece{" "}
-                  {usage.nextPlan.conversationsPerMonth.toLocaleString("pt-BR")} conversas/mês.
-                </p>
-                <ButtonLink href="/planos" size="sm">
-                  Ver planos
-                </ButtonLink>
-              </div>
-            ) : (
-              <p className="mt-3 text-sm text-white/55">
-                Você está no plano máximo. Fale com o suporte para aumentar o limite.
+        <p className="mt-2 text-sm leading-relaxed text-white/85">
+          {usage.trialExpired ? (
+            <>
+              Seu período de teste terminou e a IA parou de responder. As novas mensagens continuam
+              chegando em Conversas, marcadas como “precisa de você”, e você pode responder à mão —
+              escolha um plano para o agente voltar a atender sozinho.
+            </>
+          ) : usage.outOfMessages ? (
+            <>
+              Você chegou às {usage.limit.toLocaleString("pt-BR")} mensagens do plano{" "}
+              {usage.plan.name} neste mês. A IA parou de responder automaticamente — as novas
+              mensagens ficam registradas em Conversas, marcadas como “precisa de você”.
+            </>
+          ) : (
+            <>
+              Você usou {pct}% das mensagens do plano {usage.plan.name} neste mês.
+              {usage.override && " (limite definido pelo suporte)"}
+            </>
+          )}
+        </p>
+
+        {usage.atLimit ? (
+          usage.nextPlan ? (
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-surface border border-white/10 bg-white/5 p-4">
+              <p className="text-sm text-white/75">
+                O plano <span className="font-medium text-white">{usage.nextPlan.name}</span>{" "}
+                oferece {usage.nextPlan.messagesPerMonth.toLocaleString("pt-BR")} mensagens/mês.
               </p>
-            )
-          ) : null}
-        </div>
-
-        {/* Teto por conversa: respostas da IA/mês */}
-        <div className="sm:border-l sm:border-white/10 sm:pl-8">
-          <p className="font-mono text-micro uppercase tracking-[0.15em] text-white/55">
-            Teto por conversa · respostas
-          </p>
-          <div className="mt-2 flex items-baseline justify-between gap-2">
-            <p className="font-display text-lg font-semibold text-white">
-              {usage.perConversationUsed.toLocaleString("pt-BR")}
-              <span className="text-white/55">
-                {" "}
-                de {usage.perConversationCap.toLocaleString("pt-BR")}
-              </span>
+              <ButtonLink href="/planos" size="sm">
+                Ver planos
+              </ButtonLink>
+            </div>
+          ) : (
+            <p className="mt-3 text-sm text-white/55">
+              Você está no plano máximo. Fale com o suporte para aumentar o limite.
             </p>
-            <span
-              className={`font-mono text-micro uppercase tracking-[0.15em] ${
-                capAt ? "text-danger" : "text-white/45"
-              }`}
-            >
-              {capAt ? "conversa no teto" : "conversa mais ativa"}
-            </span>
-          </div>
-          <div aria-hidden className="mt-2 h-2 w-full overflow-hidden rounded-full bg-white/10">
-            <div className={`h-full rounded-full ${capBarTone}`} style={{ width: `${capPct}%` }} />
-          </div>
-          <p className="mt-2 text-sm leading-relaxed text-white/85">
-            {capAt ? (
-              <>
-                A conversa mais ativa atingiu o teto de{" "}
-                {usage.perConversationCap.toLocaleString("pt-BR")} respostas e a IA ficou muda
-                nela — as demais continuam atendendo normalmente.
-              </>
-            ) : (
-              <>
-                A conversa mais ativa usou{" "}
-                {usage.perConversationUsed.toLocaleString("pt-BR")} das{" "}
-                {usage.perConversationCap.toLocaleString("pt-BR")} respostas permitidas por
-                conversa neste mês. Passou do teto, a IA fica muda só nessa conversa.
-              </>
-            )}
-          </p>
-        </div>
+          )
+        ) : null}
       </div>
     </Card>
   );
@@ -204,15 +162,20 @@ export default async function ConfiguracoesPage() {
 
   // Direto do banco, não da sessão: o nome no JWT só atualiza no próximo
   // login, então relendo aqui o formulário sempre mostra o valor salvo.
+  const roles = await getAccountRoles(session.user.id);
+  const affiliateOnly = isAffiliateOnly(roles);
+
+  // Cota e checklist de configuração medem o agente: para quem só afilia são
+  // perguntas sem objeto, e nem chegam a ser consultadas.
   const [user, checks, usage] = await Promise.all([
     prisma.user.findUniqueOrThrow({
       where: { id: session.user.id },
       select: { name: true, email: true },
     }),
-    tenantChecks(tenantId),
-    getUsageSummary(tenantId),
+    affiliateOnly ? null : tenantChecks(tenantId),
+    affiliateOnly ? null : getUsageSummary(tenantId),
   ]);
-  const pending = checks.filter((c) => !c.ok).length;
+  const pending = checks ? checks.filter((c) => !c.ok).length : 0;
 
   return (
     <div className="mx-auto w-full max-w-6xl space-y-6">
@@ -223,7 +186,7 @@ export default async function ConfiguracoesPage() {
         className="mb-2"
       />
 
-      <UsageCard usage={usage} />
+      {usage && <UsageCard usage={usage} />}
 
       {/*
         Mesmo grid de /inicio: coluna principal (2/3) para o que se edita,
@@ -241,9 +204,17 @@ export default async function ConfiguracoesPage() {
             <CardTitle hint="Recomendado a cada alguns meses.">Senha</CardTitle>
             <PasswordForm />
           </Card>
+
+          <Card>
+            <CardTitle hint="Define o que aparece no menu. Você pode marcar as duas.">
+              Como você usa o fechai
+            </CardTitle>
+            <RolesForm usesProduct={roles.usesProduct} isAffiliate={roles.isAffiliate} />
+          </Card>
         </div>
 
         <div className="space-y-6">
+          {checks && (
           <Card>
             <CardTitle
               hint="Complete todos para o agente funcionar 100%."
@@ -261,6 +232,7 @@ export default async function ConfiguracoesPage() {
               ))}
             </ul>
           </Card>
+          )}
 
           <Card>
             <CardTitle hint="Sua opinião ajuda a melhorar o produto.">Enviar feedback</CardTitle>

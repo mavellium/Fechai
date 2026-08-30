@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { Menu, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ShellNav, type NavItem } from "./ShellNav";
-import { UsageNav } from "./UsageNav";
+import { UsageNav, type UsageNavData } from "./UsageNav";
 
 /**
  * Navegação do painel no celular.
@@ -27,13 +27,7 @@ export function MobileNav({
   title: string;
   subtitle?: string;
   /** Uso de conversas do mês; sem ele, o indicador não aparece na gaveta. */
-  usage?: {
-    used: number;
-    limit: number;
-    perConversationCap: number;
-    perConversationUsed: number;
-    unlimitedTrial?: boolean;
-  } | null;
+  usage?: UsageNavData | null;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const pathname = usePathname();
@@ -90,11 +84,7 @@ export function MobileNav({
             {usage && (
               <div className="mt-1 border-t border-white/10 pt-3">
                 <UsageNav
-                  used={usage.used}
-                  limit={usage.limit}
-                  perConversationCap={usage.perConversationCap}
-                  perConversationUsed={usage.perConversationUsed}
-                  unlimitedTrial={usage.unlimitedTrial}
+                  {...usage}
                   onNavigate={() => ref.current?.close()}
                 />
               </div>

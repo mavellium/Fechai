@@ -6,11 +6,19 @@ Planos do SaaS e cobrança via Stripe (modo teste no MVP). Fluxo grátis não us
 
 ## Arquivos
 
-- `plans.ts` — fonte única dos planos (`PLANS`, `PLAN_BY_KEY`). Usado na landing, na seleção de plano e no checkout. Cada plano define `conversationsPerMonth` (cota da conta) **e** `perConversationCapDefault` (teto numa única conversa): os dois são fixos, nenhum derivado do outro. Tabela atual: Grátis R$ 0 · 10 conv · 100 resp · 1 agente · 2 ações · 7 dias ilimitado; Starter R$ 199 · 1.000 conv · 150 resp · 3 agentes · 3 ações; Pro R$ 399 · 3.000 conv · 200 resp · 5 agentes · todas as ações; Business R$ 899 · 10.000 conv · 300 resp · 10 agentes · todas as ações.
-- `usage.ts` — `getUsageSummary(tenantId)`: conversas reais (não teste) com atividade no mês corrente vs. o limite efetivo (override do admin ou o teto do plano), além do teto por conversa (`perConversationCap` = override próprio do admin, senão `perConversationCapDefault` do plano; o fallback `limite × 3` só sobrou para um plano futuro que entre sem o campo) e seu uso real (`perConversationUsed` = respostas da conversa mais ativa no mês). Também resolve o trial de uso ilimitado (`unlimitedTrial`, `trialEndsAt`) a partir de `Tenant.trialUnlimitedUntil`. Alimenta o enforcement (`runAgentTurn`), o indicador da navegação e o card "Uso atual" de /configuracoes.
+- `plans.ts` — fonte única dos planos (`PLANS`, `PLAN_BY_KEY`). Usado na landing, na seleção de plano e no checkout. Tabela atual:
+
+  | Plano | Preço | Mensagens/mês | Agentes | Ações | Teste |
+  |---|---|---|---|---|---|
+  | Grátis | R$ 0 | 100 | 1 | 2 | 7 dias |
+  | Starter | R$ 199 | 3.000 | 3 | 3 | — |
+  | Pro | R$ 399 | 9.000 | 5 | todas | — |
+  | Business | R$ 899 | 30.000 | 10 | todas | — |
+
+- `usage.ts` — `getUsageSummary(tenantId)`: respostas da IA no mês corrente (conversas reais; sandbox fora) vs. a cota efetiva (`messageLimitOverride` do admin, senão `messagesPerMonth` do plano). Resolve também o período de teste (`isTrial`, `trialEndsAt`, `trialExpired`, `trialDaysLeft`) a partir de `Tenant.trialEndsAt`, e devolve `atLimit` já combinando as duas travas. Alimenta o enforcement (`runAgentTurn`), o `HealthStrip` da home, o indicador da navegação e o card "Uso atual" de /configuracoes.
 - `stripe.ts` — `getStripe()` (lazy) e `isStripeConfigured()`.
 - `checkout.ts` — `createCheckoutSession()` com `price_data` inline (ver ADR-002).
-- `service.ts` — `setTenantPlan()` (idempotente) e `isValidPlan()`. Overrides de limite moram em `modules/admin/service.ts` (`adminSetUsageLimit`) e nos campos `Tenant.conversationLimitOverride` e `Tenant.perConversationCapOverride`. O trial ilimitado usa `adminSetTrialUnlimitedUntil` e `Tenant.trialUnlimitedUntil`.
+- `service.ts` — `setTenantPlan()` (idempotente, e sincroniza `trialEndsAt` com o plano) e `isValidPlan()`. O override de cota mora em `modules/admin/service.ts` (`adminSetUsageLimit` → `Tenant.messageLimitOverride`); o período de teste, em `adminSetTrialEndsAt` → `Tenant.trialEndsAt`.
 
 ## Contratos expostos
 
@@ -29,23 +37,31 @@ Rotas: `POST /api/checkout` (cria sessão), `POST /api/plan/free` (grátis), `PO
 
 ## Enforcement de uso
 
-A cota de conversas/mês é aplicada em `runAgentTurn` (orchestrator): com `used >= limit`,
-a mensagem fica registrada, a conversa sobe para "precisa de você" e a IA fica em
-silêncio (`TurnStatus = "limit_reached"`). WhatsApp não envia nada; o widget responde um
+**Uma cota só: mensagens.** `used` conta as respostas da IA (`role: "assistant"`,
+`sentBy: "agent"`) desde o dia 1 do mês, em conversas reais. Com `used >= limit`,
+`runAgentTurn` registra a mensagem do contato, sobe a conversa para "precisa de você" e
+cala a IA (`TurnStatus = "limit_reached"`). WhatsApp não envia nada; o widget responde um
 aviso curto; o sandbox passa `skipUsageCheck: true` (testar não é atendimento). Respostas
 manuais (`sendManualReply`) nunca são bloqueadas.
 
-Há também um teto **por conversa** (`perConversationCap`): por padrão é o `perConversationCapDefault`
-do plano (todos os planos definem o seu), mas o admin pode fixar um override
-próprio (`perConversationCapOverride`) — as duas cotas ficam independentes. A cota da conta é
-por conversa, então sem esse teto um único chat usaria o LLM à vontade. Estourar o teto cala a
-IA só naquela conversa (mesmo `limit_reached`); as demais seguem atendendo.
+> Antes eram **duas** cotas — conversas/mês e um teto por conversa — e nenhuma media o que
+> custa: uma conversa pode ter 2 ou 200 respostas, e quem consome LLM é a resposta. Contar
+> mensagem é contar a coisa certa, e uma cota só é uma cota que o cliente entende. Os campos
+> `conversationLimitOverride` / `perConversationCapOverride` deram lugar a
+> `messageLimitOverride`.
 
-### Trial de uso ilimitado
+### Período de teste (plano grátis)
 
-Todo tenant FREE nasce com `Tenant.trialUnlimitedUntil` = agora + 7 dias (`FREE_TRIAL_DAYS` em
-`modules/tenants/provision.ts`). Enquanto essa data estiver no futuro, `getUsageSummary` retorna
-`unlimitedTrial: true` e `runAgentTurn` pula as duas checagens de cota inteiras — a IA responde
-sem limite, e "Uso atual" (/configuracoes) e o indicador da navegação mostram um estado
-"ilimitado · N dias" no lugar da barra normal. O superadmin ajusta isso por conta em
-/admin/contas (`setTenantTrial` → `adminSetTrialUnlimitedUntil`), em qualquer plano — não só FREE.
+O FREE é um **teste por tempo**, não um plano permanente: `Plan.trialDays = 7`. Toda conta
+criada num plano com `trialDays` nasce com `Tenant.trialEndsAt = agora + trialDays`
+(`createTenantWithOwner`). A conta responde até **100 mensagens E até a data** — acaba o que
+vier primeiro (`atLimit = outOfMessages || trialExpired`).
+
+Passada a data, a IA para e **só volta assinando** — mas o painel continua aberto: a pessoa vê
+conversas, leads e histórico e pode responder à mão. Bloquear o painel inteiro tiraria dela os
+próprios leads já captados, o que não converte, irrita.
+
+`setTenantPlan` mantém a data coerente com o plano: assinar um plano pago limpa `trialEndsAt`
+(senão um trial vencido pendurado calaria a IA de quem acabou de pagar); voltar para um plano de
+teste reabre a janela a partir de agora. O superadmin estende ou encerra por conta em
+/admin/contas (`setTenantTrial` → `adminSetTrialEndsAt`).

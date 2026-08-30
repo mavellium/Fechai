@@ -124,10 +124,24 @@ export default async function ContatosPage({
                       {lead.phone}
                     </p>
                   </div>
-                  {last && (
-                    <p className="line-clamp-2 text-sm leading-snug text-neutral panel:text-white/60">
-                      {last.content}
-                    </p>
+                  {conv.summary ? (
+                    // O resumo ganha do "última mensagem" quando existe: numa
+                    // conversa longa, a última mensagem sozinha ("ok, obrigado")
+                    // não diz nada sobre o que o cliente quer.
+                    <div>
+                      <p className="font-mono text-micro uppercase tracking-[0.15em] text-neutral panel:text-white/50">
+                        Resumo
+                      </p>
+                      <p className="mt-1 line-clamp-3 whitespace-pre-line text-sm leading-snug text-neutral panel:text-white/60">
+                        {conv.summary}
+                      </p>
+                    </div>
+                  ) : (
+                    last && (
+                      <p className="line-clamp-2 text-sm leading-snug text-neutral panel:text-white/60">
+                        {last.content}
+                      </p>
+                    )
                   )}
                   <div className="mt-auto flex flex-wrap items-center gap-2">
                     <ButtonLink variant="outline" size="sm" href={`/conversas?id=${conv.id}`}>
@@ -166,6 +180,7 @@ export default async function ContatosPage({
               {leads.map((lead) => {
                 const status = STATUS_LABEL[lead.status] ?? { label: lead.status, tone: "neutral" as const };
                 const last = lead.conversation?.messages[0];
+                const summary = lead.conversation?.summary ?? null;
                 const contact: ContactRef = {
                   id: lead.id,
                   name: lead.name ?? "",
@@ -187,10 +202,16 @@ export default async function ContatosPage({
                       <p className="mt-0.5 font-mono text-micro text-neutral panel:text-white/50">
                         {lead.phone}
                       </p>
-                      {last && (
-                        <p className="mt-1 truncate text-sm text-neutral panel:text-white/60">
-                          {last.content}
+                      {summary ? (
+                        <p className="mt-1 line-clamp-2 whitespace-pre-line text-sm leading-snug text-neutral panel:text-white/60">
+                          {summary}
                         </p>
+                      ) : (
+                        last && (
+                          <p className="mt-1 truncate text-sm text-neutral panel:text-white/60">
+                            {last.content}
+                          </p>
+                        )
                       )}
                     </div>
 

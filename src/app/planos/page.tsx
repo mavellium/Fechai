@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { requireTenant } from "@/lib/session";
+import { getAccountRoles, isAffiliateOnly } from "@/modules/affiliates/roles";
 import { prisma } from "@/lib/prisma";
 import { isStripeConfigured } from "@/modules/billing/stripe";
 import { PlanPicker } from "./PlanPicker";
@@ -12,7 +14,13 @@ export const metadata: Metadata = {
 };
 
 export default async function PlanosPage() {
-  const { tenantId } = await requireTenant();
+  const { session, tenantId } = await requireTenant();
+
+  // Planos são assinatura do agente. Quem entrou só como afiliado não tem o
+  // que assinar — mandá-lo escolher um plano seria pedir uma decisão que não
+  // existe para ele. (Ligar "usar no meu negócio" em /configuracoes traz a
+  // tela de volta.)
+  if (isAffiliateOnly(await getAccountRoles(session.user.id))) redirect("/afiliado");
   const tenant = await prisma.tenant.findUnique({ where: { id: tenantId } });
 
   return (

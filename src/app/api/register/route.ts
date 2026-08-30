@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { createTenantWithOwner } from "@/modules/tenants/provision";
+import { REFERRAL_COOKIE } from "@/modules/affiliates/config";
+import { attachReferralToTenant, ensureAffiliate } from "@/modules/affiliates/service";
+import { isValidPlan } from "@/modules/billing/service";
 import {
   onlyDigits,
   isValidCpfCnpj,
@@ -51,6 +55,18 @@ const schema = z.object({
   referralSource: z.enum(REFERRAL_SOURCES.map((r) => r.value) as [string, ...string[]], {
     message: "Selecione como conheceu o fechai.",
   }),
+  /**
+   * Papéis escolhidos no cadastro. "cliente" = usa o agente; "afiliado" = ganha
+   * comissão indicando. Não são exclusivos: a mesma pessoa pode ser os dois, e
+   * é justamente o caso mais comum (quem usa e gosta é quem melhor indica).
+   *
+   * A conta (tenant) nasce sempre — o painel, os planos e o próprio login
+   * dependem dela. Marcar "afiliado" apenas ACRESCENTA o cadastro no programa.
+   */
+  roles: z
+    .array(z.enum(["cliente", "afiliado"]))
+    .min(1, "Escolha como você vai usar o fechai.")
+    .default(["cliente"]),
 });
 
 export async function POST(req: Request) {
@@ -63,7 +79,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const { email, password, name, document, phone, phoneSecondary, birthDate, gender, city, state, businessSegment, referralSource } =
+  const { email, password, name, document, phone, phoneSecondary, birthDate, gender, city, state, businessSegment, referralSource, roles } =
     parsed.data;
 
   const existing = await prisma.user.findUnique({ where: { email } });
@@ -72,10 +88,13 @@ export async function POST(req: Request) {
   }
 
   const passwordHash = await bcrypt.hash(password, 10);
-  await createTenantWithOwner({
+  const { tenant, user } = await createTenantWithOwner({
     tenantName: name?.trim() || email.split("@")[0],
     email,
     passwordHash,
+    // Quem não marcou "usar no meu negócio" entra só como afiliado: o painel
+    // esconde as telas do agente e o aviso de teste grátis.
+    usesProduct: roles.includes("cliente"),
     lead: {
       document: onlyDigits(document),
       phone: onlyDigits(phone),
@@ -89,5 +108,37 @@ export async function POST(req: Request) {
     },
   });
 
-  return NextResponse.json({ ok: true }, { status: 201 });
+  // Indicação e programa de afiliados são EFEITOS COLATERAIS do cadastro: a
+  // conta já existe e a pessoa já pode entrar. Uma falha aqui não pode
+  // devolver erro — isso faria o formulário dizer "não deu certo" para quem
+  // acabou de ter a conta criada, e a segunda tentativa bateria em
+  // "e-mail já cadastrado".
+  const jar = await cookies();
+  const refCode = jar.get(REFERRAL_COOKIE)?.value;
+  if (refCode) {
+    try {
+      const planHint = jar.get(`${REFERRAL_COOKIE}_plano`)?.value?.toUpperCase();
+      await attachReferralToTenant({
+        code: refCode,
+        tenantId: tenant.id,
+        planKeyHint: planHint && isValidPlan(planHint) ? planHint : null,
+      });
+      // Crédito atribuído: o cookie cumpriu o papel e sai de cena, para uma
+      // segunda conta no mesmo navegador não ser creditada de novo.
+      jar.delete(REFERRAL_COOKIE);
+      jar.delete(`${REFERRAL_COOKIE}_plano`);
+    } catch (err) {
+      console.error("[register] falha ao vincular indicação", err);
+    }
+  }
+
+  if (roles.includes("afiliado")) {
+    try {
+      await ensureAffiliate(user.id);
+    } catch (err) {
+      console.error("[register] falha ao criar afiliado", err);
+    }
+  }
+
+  return NextResponse.json({ ok: true, affiliate: roles.includes("afiliado") }, { status: 201 });
 }

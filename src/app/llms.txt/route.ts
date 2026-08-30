@@ -18,7 +18,7 @@ export const dynamic = "force-static";
 export function GET() {
   const planos = PLANS.map(
     (p) =>
-      `- **${p.name}** — ${p.priceLabel}${p.priceCents > 0 ? "/mês" : ""}: ${p.maxAgents} agente(s), ${p.conversationsPerMonth.toLocaleString("pt-BR")} conversas/mês, ${p.maxActiveActions} ações ativas. ${p.features.join("; ")}.`,
+      `- **${p.name}** — ${p.priceLabel}${p.priceCents > 0 ? "/mês" : ""}: ${p.maxAgents} agente(s), ${p.messagesPerMonth.toLocaleString("pt-BR")} mensagens/mês, ${p.maxActiveActions} ações ativas${p.trialDays ? `, teste de ${p.trialDays} dias` : ""}. ${p.features.join("; ")}.`,
   ).join("\n");
 
   const passos = PASSOS.map((p, i) => `${i + 1}. **${p.title}** — ${p.desc}`).join("\n");

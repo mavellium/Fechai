@@ -1,30 +1,30 @@
 import type { PlanKey } from "@prisma/client";
 
-// Fonte única de verdade dos planos. Usada na landing (Milestone 2) e na
-// seleção de plano + Stripe Checkout (Milestone 3).
+// Fonte única de verdade dos planos. Usada na landing, na seleção de plano e no
+// Stripe Checkout.
 export type Plan = {
   key: PlanKey;
   name: string;
   priceLabel: string; // exibição na UI
   priceCents: number; // 0 = grátis
-  conversationsPerMonth: number;
   /**
-   * Teto de respostas da IA numa ÚNICA conversa por mês.
+   * A ÚNICA cota da conta: respostas da IA por mês, somadas todas as conversas.
    *
-   * Fixo por plano, e não derivado do limite de conversas. Já foi
-   * `limite × 3`, o que só fazia sentido enquanto os volumes eram pequenos:
-   * com 1.000 conversas/mês o multiplicador liberava 3.000 respostas num único
-   * chat — mais do que a conta inteira deveria gastar, ou seja, um freio que
-   * não freava nada. Uma conversa real de WhatsApp tem dezenas de respostas,
-   * não milhares; estourar isso é loop ou abuso, e é o que o teto pega.
-   *
-   * `usage.ts` ainda tem o fallback `limite × 3` para o caso de um plano novo
-   * entrar sem este campo — mas hoje todos os planos o definem.
+   * Antes existiam duas cotas (conversas/mês + teto por conversa) e nenhuma das
+   * duas media o que de fato custa: uma conversa pode ter 2 ou 200 respostas, e
+   * é a resposta — não a conversa — que consome LLM. Contar mensagem é contar a
+   * coisa certa, e uma cota só é uma cota que o cliente entende.
    */
-  perConversationCapDefault: number;
+  messagesPerMonth: number;
   maxActiveActions: number;
   /** Teto de agentes ativos (não arquivados) por conta. */
   maxAgents: number;
+  /**
+   * Plano de teste por tempo: vale por N dias a partir da criação da conta e
+   * depois para de responder até a pessoa assinar (ver `usage.ts`). Só o FREE
+   * usa; nos pagos é `undefined` (a assinatura é que mantém a conta viva).
+   */
+  trialDays?: number;
   highlight?: boolean;
   features: string[];
 };
@@ -35,45 +35,48 @@ export const PLANS: Plan[] = [
     name: "Grátis",
     priceLabel: "R$ 0",
     priceCents: 0,
-    conversationsPerMonth: 10,
-    perConversationCapDefault: 100,
+    messagesPerMonth: 100,
     maxActiveActions: 2,
     maxAgents: 1,
-    features: ["1 agente", "10 conversas/mês", "2 ações ativas", "7 dias ilimitado", "Sandbox de teste"],
+    trialDays: 7,
+    features: [
+      "7 dias para testar",
+      "100 mensagens no período",
+      "1 agente",
+      "2 ações ativas",
+      "Sandbox de teste",
+    ],
   },
   {
     key: "STARTER",
     name: "Starter",
     priceLabel: "R$ 199",
     priceCents: 19900,
-    conversationsPerMonth: 1000,
-    perConversationCapDefault: 150,
+    messagesPerMonth: 3000,
     maxActiveActions: 3,
     maxAgents: 3,
-    features: ["3 agentes", "1.000 conversas/mês", "3 ações ativas", "Follow-up automático"],
+    features: ["3 agentes", "3.000 mensagens/mês", "3 ações ativas", "Follow-up automático"],
   },
   {
     key: "PRO",
     name: "Pro",
     priceLabel: "R$ 399",
     priceCents: 39900,
-    conversationsPerMonth: 3000,
-    perConversationCapDefault: 200,
+    messagesPerMonth: 9000,
     maxActiveActions: 5,
     maxAgents: 5,
     highlight: true,
-    features: ["5 agentes", "3.000 conversas/mês", "Todas as ações", "Suporte prioritário"],
+    features: ["5 agentes", "9.000 mensagens/mês", "Todas as ações", "Suporte prioritário"],
   },
   {
     key: "BUSINESS",
     name: "Business",
     priceLabel: "R$ 899",
     priceCents: 89900,
-    conversationsPerMonth: 10000,
-    perConversationCapDefault: 300,
+    messagesPerMonth: 30000,
     maxActiveActions: 5,
     maxAgents: 10,
-    features: ["10 agentes", "10.000 conversas/mês", "Todas as ações", "Onboarding assistido"],
+    features: ["10 agentes", "30.000 mensagens/mês", "Todas as ações", "Onboarding assistido"],
   },
 ];
 

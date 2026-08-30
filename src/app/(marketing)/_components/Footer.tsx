@@ -32,6 +32,7 @@ const PRODUTO = [
 const CONTA = [
   { href: "/cadastro", label: "Criar conta grátis" },
   { href: "/login", label: "Entrar" },
+  { href: "/afiliados", label: "Programa de afiliados" },
 ];
 
 const LEGAL = [

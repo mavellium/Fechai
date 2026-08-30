@@ -21,14 +21,21 @@ export function HealthStrip({
   agentReady,
   whatsappStatus,
   planName,
-  conversationsThisPeriod,
-  planLimit,
+  messagesUsed,
+  messageLimit,
+  trialExpired,
+  trialDaysLeft,
 }: {
   agentReady: boolean;
   whatsappStatus: string;
   planName: string;
-  conversationsThisPeriod: number;
-  planLimit: number;
+  /** Respostas da IA no mês — a mesma cota de /configuracoes e da sidebar. */
+  messagesUsed: number;
+  messageLimit: number;
+  /** Teste grátis vencido: a IA parou por prazo, não por cota. */
+  trialExpired?: boolean;
+  /** Dias restantes do teste (quando a conta está num plano de teste). */
+  trialDaysLeft?: number | null;
 }) {
   const items: Item[] = [
     agentReady
@@ -50,12 +57,25 @@ export function HealthStrip({
           href: "/integracoes",
           fix: "conectar",
         },
-    {
-      label: `Plano ${planName} · ${conversationsThisPeriod}/${planLimit} conversas`,
-      tone: conversationsThisPeriod >= planLimit ? "danger" : "neutral",
-      href: conversationsThisPeriod >= planLimit * 0.8 ? "/planos" : undefined,
-      fix: conversationsThisPeriod >= planLimit * 0.8 ? "ver planos" : undefined,
-    },
+    // Teste vencido cala a IA mesmo com cota sobrando, então ele domina o item
+    // do plano — mostrar "20/100 mensagens" sem dizer que o prazo acabou
+    // esconderia o motivo real de o agente ter parado.
+    trialExpired
+      ? {
+          label: `Teste encerrado · escolha um plano`,
+          tone: "danger",
+          href: "/planos",
+          fix: "ver planos",
+        }
+      : {
+          label:
+            trialDaysLeft != null
+              ? `Teste · ${trialDaysLeft} dia${trialDaysLeft === 1 ? "" : "s"} · ${messagesUsed}/${messageLimit} mensagens`
+              : `Plano ${planName} · ${messagesUsed}/${messageLimit} mensagens`,
+          tone: messagesUsed >= messageLimit ? "danger" : "neutral",
+          href: messagesUsed >= messageLimit * 0.8 ? "/planos" : undefined,
+          fix: messagesUsed >= messageLimit * 0.8 ? "ver planos" : undefined,
+        },
   ];
 
   return (

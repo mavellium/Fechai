@@ -2,6 +2,96 @@
 
 Uma linha por milestone concluído (mais recente no topo).
 
+## Programa de afiliados: comissão progressiva e papéis da conta — 2026-08-30
+
+Programa de indicação completo, com landing pública, painel próprio e comissão
+**recorrente** — o afiliado ganha em toda mensalidade paga pela conta indicada,
+não só na primeira compra. Junto veio a separação dos papéis da conta: usar o
+produto e afiliar passam a ser escolhas independentes.
+
+- **Comissão progressiva** (`COMMISSION_TIERS` em `modules/affiliates/config.ts`):
+  5% na entrada, 10% com 5+ vendas ativas, 15% com 25+, 20% com 100+. Vale para
+  qualquer plano, e subir de faixa vale para a **carteira inteira**, não só para
+  as vendas novas. "Venda" é `Referral` `CONVERTED` — quem cancela sai da
+  contagem, então o nível reflete a carteira viva (a mesma base do MRR do
+  painel). A venda que fecha a faixa já entra na taxa nova.
+- **A comissão nasce em `invoice.paid`**, não no checkout: é o único evento que
+  dispara em toda renovação, e só depois de o dinheiro entrar. Base é
+  `amount_paid` (não o preço de tabela), idempotência por `stripeEventId`, e
+  estorno escuta `credit_note.created` — só a nota de crédito diz qual fatura
+  foi revertida. O percentual é **copiado** para cada linha: mudar a regra não
+  reescreve o que já foi ganho.
+- **Crédito first-touch e único**: `Referral.tenantId` é `@unique`, e o cookie
+  (30 dias, gravado no `proxy.ts`) não é sobrescrito por um segundo link. O
+  clique é contado por `/api/afiliados/clique`, não pelo proxy — que roda também
+  em prefetch e inflaria a métrica.
+- **Papéis da conta.** "Cliente" virou `User.usesProduct` (default `true`, para
+  contas antigas não perderem o painel); "afiliado" é existir `Affiliate` ativo.
+  Os dois são escolhidos no `/cadastro` e alteráveis em `/configuracoes`, com a
+  regra de **pelo menos um sempre ativo**. `getAccountRoles()` é a fonte única.
+- **Conta só-afiliado vê um painel enxuto**: sem Agentes/Conversas/WhatsApp/
+  Agenda, sem onboarding, sem indicador de cota e **sem "7 dias grátis"** — o
+  trial é de mensagens da IA, que essa conta não gasta. `/relatorios` abre na
+  visão de afiliados e `/planos` redireciona. As rotas do produto são guardadas
+  no servidor (`requireProductAccess()`), porque esconder item de menu não é
+  autorização.
+- **Sair do programa é `OPTED_OUT`, não `SUSPENDED`.** Saída voluntária não
+  apaga nada — código, indicações e comissões ficam, e reativar devolve o mesmo
+  link. O status do admin continua separado, e visível, para a pessoa ver o
+  aviso do bloqueio.
+
+## Resumo de conversa + teste dos dois lados — 2026-08-30
+
+Toda conversa passa a poder ter um resumo em texto gerado pela IA — "o que o
+cliente quer / onde parou / próximo passo", mais uma linha "Atenção:" quando
+aparece orçamento, data marcada, objeção ou reclamação. O painel só sabia
+mostrar a conversa inteira: isso resolve o caso de 6 mensagens e falha no de
+60, onde reabrir a conversa significava reler tudo de novo antes de responder.
+
+- **Motor**: `summarizeConversation(tenantId, conversationId)` em
+  `src/modules/agent-engine/summary.ts` — chamada única de texto no LLM ativo,
+  sem tools, com a mesma chain de fallback do orquestrador (Gemini → Grok →
+  Groq) e `recordUsage` no provider que de fato respondeu. Máximo de 60
+  mensagens no prompt, reordenadas em ordem cronológica; mínimo de 4 mensagens
+  para valer a pena.
+- **Sob demanda, não a cada turno.** Resumir dentro de `runAgentTurn` dobraria
+  o gasto de tokens de toda mensagem recebida (consumo que conta na cota do
+  plano) para produzir um resumo que talvez ninguém leia. Quem paga é quem
+  clica.
+- **Cache com contagem de mensagens.** Três colunas novas em `Conversation`:
+  `summary`, `summaryAt`, `summaryMsgCount`. A última é o que deixa a interface
+  dizer "4 mensagens novas desde este resumo" sem gastar uma chamada — e a UI
+  **não** regera sozinha nesse caso: um resumo velho que se anuncia velho é
+  melhor do que um custo silencioso a cada abertura.
+- **A gravação usa `$executeRaw`**, não `prisma.conversation.update`:
+  `updatedAt` tem `@updatedAt` e ordena a caixa de entrada — gerar um resumo
+  não pode empurrar a conversa para o topo como se o cliente tivesse escrito.
+- **Onde aparece**: bloco no `LeadPanel` (coluna do cliente, acima do telefone
+  e das datas — quem abre uma conversa quer primeiro saber o que rolou nela),
+  no topo do `ConversationThread` em xl+, no `<details>` mobile, e como texto
+  pronto nas linhas e cards de `/contatos`, onde substitui a prévia da última
+  mensagem quando existe ("ok, obrigado" não diz nada sobre o que o cliente
+  queria).
+- **Escrever dos dois lados na conversa de teste.** Na aba "Testes" de
+  `/conversas`, a caixa de resposta ganhou um seletor "você | cliente": dá para
+  escrever como o cliente e ver o agente responder de verdade, com o histórico
+  da conversa aberta, sem sair para o diálogo "Testar agente" (que sempre
+  recomeça do zero). Como "você" o comportamento é o de antes — grava
+  `sentBy: "human"` e pausa o agente. A action nova é `sendTestClientMessage`,
+  restrita a `isTest: true`: numa conversa real, forjar uma mensagem "do
+  cliente" que ele nunca mandou envenenaria histórico e relatórios. Quando o
+  agente fica calado (pausado, desligado, sem agente, cota esgotada), o
+  `status` do turno vira aviso na tela em vez de parecer bug.
+- **Os dois blocos novos da coluna do meio são recolhíveis.** O resumo acima
+  do histórico virou `<details>` fechado por padrão (aberto, comia um terço da
+  altura do histórico; o texto completo segue sempre visível na coluna do
+  cliente) e o seletor de lado ficou atrás de um botão "Enviando como
+  você/cliente", que mantém o lado atual à vista quando fechado.
+- **Schema**: aplicado com `prisma db push`. O push local carregou junto o drop
+  de `Tenant.trialUnlimitedUntil`, coluna já removida do schema em commit
+  anterior e sem nenhuma referência no código, que só não tinha sido aplicada
+  ao banco de desenvolvimento.
+
 ## Novos gráficos em /relatorios + correções de fuso e paleta — 2026-08-11
 
 Onze gráficos novos (seis no Operacional: funil de conversão, horários de

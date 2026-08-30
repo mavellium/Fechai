@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { getOnboardingSteps, requiredSteps, setupComplete } from "@/modules/tenants/onboarding";
 import { computeHomeSummary } from "@/modules/reports/service";
 import { planOf } from "@/modules/billing/plans";
+import { getUsageSummary } from "@/modules/billing/usage";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button";
@@ -136,8 +137,7 @@ export default async function InicioPage({
   }
 
   // ── Fase 2: a conta está no ar ──────────────────────────────────────────────
-  const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
-  const [summary, needsHuman, recent, whatsapp, agentReady, conversationsThisMonth] =
+  const [summary, needsHuman, recent, whatsapp, agentReady, usage] =
     await Promise.all([
       computeHomeSummary(tenantId, days),
       // `isTest: false` em toda a home: o chat de teste não é atendimento e
@@ -159,9 +159,9 @@ export default async function InicioPage({
         where: { tenantId, archived: false, NOT: { systemPrompt: "" } },
         select: { id: true },
       }),
-      prisma.conversation.count({
-        where: { tenantId, isTest: false, updatedAt: { gte: monthStart } },
-      }),
+      // A mesma fonte da sidebar e de /configuracoes — a home mostrava um
+      // contador próprio (conversas do mês) que não era mais a cota real.
+      getUsageSummary(tenantId),
     ]);
 
   const plan = planOf(tenant?.planKey);
@@ -186,8 +186,10 @@ export default async function InicioPage({
         agentReady={Boolean(agentReady)}
         whatsappStatus={whatsapp?.status ?? "disconnected"}
         planName={plan.name}
-        conversationsThisPeriod={conversationsThisMonth}
-        planLimit={plan.conversationsPerMonth}
+        messagesUsed={usage.used}
+        messageLimit={usage.limit}
+        trialExpired={usage.trialExpired}
+        trialDaysLeft={usage.isTrial && !usage.trialExpired ? usage.trialDaysLeft : null}
       />
 
       <div className="grid gap-6 lg:grid-cols-3">

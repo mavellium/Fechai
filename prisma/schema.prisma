@@ -31,22 +31,20 @@ model Tenant {
   status           String            @default("active") // active | suspended
   createdAt        DateTime          @default(now())
 
-  // Limite de conversas/mês: null = usa o teto do plano (`conversationsPerMonth`).
+  // Cota de mensagens/mês: null = usa o teto do plano (`messagesPerMonth`).
   // Preenchido pelo superadmin em /admin/contas para dar um teto diferente do
   // plano — usado pelo enforcement (runAgentTurn) e pelos indicadores de uso.
-  conversationLimitOverride Int?
+  // (Era `conversationLimitOverride`, quando a cota contava conversas; virou
+  // mensagem porque é a resposta da IA que consome LLM, não a conversa.)
+  messageLimitOverride Int?
 
-  // Teto de respostas da IA por conversa/mês: null = deriva do plano
-  // (`perConversationCapDefault`, senão limite efetivo × 3). Override próprio
-  // permite o admin fixar as duas cotas independentes — a conta (conversas) e
-  // o uso por conversa (respostas).
-  perConversationCapOverride Int?
-
-  // Trial de uso ilimitado (sem checagem de cota): enquanto for uma data
-  // futura, `runAgentTurn` pula o enforcement inteiro pra esse tenant. Todo
-  // tenant FREE novo nasce com 7 dias (ver provision.ts); o superadmin pode
-  // estender, encurtar ou zerar em /admin/contas.
-  trialUnlimitedUntil DateTime?
+  // Fim do período de teste do plano grátis. O FREE é um trial por tempo: a
+  // conta responde até `messagesPerMonth` do plano E até esta data — o que
+  // vier primeiro. Passou da data, a IA cala e só volta assinando um plano
+  // (o painel continua acessível). Nasce em +`trialDays` na criação da conta
+  // (ver provision.ts); o superadmin estende/encerra em /admin/contas.
+  // null num tenant FREE = trial já encerrado.
+  trialEndsAt DateTime?
 
   // Onboarding guiado (/onboarding). Enquanto `onboardingCompleted` for false, o
   // dashboard redireciona para o wizard; `onboardingStep` + `onboardingDraft`
@@ -94,6 +92,7 @@ model Tenant {
   appointments     Appointment[]
   calendar         CalendarIntegration?
   leadValues       TenantLeadValue[]
+  referral         Referral?
 }
 
 model User {
@@ -125,6 +124,25 @@ model User {
   googleLinkedAt DateTime?
 
   passwordResetTokens PasswordResetToken[]
+
+  // Programa de afiliados: presente só se a pessoa optou por ser afiliada
+  // (no /cadastro ou ativando depois). Papel, não conta separada.
+  affiliate           Affiliate?
+
+  /**
+   * Usa o produto (agente de WhatsApp), e não só o programa de afiliados.
+   *
+   * Os dois papéis são independentes e ambos ajustáveis em /configuracoes:
+   * "cliente" mora aqui, "afiliado" é a existência de `affiliate`. Quem marca
+   * só "afiliado" no /cadastro fica com `false` e vê um painel enxuto — sem
+   * agentes, conversas nem aviso de teste grátis, que não valem para quem não
+   * usa o agente.
+   *
+   * Default `true` porque toda conta anterior a este campo é de cliente: o
+   * programa de afiliados nasceu depois, e ninguém deve perder o painel numa
+   * migração.
+   */
+  usesProduct         Boolean   @default(true)
 
   @@index([tenantId])
 }
@@ -291,6 +309,17 @@ model Conversation {
   isTest     Boolean   @default(false)
   lastInboundAt DateTime?
   followUpSentAt DateTime?
+  /// Resumo em texto do que foi conversado, gerado sob demanda pelo LLM ativo
+  /// (`summarizeConversation`). Existe para o dono da conta entender uma
+  /// conversa de 60 mensagens sem ler tudo. Null = nunca resumida.
+  summary        String?
+  /// Quando o resumo foi gerado — mostrado na interface como "resumido há X".
+  summaryAt      DateTime?
+  /// Quantas mensagens a conversa tinha quando o resumo foi gerado. É o que
+  /// permite dizer "desatualizado, N mensagens novas" sem regerar nada: basta
+  /// comparar com a contagem atual. Sem isso, o resumo em cache mentiria em
+  /// silêncio conforme a conversa continuasse.
+  summaryMsgCount Int?
   updatedAt  DateTime  @updatedAt
 
   appointments Appointment[]
@@ -474,5 +503,138 @@ model LoginAttempt {
 
   @@index([email, createdAt])
   @@index([ip, createdAt])
+  @@index([createdAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Programa de afiliados
+//
+// Um afiliado é um PAPEL do usuário, não uma conta separada: a mesma pessoa
+// pode ser cliente do fechai, afiliado, ou os dois (escolhido no /cadastro e
+// ativável depois). Por isso o vínculo é 1:1 com User — quem já tem conta vira
+// afiliado sem criar outro login.
+//
+// Comissão é RECORRENTE (o produto é SaaS): o afiliado ganha um % de cada
+// pagamento mensal enquanto a assinatura indicada continuar viva. Cada
+// pagamento vira uma linha em AffiliateCommission — nunca se recalcula o
+// passado a partir do percentual atual, senão mudar a regra reescreveria o
+// histórico de quem já ganhou.
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum AffiliateStatus {
+  PENDING // cadastrou-se, aguardando aprovação do admin
+  ACTIVE // pode divulgar e receber comissão
+  SUSPENDED // bloqueado pelo admin; links param de converter (comissões antigas permanecem)
+  OPTED_OUT // a própria pessoa saiu do programa em /configuracoes — pode voltar quando quiser
+}
+
+enum ReferralStatus {
+  CLICK // clicou no link, ainda não criou conta
+  SIGNED_UP // criou conta pelo link, ainda não pagou
+  CONVERTED // assinou um plano pago — gera comissão recorrente
+  CHURNED // cancelou a assinatura; para de gerar comissão nova
+}
+
+enum CommissionStatus {
+  PENDING // dentro da janela de segurança (estorno/chargeback)
+  APPROVED // liberada para saque
+  PAID // já paga ao afiliado
+  CANCELED // estornada (reembolso/chargeback do pagamento de origem)
+}
+
+model Affiliate {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Código público que vive na URL (?ref=CODIGO). Curto, legível e único —
+  /// é o que o afiliado divulga, então precisa caber num story e num print.
+  code   String          @default(cuid()) @unique
+  status AffiliateStatus @default(ACTIVE)
+
+  /// Percentual de comissão em BASIS POINTS (2000 = 20%). Inteiro de propósito:
+  /// float em dinheiro acumula erro, e bps evita o "20.000000000000004".
+  /// Null = usa o padrão do programa (ver modules/affiliates/config.ts).
+  commissionBps Int?
+
+  /// Dados de pagamento (PIX) — o afiliado é pago fora do Stripe, por
+  /// transferência manual no MVP.
+  payoutPixKey String?
+  payoutName   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  referrals   Referral[]
+  commissions AffiliateCommission[]
+
+  @@index([status])
+}
+
+/// Um lead do afiliado: nasce no clique e evolui até virar assinatura paga.
+/// `tenantId` é único porque um tenant só pode ser creditado a um afiliado —
+/// o primeiro que trouxe (first-touch), para não haver disputa de crédito.
+model Referral {
+  id          String     @id @default(cuid())
+  affiliateId String
+  affiliate   Affiliate  @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  status      ReferralStatus @default(CLICK)
+
+  /// Conta criada a partir do link. Null enquanto for só clique.
+  tenantId String? @unique
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
+  /// Plano divulgado no link que originou o clique (?plano=PRO) — serve para
+  /// o afiliado ver qual oferta converte melhor, não para forçar o plano.
+  planKeyHint PlanKey?
+
+  /// Origem do clique, para o afiliado medir onde divulgar.
+  landingPath String?
+  utmSource   String?
+
+  clickedAt    DateTime  @default(now())
+  signedUpAt   DateTime?
+  convertedAt  DateTime?
+  churnedAt    DateTime?
+
+  commissions AffiliateCommission[]
+
+  @@index([affiliateId, status])
+  @@index([clickedAt])
+}
+
+/// Uma parcela de comissão = um pagamento mensal da assinatura indicada.
+/// `stripeEventId` é único: o webhook do Stripe reentrega eventos, e sem essa
+/// trava a mesma fatura pagaria comissão duas vezes.
+model AffiliateCommission {
+  id          String    @id @default(cuid())
+  affiliateId String
+  affiliate   Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  referralId  String
+  referral    Referral  @relation(fields: [referralId], references: [id], onDelete: Cascade)
+
+  /// Valor pago pelo cliente (centavos) e o que o afiliado ganha (centavos).
+  /// Guardar os dois — mais o bps aplicado — congela a regra do dia do
+  /// pagamento: mudar o percentual amanhã não reescreve o que já foi ganho.
+  baseAmountCents Int
+  amountCents     Int
+  commissionBps   Int
+  planKey         PlanKey
+
+  status CommissionStatus @default(PENDING)
+
+  /// Idempotência do webhook: um evento de pagamento → uma comissão.
+  stripeEventId   String? @unique
+  stripeInvoiceId String?
+
+  /// Competência ("2026-08") — agrupa o extrato mensal do afiliado.
+  periodMonth String
+
+  createdAt  DateTime  @default(now())
+  approvedAt DateTime?
+  paidAt     DateTime?
+
+  @@index([affiliateId, status])
+  @@index([affiliateId, periodMonth])
   @@index([createdAt])
 }

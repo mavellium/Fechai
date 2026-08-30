@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import posthog from "posthog-js";
 import { Button } from "@/components/ui/button";
 import { type NavItem } from "./ShellNav";
+import { type UsageNavData } from "./UsageNav";
 import { Sidebar } from "./Sidebar";
 import { MobileNav } from "./MobileNav";
 
@@ -43,13 +44,7 @@ export function PanelShell({
   userRole: string;
   signOutAction: () => Promise<void>;
   /** Uso de conversas do mês, mostrado na navegação (link para /configuracoes). */
-  usage?: {
-    used: number;
-    limit: number;
-    perConversationCap: number;
-    perConversationUsed: number;
-    unlimitedTrial?: boolean;
-  } | null;
+  usage?: UsageNavData | null;
   accent?: "iris" | "signal";
   /** Aviso global fixo acima do cabeçalho (ex.: personificação em andamento). */
   banner?: React.ReactNode;

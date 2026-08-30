@@ -11,7 +11,7 @@ import {
   setTenantStatus,
   adminSetPlan,
   adminSetUsageLimit,
-  adminSetTrialUnlimitedUntil,
+  adminSetTrialEndsAt,
   adminCreateAccount,
 } from "@/modules/admin/service";
 import { strongPassword } from "@/lib/password-schema";
@@ -30,28 +30,21 @@ export async function changePlan(tenantId: string, planKey: PlanKey) {
   revalidatePath("/admin/contas");
 }
 
-/**
- * Altera os limites da conta (null = volta ao padrão do plano). São duas cotas
- * independentes: conversas/mês e o teto de respostas da IA por conversa.
- */
-export async function setTenantUsageLimit(
-  tenantId: string,
-  limit: number | null,
-  perConversationCap?: number | null,
-) {
+/** Altera a cota de mensagens/mês da conta (null = volta ao padrão do plano). */
+export async function setTenantUsageLimit(tenantId: string, limit: number | null) {
   await requireSuperadmin();
-  await adminSetUsageLimit(tenantId, limit, perConversationCap);
+  await adminSetUsageLimit(tenantId, limit);
   revalidatePath("/admin/contas");
 }
 
 /**
- * Ajusta o trial de uso ilimitado da conta. `days` é a partir de agora
- * (null = encerra o trial imediatamente, voltando ao enforcement normal).
+ * Ajusta o período de teste da conta. `days` conta a partir de agora
+ * (null = encerra o teste na hora, e a IA para até a pessoa assinar).
  */
 export async function setTenantTrial(tenantId: string, days: number | null) {
   await requireSuperadmin();
-  const until = days == null ? null : new Date(Date.now() + days * 24 * 60 * 60 * 1000);
-  await adminSetTrialUnlimitedUntil(tenantId, until);
+  const endsAt = days == null ? null : new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+  await adminSetTrialEndsAt(tenantId, endsAt);
   revalidatePath("/admin/contas");
 }
 

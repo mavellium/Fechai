@@ -27,7 +27,10 @@ Ver [CHANGELOG.md](./CHANGELOG.md) para o último milestone concluído.
 - Módulo tenants (provisionamento + onboarding) → `src/modules/tenants/README.md`
 - Onboarding guiado da conta nova (`/onboarding`) → `src/app/onboarding/` + seção no README de tenants
 - Módulo billing → `src/modules/billing/README.md`
+- Módulo affiliates (programa de indicação, comissão progressiva, papéis da conta) → `src/modules/affiliates/README.md`
+- Papéis da conta (cliente · afiliado) e painel enxuto de quem só afilia → seção "Os dois papéis" em `src/modules/affiliates/README.md`
 - Módulo agent-engine (ações + persona; motor no M5) → `src/modules/agent-engine/README.md`
+- Resumo de conversa gerado por IA (sob demanda, com cache) → seção "Resumo da conversa" em `src/modules/agent-engine/README.md`
 - Módulo ai (providers de LLM/embeddings, catálogo, modelo ativo) → `src/modules/ai/README.md`
 - Módulo knowledge-base (RAG) → `src/modules/knowledge-base/README.md`
 - Módulo whatsapp (provider Evolution) → `src/modules/whatsapp/README.md`

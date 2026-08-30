@@ -16,12 +16,12 @@ type Props = {
   planKey: PlanKey;
   status: string;
   whatsappStatus: string;
-  /** Limite de conversas/mês fixado fora do padrão do plano (null = usa o plano). */
-  conversationLimitOverride: number | null;
-  /** Teto de respostas da IA por conversa fixado fora do padrão (null = limite × 3). */
-  perConversationCapOverride: number | null;
-  /** Fim do trial de uso ilimitado (ISO), ou null = sem trial ativo. */
-  trialUnlimitedUntil: string | null;
+  /** Cota de mensagens/mês fixada fora do padrão do plano (null = usa o plano). */
+  messageLimitOverride: number | null;
+  /** Fim do período de teste (ISO); null = sem teste em andamento. */
+  trialEndsAt: string | null;
+  /** O plano da conta é de teste por tempo (hoje só o grátis). */
+  planIsTrial: boolean;
   /** Tenant que contém um SUPERADMIN — conta de plataforma, não cliente. */
   isAdminAccount?: boolean;
   /** Usuário usado ao clicar em "Ver como" (dono da conta). */
@@ -40,14 +40,7 @@ export function TenantRow(t: Props) {
   const [pending, start] = useTransition();
   const [plan, setPlan] = useState<PlanKey>(t.planKey);
   const [limitInput, setLimitInput] = useState<string>(
-    String(t.conversationLimitOverride ?? planOf(t.planKey).conversationsPerMonth),
-  );
-  const [capInput, setCapInput] = useState<string>(
-    String(
-      t.perConversationCapOverride ??
-        planOf(t.planKey).perConversationCapDefault ??
-        planOf(t.planKey).conversationsPerMonth * 3,
-    ),
+    String(t.messageLimitOverride ?? planOf(t.planKey).messagesPerMonth),
   );
   const suspended = t.status === "suspended";
   const planDirty = plan !== t.planKey;
@@ -61,31 +54,21 @@ export function TenantRow(t: Props) {
     });
   }
 
-  const planDefault = planOf(t.planKey).conversationsPerMonth;
-  const capDefault = planOf(t.planKey).perConversationCapDefault ?? planDefault * 3;
+  const planDefault = planOf(t.planKey).messagesPerMonth;
   const limitValue = Math.trunc(Number(limitInput));
-  const limitDirty =
-    !Number.isInteger(limitValue) || limitValue < 0 || limitValue !== (t.conversationLimitOverride ?? planDefault);
-  const capValue = Math.trunc(Number(capInput));
-  const capDirty =
-    !Number.isInteger(capValue) || capValue < 0 || capValue !== (t.perConversationCapOverride ?? capDefault);
+  const limitInvalid = !Number.isInteger(limitValue) || limitValue < 0;
+  const limitDirty = limitInvalid || limitValue !== (t.messageLimitOverride ?? planDefault);
 
-  const trialUntil = t.trialUnlimitedUntil ? new Date(t.trialUnlimitedUntil) : null;
+  const trialUntil = t.trialEndsAt ? new Date(t.trialEndsAt) : null;
   const trialActive = Boolean(trialUntil && trialUntil > new Date());
   const trialDaysLeft = trialActive
     ? Math.ceil((trialUntil!.getTime() - new Date().getTime()) / 86_400_000)
     : 0;
 
   function saveLimits() {
-    if (limitDirty || capDirty) return;
+    if (limitInvalid) return;
     // Valor igual ao padrão do plano não precisa virar override — volta a seguir o plano.
-    start(() =>
-      setTenantUsageLimit(
-        t.id,
-        limitValue === planDefault ? null : limitValue,
-        capValue === capDefault ? null : capValue,
-      ),
-    );
+    start(() => setTenantUsageLimit(t.id, limitValue === planDefault ? null : limitValue));
   }
 
   return (
@@ -145,54 +128,33 @@ export function TenantRow(t: Props) {
       <td className="px-4 py-4">
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center gap-2">
-            <label className="sr-only" htmlFor={`${t.id}-conversas`}>
-              Limite de conversas de {t.name}
+            <label className="sr-only" htmlFor={`${t.id}-mensagens`}>
+              Cota de mensagens de {t.name}
             </label>
             <input
-              id={`${t.id}-conversas`}
+              id={`${t.id}-mensagens`}
               type="number"
               min={0}
               step={1}
               value={limitInput}
               disabled={pending}
-              aria-label={`Limite de conversas de ${t.name}`}
+              aria-label={`Cota de mensagens por mês de ${t.name}`}
               onChange={(e) => setLimitInput(e.target.value)}
               className="w-24 rounded-control border border-white/10 bg-white/5 px-2 py-1.5 font-mono text-xs text-white focus:border-iris focus:outline-none focus-visible:ring-2 focus-visible:ring-iris"
             />
-            <span className="font-mono text-micro uppercase tracking-wide text-white/55">conv</span>
+            <span className="font-mono text-micro uppercase tracking-wide text-white/55">msg/mês</span>
           </div>
 
-          <div className="flex items-center gap-2">
-            <label className="sr-only" htmlFor={`${t.id}-respostas`}>
-              Teto de respostas da IA por conversa de {t.name}
-            </label>
-            <input
-              id={`${t.id}-respostas`}
-              type="number"
-              min={0}
-              step={1}
-              value={capInput}
-              disabled={pending}
-              aria-label={`Teto de respostas da IA por conversa de ${t.name}`}
-              onChange={(e) => setCapInput(e.target.value)}
-              className="w-24 rounded-control border border-white/10 bg-white/5 px-2 py-1.5 font-mono text-xs text-white focus:border-iris focus:outline-none focus-visible:ring-2 focus-visible:ring-iris"
-            />
-            <span className="font-mono text-micro uppercase tracking-wide text-white/55">resp</span>
-          </div>
-
-          {(limitDirty || capDirty) && (
+          {limitDirty && (
             <div className="flex items-center gap-1">
-              <Button size="sm" loading={pending} loadingLabel="Salvando limites" onClick={saveLimits}>
+              <Button size="sm" loading={pending} loadingLabel="Salvando cota" onClick={saveLimits}>
                 Salvar
               </Button>
               <Button
                 size="sm"
                 variant="ghost"
                 disabled={pending}
-                onClick={() => {
-                  setLimitInput(String(t.conversationLimitOverride ?? planDefault));
-                  setCapInput(String(t.perConversationCapOverride ?? capDefault));
-                }}
+                onClick={() => setLimitInput(String(t.messageLimitOverride ?? planDefault))}
               >
                 Desfazer
               </Button>
@@ -200,14 +162,14 @@ export function TenantRow(t: Props) {
           )}
         </div>
         <p className="mt-1 font-mono text-micro uppercase tracking-wide text-white/55">
-          padrão: {planDefault.toLocaleString("pt-BR")} conv · {capDefault.toLocaleString("pt-BR")} resp
-          {(t.conversationLimitOverride != null || t.perConversationCapOverride != null) && (
+          padrão: {planDefault.toLocaleString("pt-BR")} msg
+          {t.messageLimitOverride != null && (
             <>
               {" · "}
               <button
                 type="button"
                 disabled={pending}
-                onClick={() => start(() => setTenantUsageLimit(t.id, null, null))}
+                onClick={() => start(() => setTenantUsageLimit(t.id, null))}
                 className="underline underline-offset-2 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris"
               >
                 restaurar padrão
@@ -216,34 +178,39 @@ export function TenantRow(t: Props) {
           )}
         </p>
 
-        {/* Trial de uso ilimitado: enquanto ativo, as duas cotas acima viram
-            informativas — o enforcement (runAgentTurn) não bloqueia. */}
-        <div className="mt-2 flex items-center gap-1.5">
-          {trialActive ? (
-            <>
-              <Badge tone="signal">
-                ilimitado · {trialDaysLeft} dia{trialDaysLeft === 1 ? "" : "s"}
-              </Badge>
-              <button
-                type="button"
-                disabled={pending}
-                onClick={() => start(() => setTenantTrial(t.id, null))}
-                className="font-mono text-micro uppercase tracking-wide text-white/55 underline underline-offset-2 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris"
-              >
-                encerrar
-              </button>
-            </>
-          ) : (
-            <button
-              type="button"
-              disabled={pending}
-              onClick={() => start(() => setTenantTrial(t.id, 7))}
-              className="font-mono text-micro uppercase tracking-wide text-white/55 underline underline-offset-2 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris"
-            >
-              dar 7 dias ilimitado
-            </button>
-          )}
-        </div>
+        {/* Período de teste: só faz sentido em plano de teste (grátis). Passada
+            a data, a IA para e a conta só volta assinando. */}
+        {t.planIsTrial && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {trialActive ? (
+              <>
+                <Badge tone="signal">
+                  teste · {trialDaysLeft} dia{trialDaysLeft === 1 ? "" : "s"}
+                </Badge>
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => start(() => setTenantTrial(t.id, null))}
+                  className="font-mono text-micro uppercase tracking-wide text-white/55 underline underline-offset-2 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris"
+                >
+                  encerrar
+                </button>
+              </>
+            ) : (
+              <>
+                <Badge tone="danger">teste encerrado</Badge>
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => start(() => setTenantTrial(t.id, 7))}
+                  className="font-mono text-micro uppercase tracking-wide text-white/55 underline underline-offset-2 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris"
+                >
+                  dar +7 dias
+                </button>
+              </>
+            )}
+          </div>
+        )}
       </td>
 
       <td className="px-4 py-4">

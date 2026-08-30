@@ -6,6 +6,7 @@ import { OQueE } from "./_components/OQueE";
 import { ComoFunciona } from "./_components/ComoFunciona";
 import { AcoesExemplos } from "./_components/AcoesExemplos";
 import { Planos } from "./_components/Planos";
+import { AfiliadosTeaser } from "./_components/AfiliadosTeaser";
 import { ProvaSocial } from "./_components/ProvaSocial";
 import { FAQ } from "./_components/FAQ";
 import { CTAFinal } from "./_components/CTAFinal";
@@ -38,6 +39,7 @@ export default function LandingPage() {
         <ComoFunciona />
         <AcoesExemplos />
         <Planos />
+        <AfiliadosTeaser />
         <ProvaSocial />
         <FAQ />
         <CTAFinal />

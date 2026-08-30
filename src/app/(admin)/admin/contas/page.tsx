@@ -1,6 +1,7 @@
 import { Search, Building2 } from "lucide-react";
 import { requireSuperadmin } from "@/lib/session";
 import { listTenants } from "@/modules/admin/service";
+import { planOf } from "@/modules/billing/plans";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Field, fieldProps } from "@/components/ui/field";
@@ -98,9 +99,9 @@ export default async function ContasPage({
                   planKey={t.planKey}
                   status={t.status}
                   whatsappStatus={t.whatsappInstance?.status ?? "—"}
-                  conversationLimitOverride={t.conversationLimitOverride}
-                  perConversationCapOverride={t.perConversationCapOverride}
-                  trialUnlimitedUntil={t.trialUnlimitedUntil ? t.trialUnlimitedUntil.toISOString() : null}
+                  messageLimitOverride={t.messageLimitOverride}
+                  trialEndsAt={t.trialEndsAt ? t.trialEndsAt.toISOString() : null}
+                  planIsTrial={planOf(t.planKey).trialDays != null}
                   isAdminAccount={t.users.some((u) => u.role === "SUPERADMIN")}
                   ownerUserId={t.users.find((u) => u.role === "OWNER")?.id ?? t.users[0]?.id}
                   createdAt={t.createdAt.toLocaleDateString("pt-BR")}

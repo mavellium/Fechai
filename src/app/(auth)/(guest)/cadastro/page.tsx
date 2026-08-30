@@ -2,7 +2,7 @@
 
 import { useId, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { signIn } from "next-auth/react";
 import posthog from "posthog-js";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -25,6 +25,8 @@ import {
   Camera,
   ThumbsUp,
   Ellipsis,
+  HandCoins,
+  Briefcase,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -50,6 +52,7 @@ import {
 } from "@/lib/br-lead";
 
 type Phase = "idle" | "loading" | "done";
+type Role = "cliente" | "afiliado";
 type StepNumber = 1 | 2 | 3;
 
 const MIN_AGE_YEARS = 18;
@@ -104,6 +107,11 @@ type FormState = {
   state: string;
   businessSegment: string;
   referralSource: string;
+  /**
+   * Como a pessoa vai usar o fechai. Não é exclusivo: dá para ser cliente,
+   * afiliado, ou os dois — e "os dois" é o caso que mais interessa ao produto.
+   */
+  roles: Role[];
 };
 
 const EMPTY: FormState = {
@@ -120,16 +128,24 @@ const EMPTY: FormState = {
   state: "",
   businessSegment: "",
   referralSource: "",
+  roles: ["cliente"],
 };
 
 export default function CadastroPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  // Quem chega pela landing de afiliados (/cadastro?tipo=afiliado) já encontra
+  // as duas opções marcadas: veio pelo programa, mas a conta de cliente nasce
+  // junto de qualquer jeito — é ela que dá acesso ao painel.
+  const preferAffiliate = searchParams.get("tipo") === "afiliado";
   const reduced = useReducedMotion();
   const nameId = useId();
   const cityId = useId();
 
   const [step, setStep] = useState<StepNumber>(1);
-  const [form, setForm] = useState<FormState>(EMPTY);
+  const [form, setForm] = useState<FormState>(() =>
+    preferAffiliate ? { ...EMPTY, roles: ["cliente", "afiliado"] } : EMPTY,
+  );
   const [errors, setErrors] = useState<Partial<Record<keyof FormState, string>>>({});
   const [phase, setPhase] = useState<Phase>("idle");
   const [formError, setFormError] = useState<string | null>(null);
@@ -174,8 +190,18 @@ export default function CadastroPage() {
       if (!form.state) e.state = "Selecione o estado.";
       if (!form.businessSegment) e.businessSegment = "Selecione o segmento.";
       if (!form.referralSource) e.referralSource = "Selecione uma opção.";
+      if (form.roles.length === 0) e.roles = "Escolha pelo menos uma opção.";
     }
     return e;
+  }
+
+  /** Marca/desmarca um papel. Lista, não radio: os dois podem coexistir. */
+  function toggleRole(role: Role) {
+    setForm((f) => ({
+      ...f,
+      roles: f.roles.includes(role) ? f.roles.filter((r) => r !== role) : [...f.roles, role],
+    }));
+    setErrors((e) => ("roles" in e ? { ...e, roles: undefined } : e));
   }
 
   function goNext() {
@@ -235,8 +261,12 @@ export default function CadastroPage() {
         posthog.capture("account_registered", { role: session.user.role });
       }
       setPhase("done"); // digitando → check antes de navegar
+      // Quem entrou só pelo programa de afiliados vai direto ao painel de
+      // afiliado: mandar essa pessoa escolher plano seria pedir uma decisão
+      // que ela não veio tomar.
+      const destino = form.roles.includes("cliente") ? "/planos" : "/afiliado";
       setTimeout(() => {
-        router.push("/planos");
+        router.push(destino);
         router.refresh();
       }, 450);
     } catch (err) {
@@ -480,6 +510,37 @@ export default function CadastroPage() {
                       </p>
                     )}
                   </fieldset>
+
+                  <fieldset>
+                    <legend className="flex items-center gap-2 text-sm font-medium text-ink">
+                      <HandCoins size={15} className="text-neutral" aria-hidden />
+                      Como você vai usar o fechai
+                    </legend>
+                    <p className="mt-1 text-sm text-neutral">
+                      Pode marcar as duas — dá para usar o agente e ganhar indicando.
+                    </p>
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                      <RoleCard
+                        icon={Briefcase}
+                        titulo="Usar no meu negócio"
+                        desc="Ter um agente atendendo meu WhatsApp."
+                        checked={form.roles.includes("cliente")}
+                        onToggle={() => toggleRole("cliente")}
+                      />
+                      <RoleCard
+                        icon={HandCoins}
+                        titulo="Ser afiliado"
+                        desc="Indicar o fechai e ganhar comissão todo mês."
+                        checked={form.roles.includes("afiliado")}
+                        onToggle={() => toggleRole("afiliado")}
+                      />
+                    </div>
+                    {errors.roles && (
+                      <p role="alert" className="mt-2 text-sm text-danger">
+                        {errors.roles}
+                      </p>
+                    )}
+                  </fieldset>
                 </>
               )}
             </div>
@@ -517,9 +578,17 @@ export default function CadastroPage() {
           </Button>
         </div>
 
+        {/*
+          O teste grátis é de MENSAGENS DA IA: só faz sentido para quem vai usar
+          o agente. Prometê-lo a quem entrou só para indicar seria oferecer algo
+          que essa conta nem consegue gastar — e ainda daria a impressão de que
+          o programa de afiliados tem prazo de validade.
+        */}
         {step === 3 && (
           <p className="mt-3 text-center text-sm text-neutral">
-            Plano grátis com 7 dias ilimitados. Sem cartão de crédito.
+            {form.roles.includes("cliente")
+              ? "7 dias grátis para testar mensagens por I.A. Sem cartão de crédito."
+              : "Entrar no programa de afiliados é grátis, sem meta mínima."}
           </p>
         )}
       </form>
@@ -610,5 +679,60 @@ function PasswordMatch({ password, confirm }: { password: string; confirm: strin
         "As senhas ainda não são iguais."
       )}
     </p>
+  );
+}
+
+/**
+ * Cartão de seleção múltipla dos papéis.
+ *
+ * É um `<input type="checkbox">` de verdade sob o `<label>` — teclado e
+ * leitor de tela funcionam sem código extra. Não usa `RadioCards` porque lá as
+ * opções são mutuamente exclusivas, e aqui marcar as duas é justamente o
+ * caminho que o produto quer.
+ */
+function RoleCard({
+  icon: Icon,
+  titulo,
+  desc,
+  checked,
+  onToggle,
+}: {
+  icon: React.ComponentType<{ size?: number | string; className?: string }>;
+  titulo: string;
+  desc: string;
+  checked: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <label
+      className={cn(
+        "group relative flex cursor-pointer gap-3 rounded-control border p-3 text-sm transition-all",
+        "focus-within:ring-2 focus-within:ring-iris focus-within:ring-offset-2",
+        checked ? "border-iris bg-iris/5" : "border-ink/15 hover:border-ink/30",
+      )}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={onToggle}
+        className="sr-only"
+      />
+      <span
+        aria-hidden
+        className={cn(
+          "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border transition-colors",
+          checked ? "border-iris bg-iris text-white" : "border-ink/25",
+        )}
+      >
+        {checked && <Check size={11} strokeWidth={3} />}
+      </span>
+      <span className="min-w-0">
+        <span className="flex items-center gap-1.5 font-medium text-ink">
+          <Icon size={14} className={checked ? "text-iris" : "text-neutral"} />
+          {titulo}
+        </span>
+        <span className="mt-0.5 block text-xs leading-relaxed text-neutral">{desc}</span>
+      </span>
+    </label>
   );
 }

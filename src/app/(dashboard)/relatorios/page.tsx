@@ -1,5 +1,5 @@
 import { BarChart3, Download } from "lucide-react";
-import { requireTenant } from "@/lib/session";
+import { requireTenant, requireOwner } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import {
   computeFinancialSummary,
@@ -14,13 +14,20 @@ import { FadeIn } from "@/components/ui/FadeIn";
 import { FilterTabs } from "@/components/ui/filter-tabs";
 import { PageHeader } from "@/components/ui/page-header";
 import { Stat } from "@/components/ui/stat";
+import { getAffiliateByUser, approveMaturedCommissions } from "@/modules/affiliates/service";
+import { getAccountRoles, isAffiliateOnly } from "@/modules/affiliates/roles";
+import { getAffiliateOverview } from "@/modules/affiliates/stats";
+import { AfiliadoView } from "./AfiliadoView";
 import { ChartPanel } from "./ChartPanel";
 import { FinancialView } from "./FinancialView";
 import { RangePicker } from "./RangePicker";
 import { StatusBreakdown } from "./StatusBreakdown";
 
 const PERIODS: PeriodKey[] = ["hoje", "7", "30", "mes", "ano", "tudo"];
-const VIEWS = ["operacional", "financeiro"] as const;
+// A aba "Afiliados" só existe para quem está no programa — o filtro abaixo
+// remove a opção de quem não é afiliado, e a página cai na visão padrão se
+// alguém digitar ?visao=afiliados na URL sem ter cadastro.
+const VIEWS = ["operacional", "financeiro", "afiliados"] as const;
 type View = (typeof VIEWS)[number];
 
 export default async function RelatoriosPage({
@@ -29,21 +36,52 @@ export default async function RelatoriosPage({
   searchParams: Promise<{ periodo?: string; de?: string; ate?: string; visao?: string }>;
 }) {
   const { tenantId } = await requireTenant();
+  const session = await requireOwner();
   const { periodo, de, ate, visao } = await searchParams;
   const period = (PERIODS as string[]).includes(periodo ?? "") ? (periodo as PeriodKey) : "30";
-  const view: View = (VIEWS as readonly string[]).includes(visao ?? "") ? (visao as View) : "operacional";
+
+  // O afiliado é do USUÁRIO, não do tenant: a mesma pessoa pode ser cliente e
+  // afiliada, e é o login dela que define quais abas existem.
+  const [affiliate, roles] = await Promise.all([
+    getAffiliateByUser(session.user.id),
+    getAccountRoles(session.user.id),
+  ]);
+  const affiliateOnly = isAffiliateOnly(roles);
+
+  // Quem só afilia tem uma aba só — as outras medem o agente, que essa conta
+  // não usa. É também o padrão ao abrir /relatorios sem `?visao=`.
+  const requested = (VIEWS as readonly string[]).includes(visao ?? "")
+    ? (visao as View)
+    : affiliateOnly
+      ? "afiliados"
+      : "operacional";
+  const view: View = affiliateOnly
+    ? "afiliados"
+    : requested === "afiliados" && !affiliate
+      ? "operacional"
+      : requested;
 
   const range = resolveRange(period, de, ate);
 
-  const [hasAnyData, report, financial] = await Promise.all([
-    prisma.lead.count({ where: { tenantId, isTest: false } }),
+  if (view === "afiliados" && affiliate) {
+    // Amadurece as comissões antes de somar, para o card bater com o painel.
+    await approveMaturedCommissions(affiliate.id);
+  }
+
+  const [hasAnyData, report, financial, affiliateOverview] = await Promise.all([
+    affiliateOnly ? 1 : prisma.lead.count({ where: { tenantId, isTest: false } }),
     view === "operacional" ? computePeriodReport(tenantId, range) : null,
     view === "financeiro" ? computeFinancialSummary(tenantId, range) : null,
+    view === "afiliados" && affiliate ? getAffiliateOverview(affiliate.id) : null,
   ]);
 
   // Conta sem nenhuma conversa: a grade de zeros não informa nada e ainda dá a
   // impressão de que o relatório quebrou. Estado vazio com o próximo passo.
-  if (hasAnyData === 0) {
+  //
+  // A aba de afiliados escapa dessa saída de propósito: os ganhos não dependem
+  // de a conta ter conversas — um afiliado que nunca usou o agente ainda
+  // precisa ver o que indicou.
+  if (hasAnyData === 0 && view !== "afiliados") {
     return (
       <div className="mx-auto max-w-6xl space-y-8">
         <PageHeader
@@ -85,24 +123,35 @@ export default async function RelatoriosPage({
         eyebrow="relatórios"
         title="Números da sua conta"
         description={
-          view === "financeiro"
-            ? `Retorno estimado do investimento no projeto — ${range.label}.`
-            : `Acompanhe a evolução da conta — ${range.label}.`
+          view === "afiliados"
+            ? "Seus ganhos como afiliado, mês a mês."
+            : view === "financeiro"
+              ? `Retorno estimado do investimento no projeto — ${range.label}.`
+              : `Acompanhe a evolução da conta — ${range.label}.`
         }
       />
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3">
-          <FilterTabs
-            label="Visão dos relatórios"
-            options={[
-              { key: "operacional", label: "Operacional" },
-              { key: "financeiro", label: "Financeiro" },
-            ]}
-            active={view}
-            href={viewHref}
-          />
-          <RangePicker active={de ? "custom" : period} de={de} ate={ate} visao={view} />
+          {/* Uma visão só (conta de afiliado puro) não precisa de seletor. */}
+          {!affiliateOnly && (
+            <FilterTabs
+              label="Visão dos relatórios"
+              options={[
+                { key: "operacional", label: "Operacional" },
+                { key: "financeiro", label: "Financeiro" },
+                ...(affiliate ? [{ key: "afiliados", label: "Afiliados" }] : []),
+              ]}
+              active={view}
+              href={viewHref}
+            />
+          )}
+          {/* A série de afiliados é sempre mensal (competência da comissão),
+              então um seletor de período aqui prometeria um recorte que o
+              gráfico não faz. */}
+          {view !== "afiliados" && (
+            <RangePicker active={de ? "custom" : period} de={de} ate={ate} visao={view} />
+          )}
         </div>
         {view === "operacional" && (
           <ButtonLink href={`/relatorios/export?${exportQs.toString()}`} variant="outline" size="sm">
@@ -257,6 +306,8 @@ export default async function RelatoriosPage({
         <FadeIn>
           <FinancialView summary={financial} />
         </FadeIn>
+      ) : view === "afiliados" && affiliateOverview ? (
+        <AfiliadoView overview={affiliateOverview} />
       ) : null}
     </div>
   );

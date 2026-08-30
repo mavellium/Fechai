@@ -9,8 +9,14 @@ if (!projectToken || !host) {
       ? "NEXT_PUBLIC_POSTHOG_HOST"
       : "NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN"
 
-    throw new Error(
-      `${missingVariable} variable required by PostHog is missing or un-configured, this causes events to be silently missed. This error stops appearing once ${missingVariable} is configured`,
+    // `console.warn`, e não `throw`: este arquivo roda no cliente antes da
+    // hidratação, então uma exceção aqui derrubava o React da página inteira —
+    // formulários paravam de funcionar em dev (o /login submetia como GET, com
+    // a senha na query string). Faltar analytics não pode quebrar o produto.
+    // O aviso continua para ninguém achar que está medindo sem estar.
+    console.warn(
+      `[posthog] ${missingVariable} não configurada: os eventos não estão sendo enviados. ` +
+        `Defina ${missingVariable} no .env (o token público começa com "phc_") e reinicie o dev server.`,
     )
   }
 } else {

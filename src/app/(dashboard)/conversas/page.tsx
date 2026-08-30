@@ -104,6 +104,9 @@ export default async function ConversasPage({
           agent: selected.agent,
           lead: selected.lead,
           messageCount: selected._count.messages,
+          summary: selected.summary,
+          summaryAt: selected.summaryAt,
+          summaryMsgCount: selected.summaryMsgCount,
         },
         messages: selected.messages,
       }

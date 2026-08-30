@@ -5,22 +5,47 @@ import { prisma } from "@/lib/prisma";
 import { signOut } from "@/auth";
 import { clearImpersonation } from "@/lib/impersonation";
 import { getUsageSummary } from "@/modules/billing/usage";
+import { getAccountRoles, isAffiliateOnly } from "@/modules/affiliates/roles";
 import { Button } from "@/components/ui/button";
 import { PanelShell } from "@/components/shell/PanelShell";
 import { ImpersonationBanner } from "@/components/shell/ImpersonationBanner";
 import { stopImpersonation } from "@/app/(admin)/actions";
 import type { NavItem } from "@/components/shell/ShellNav";
 
-const NAV: NavItem[] = [
+/** Telas do produto (agente de WhatsApp) — só para quem marcou "usar no meu negócio". */
+const NAV_PRODUTO: NavItem[] = [
   { href: "/inicio", label: "Início", icon: "Home" },
   { href: "/agentes", label: "Agentes", icon: "Bot" },
   { href: "/integracoes", label: "Integrações", icon: "Plug" },
   { href: "/contatos", label: "Contatos", icon: "Users" },
   { href: "/conversas", label: "Conversas", icon: "MessagesSquare" },
   { href: "/agenda", label: "Agenda", icon: "CalendarDays" },
-  { href: "/relatorios", label: "Relatórios", icon: "BarChart3" },
-  { href: "/configuracoes", label: "Configurações", icon: "Settings" },
 ];
+
+/** Só para quem está no programa de afiliados. */
+const NAV_AFILIADO: NavItem = { href: "/afiliado", label: "Afiliado", icon: "HandCoins" };
+
+/** Relatórios servem aos dois papéis (a aba de afiliados vive lá dentro). */
+const NAV_RELATORIOS: NavItem = { href: "/relatorios", label: "Relatórios", icon: "BarChart3" };
+
+/** Sempre presente: é onde os papéis são ligados/desligados. */
+const NAV_CONFIG: NavItem = { href: "/configuracoes", label: "Configurações", icon: "Settings" };
+
+/**
+ * Monta o menu a partir dos papéis da conta.
+ *
+ * Quem é só afiliado não vê Agentes, Conversas nem WhatsApp: são telas de um
+ * produto que essa pessoa não usa, e um menu cheio de itens inúteis é pior que
+ * um menu curto. Configurações fica sempre por último — é de lá que a pessoa
+ * liga o outro papel quando quiser.
+ */
+function navFor(roles: { usesProduct: boolean; isAffiliate: boolean }): NavItem[] {
+  const items: NavItem[] = [];
+  if (roles.usesProduct) items.push(...NAV_PRODUTO);
+  if (roles.isAffiliate) items.push(NAV_AFILIADO);
+  items.push(NAV_RELATORIOS, NAV_CONFIG);
+  return items;
+}
 
 /** Área logada: fora do índice. Robots.txt já bloqueia, mas a meta tag cobre o
  *  caso de a URL ser descoberta por link externo. */
@@ -70,22 +95,36 @@ export default async function DashboardLayout({ children }: { children: React.Re
     );
   }
 
+  const roles = await getAccountRoles(session.user.id);
+  const affiliateOnly = isAffiliateOnly(roles);
+
   // Conta nova: passa pelo onboarding guiado antes de entrar no painel. Fica
   // depois da checagem de suspensão para a conta suspensa ver o aviso, não o
   // wizard. (/onboarding está fora deste grupo de rotas, então não há loop.)
-  if (tenant && !tenant.onboardingCompleted) redirect("/onboarding");
+  //
+  // Quem é SÓ afiliado escapa dessa porteira: não tem WhatsApp para conectar
+  // nem agente para configurar, e prendê-lo no wizard seria um beco sem saída.
+  // Quem usa o produto continua passando por ele — inclusive quem é as duas
+  // coisas, porque aí o agente é metade do motivo de a conta existir.
+  if (tenant && !tenant.onboardingCompleted && !affiliateOnly) redirect("/onboarding");
 
-  // Uso do mês para o indicador da navegação (conversas X/Y, link para
-  // /configuracoes). Sem o tenant ativo a busca é inócua — só roda depois das
-  // duas saídas acima.
-  const usage = await getUsageSummary(tenantId);
+  // Uso do mês para o indicador da navegação (mensagens X/Y, link para
+  // /configuracoes). Sem sentido para quem só afilia: a cota é de respostas da
+  // IA, que essa conta não gasta.
+  const usage = affiliateOnly ? null : await getUsageSummary(tenantId);
+
+  const navItems = navFor(roles);
 
   return (
     <PanelShell
-      navItems={NAV}
-      brandHref="/inicio"
+      navItems={navItems}
+      // A marca leva para a primeira tela que a conta de fato tem: /inicio é
+      // do produto e não existe para quem só afilia.
+      brandHref={affiliateOnly ? "/afiliado" : "/inicio"}
       brandSubtitle={tenant?.name ?? "seu painel"}
-      footerLabel={`plano · ${tenant?.planKey ?? "FREE"}`}
+      // Plano é assinatura do produto; para quem só afilia o rodapé identifica
+      // o papel, que é a informação que faz sentido ali.
+      footerLabel={affiliateOnly ? "programa de afiliados" : `plano · ${tenant?.planKey ?? "FREE"}`}
       userLabel={session.user.email ?? ""}
       userId={session.user.id}
       userEmail={session.user.email}

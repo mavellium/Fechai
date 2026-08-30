@@ -5,6 +5,7 @@ import { ChatBubble } from "@/components/chat/ChatBubble";
 import { ChatLog } from "@/components/chat/ChatLog";
 import { dayLabel, phoneLabel, relativeTime, samePanelDay, timeLabel } from "@/lib/format";
 import { leadStatusLabel } from "./leadStatus";
+import { ConversationSummary } from "./ConversationSummary";
 import { LeadPanel, type LeadPanelData } from "./LeadPanel";
 import { SendMessageForm } from "./SendMessageForm";
 import { DeleteTestConversationButton } from "./DeleteTestConversationButton";
@@ -83,6 +84,34 @@ export function ConversationThread({
         />
       </div>
 
+      {/* O resumo acima do histórico, em xl+, onde a coluna do cliente já
+          existe: é o mesmo bloco, mas aqui é a primeira coisa lida antes de
+          entrar nas mensagens. Abaixo de xl seria duplicata do <details>
+          seguinte, então some.
+
+          Recolhível e FECHADO por padrão: aberto, o bloco comia um terço da
+          altura do histórico — a área que de fato importa nesta coluna. O
+          resumo completo continua sempre visível na coluna do cliente; aqui
+          ele é atalho, não a via principal. */}
+      {conversation.summary && (
+        <details className="hidden border-b border-ink/10 panel:border-white/10 xl:block">
+          <summary className="cursor-pointer px-4 py-2 font-mono text-micro uppercase tracking-[0.15em] text-neutral transition-colors hover:text-ink panel:text-white/50 panel:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris">
+            Resumo da conversa
+          </summary>
+          <div className="px-4 pb-3">
+            <ConversationSummary
+              conversationId={conversation.id}
+              state={{
+                summary: conversation.summary,
+                summaryAt: conversation.summaryAt,
+                summaryMsgCount: conversation.summaryMsgCount,
+                messageCount: conversation.messageCount,
+              }}
+            />
+          </div>
+        </details>
+      )}
+
       {/* Abaixo de xl não há terceira coluna: o contexto do lead vira um bloco
           que a pessoa abre quando precisa, em vez de sumir da tela. */}
       <details className="border-b border-white/10 xl:hidden">
@@ -143,7 +172,11 @@ export function ConversationThread({
         </div>
       )}
 
-      <SendMessageForm conversationId={conversation.id} />
+      <SendMessageForm
+        conversationId={conversation.id}
+        isTest={conversation.isTest}
+        agentPaused={conversation.agentPaused}
+      />
     </>
   );
 }

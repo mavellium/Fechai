@@ -5,7 +5,7 @@ import Link from "next/link";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ShellNav, type NavItem } from "./ShellNav";
-import { UsageNav } from "./UsageNav";
+import { UsageNav, type UsageNavData } from "./UsageNav";
 
 const STORAGE_KEY = "fechai:sidebar-collapsed";
 const PREF_EVENT = "fechai:sidebar-collapsed-change";
@@ -48,13 +48,7 @@ export function Sidebar({
   brandSubtitle: string;
   footerLabel: string;
   /** Uso de conversas do mês; sem ele, o indicador não aparece. */
-  usage?: {
-    used: number;
-    limit: number;
-    perConversationCap: number;
-    perConversationUsed: number;
-    unlimitedTrial?: boolean;
-  } | null;
+  usage?: UsageNavData | null;
 }) {
   const collapsed = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 
@@ -87,11 +81,7 @@ export function Sidebar({
       {usage && (
         <div className={cn("pb-4", collapsed ? "px-2" : "px-3")}>
           <UsageNav
-            used={usage.used}
-            limit={usage.limit}
-            perConversationCap={usage.perConversationCap}
-            perConversationUsed={usage.perConversationUsed}
-            unlimitedTrial={usage.unlimitedTrial}
+            {...usage}
             collapsed={collapsed}
           />
         </div>

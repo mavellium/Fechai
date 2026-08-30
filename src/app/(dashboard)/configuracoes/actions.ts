@@ -7,6 +7,8 @@ import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { strongPassword } from "@/lib/password-schema";
 import { createFeedback } from "@/modules/feedback/service";
+import { ensureAffiliate } from "@/modules/affiliates/service";
+import { getAccountRoles } from "@/modules/affiliates/roles";
 
 const schema = z.object({
   message: z.string().trim().min(3, "Escreva um pouco mais"),
@@ -85,4 +87,72 @@ export async function changePassword(_prev: Result | null, formData: FormData): 
   const passwordHash = await bcrypt.hash(parsed.data.newPassword, 10);
   await prisma.user.update({ where: { id: user.id }, data: { passwordHash } });
   return { ok: true, info: "Senha alterada com sucesso." };
+}
+
+/**
+ * Liga/desliga os papéis da conta (usar o produto · ser afiliado).
+ *
+ * Os dois moram em lugares diferentes — `User.usesProduct` e a existência de
+ * `Affiliate` — e esta ação é o único ponto que escreve os dois juntos, para
+ * não haver duas telas com regras divergentes.
+ *
+ * Regras:
+ *  - **Pelo menos um papel ativo.** Uma conta sem nenhum não teria painel; o
+ *    pedido é recusado em vez de deixar a pessoa se trancar para fora.
+ *  - **Sair do programa NÃO apaga o cadastro de afiliado.** O registro (código,
+ *    indicações, comissões) fica; só some do menu. Apagar destruiria histórico
+ *    de dinheiro e mataria links já divulgados — reativar devolve tudo, com o
+ *    mesmo código.
+ */
+export async function updateAccountRoles(
+  _prev: Result | null,
+  formData: FormData,
+): Promise<Result> {
+  const { session } = await requireTenant();
+
+  // Checkbox ausente no FormData = desmarcado.
+  const wantsProduct = formData.get("usesProduct") === "on";
+  const wantsAffiliate = formData.get("isAffiliate") === "on";
+
+  if (!wantsProduct && !wantsAffiliate) {
+    return {
+      ok: false,
+      error: "Escolha pelo menos uma opção — sua conta precisa de ao menos um uso.",
+    };
+  }
+
+  const current = await getAccountRoles(session.user.id);
+
+  if (wantsProduct !== current.usesProduct) {
+    await prisma.user.update({
+      where: { id: session.user.id },
+      data: { usesProduct: wantsProduct },
+    });
+  }
+
+  // Entrar no programa cria o cadastro (idempotente, mantém o código de quem
+  // já teve um). Sair só desmarca — ver a nota acima sobre não apagar.
+  if (wantsAffiliate && !current.isAffiliate) {
+    await ensureAffiliate(session.user.id);
+  } else if (!wantsAffiliate && current.isAffiliate) {
+    // `OPTED_OUT`, e não `SUSPENDED`: saída voluntária não é punição, e a tela
+    // de suspensão diz "fale com o suporte" — mensagem errada para quem
+    // apertou o botão por vontade própria.
+    await prisma.affiliate.update({
+      where: { userId: session.user.id },
+      data: { status: "OPTED_OUT" },
+    });
+  } else if (wantsAffiliate && current.isAffiliate) {
+    // Volta ao programa com o MESMO código. Só reabre saída voluntária —
+    // bloqueio do admin (`SUSPENDED`) não se desfaz por aqui.
+    await prisma.affiliate.updateMany({
+      where: { userId: session.user.id, status: "OPTED_OUT" },
+      data: { status: "ACTIVE" },
+    });
+  }
+
+  // O menu vive no layout do painel: revalidar só /configuracoes deixaria a
+  // navegação desatualizada até a próxima navegação cheia.
+  revalidatePath("/", "layout");
+  return { ok: true, info: "Preferências atualizadas." };
 }
