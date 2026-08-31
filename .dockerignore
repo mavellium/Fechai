@@ -26,6 +26,9 @@ docs
 *.md
 README.docker.md
 
+# Backups locais do banco — não entram no contexto de build
+backups
+
 # Diversos
 .DS_Store
 npm-debug.log*

@@ -42,3 +42,6 @@ yarn-error.log*
 next-env.d.ts
 
 contas.txt
+
+# backups do banco (scripts/backup.ts)
+/backups

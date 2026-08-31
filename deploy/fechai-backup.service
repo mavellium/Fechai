@@ -1,0 +1,30 @@
+[Unit]
+Description=fechai Backup Daemon (pg_dump agendado + rotacao)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/var/www/fechai
+Environment=BACKUP_ON_BOOT=false
+Environment=BACKUP_PG_CONTAINER=fechai-postgres-1
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/local/bin/node /var/www/fechai/node_modules/tsx/dist/cli.mjs scripts/backup-daemon.ts
+Restart=on-failure
+RestartSec=30
+
+# ---- Teto DURO de recursos (cgroup cobre node + gzip) ----
+CPUQuota=50%
+CPUWeight=10
+MemoryMax=512M
+MemoryHigh=384M
+Nice=19
+IOSchedulingClass=idle
+IOWeight=10
+
+# ---- Hardening basico ----
+NoNewPrivileges=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
