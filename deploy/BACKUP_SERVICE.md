@@ -21,7 +21,7 @@ O que o daemon faz (`scripts/backup-daemon.ts`, `node-cron`):
 ## 1. Pré-requisitos no host (uma vez)
 
 ```bash
-cd /var/www/fechai
+cd /var/www/Fechai
 git pull origin main
 
 # instala node_modules no HOST (necessario p/ rodar o daemon fora do container)
@@ -64,7 +64,7 @@ automática por porta poderia pegar o container errado.
 ## 4. Instalar o service
 
 ```bash
-sudo cp /var/www/fechai/deploy/fechai-backup.service /etc/systemd/system/
+sudo cp /var/www/Fechai/deploy/fechai-backup.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now fechai-backup.service
 ```
@@ -90,7 +90,7 @@ journalctl -u fechai-backup.service -n 30 --no-pager
 ```bash
 sudo BACKUP_PG_CONTAINER=fechai-postgres-1 systemd-run --scope \
   -p CPUQuota=50% -p MemoryMax=512M \
-  --working-directory=/var/www/fechai \
+  --working-directory=/var/www/Fechai \
   --setenv=BACKUP_PG_CONTAINER=fechai-postgres-1 \
   /usr/local/bin/node node_modules/tsx/dist/cli.mjs scripts/backup.ts manual
 
@@ -108,7 +108,7 @@ top -b -n1 | grep -E 'node|gzip'   # %CPU do node nao passa de ~50
 ## Restaurar um backup
 
 ```bash
-cd /var/www/fechai
+cd /var/www/Fechai
 npm run db:restore backups/fechai-daily-XXXX.sql.gz
 ```
 
