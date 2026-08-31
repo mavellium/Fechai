@@ -69,8 +69,10 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now fechai-backup.service
 ```
 
-> Confira também que o `DATABASE_URL` do `.env` do host aponta para o banco certo
-> (`localhost:5433` do Postgres do compose). O daemon lê o `.env` da pasta de trabalho.
+> Confira também que o `DATABASE_URL` do `.env` do host aponta para o banco certo —
+> porta da publicação do Postgres do compose (`POSTGRES_HOST_PORT`, nesta VPS é
+> **5438**). O daemon lê o `.env` da pasta de trabalho e, com `BACKUP_PG_CONTAINER`
+> fixo, usa só usuário/senha/banco dele (ignora host/porta).
 
 ## 5. Verificar
 
@@ -129,6 +131,10 @@ sudo systemctl daemon-reload && sudo systemctl restart fechai-backup.service
   `export BACKUP_PG_CONTAINER=fechai-postgres-1`
 - `BACKUP_ON_BOOT=false`: não dispara dump pesado a cada restart/reboot do
   service. Remova a linha se quiser backup no boot.
+- **Fuso horário:** o `node-cron` usa o horário do servidor — nesta VPS é **UTC**
+  (02:00 UTC = 23h em Brasília; dia 1 04:00 UTC = 01h).
+  Para rodar no fuso de Brasília, adicione `Environment=TZ=America/Sao_Paulo`
+  no `.service` e reinstale, ou ajuste os horários ("diário 02:00" vira `0 5 * * *`).
 - **Destino e retenção:** os dumps ficam em `<projeto>/backups/` (ignorado pelo
   Git e pelo build do Docker). Daemon remove os antigos após cada dump:
   manual 10, diário 3, mensal 1. Para colocar em outro volume/disco, mude o

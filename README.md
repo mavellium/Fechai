@@ -33,6 +33,7 @@ npm run dev               # http://localhost:3000
 Comece por **[docs/INDEX.md](./docs/INDEX.md)** — ele aponta para o resto (arquitetura, convenções, decisões, changelog). Não leia o repositório inteiro.
 
 Deploy em produção (Docker, servidor Linux) → **[README.docker.md](./README.docker.md)**.
+Backup do banco em produção (diário 02:00 mantém 3, mensal dia 1 04:00 mantém 1) → **[deploy/BACKUP_SERVICE.md](./deploy/BACKUP_SERVICE.md)**.
 
 ## Scripts
 
@@ -42,3 +43,6 @@ Deploy em produção (Docker, servidor Linux) → **[README.docker.md](./README.
 | `npm run build` | Build de produção |
 | `npm run db:seed` | Popula superadmin + tenant de exemplo |
 | `npm run worker` | Worker de follow-up (BullMQ) |
+| `npm run backup:now` | Backup manual imediato (`pg_dump` streaming + gzip em `backups/`) |
+| `npm run backup:daemon` | Daemon de backup: diário 02:00 (mantém 3) + mensal dia 1 04:00 (mantém 1) |
+| `npm run db:restore backups/arquivo.sql.gz` | Restaura um dump (aceita `.sql.gz`, `.sql`, `.dump`) |
