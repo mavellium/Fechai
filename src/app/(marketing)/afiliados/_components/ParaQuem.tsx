@@ -33,6 +33,7 @@ const PERFIS = [
 export function ParaQuem() {
   return (
     <section
+      id="para-quem"
       className="border-t border-ink/10 bg-paper px-4 py-20 md:py-28"
       aria-labelledby="para-quem-titulo"
     >

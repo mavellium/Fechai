@@ -2,11 +2,25 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { CircleHelp, HandCoins, Layers, LogIn, Menu, UserPlus, Workflow, X, Zap } from "lucide-react";
+import { usePathname } from "next/navigation";
+import {
+  CircleHelp,
+  HandCoins,
+  Layers,
+  LogIn,
+  Menu,
+  UserPlus,
+  Users,
+  Workflow,
+  X,
+  Zap,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-const LINKS: { href: string; id: string | null; label: string; icon: typeof Workflow }[] = [
+type NavLink = { href: string; id: string | null; label: string; icon: typeof Workflow };
+
+const HOME_LINKS: NavLink[] = [
   { href: "#como-funciona", id: "como-funciona", label: "Como funciona", icon: Workflow },
   { href: "#acoes", id: "acoes", label: "Ações", icon: Zap },
   { href: "#planos", id: "planos", label: "Planos", icon: Layers },
@@ -16,13 +30,33 @@ const LINKS: { href: string; id: string | null; label: string; icon: typeof Work
   { href: "/afiliados", id: null, label: "Afiliados", icon: HandCoins },
 ];
 
+// Seções da própria página de afiliados. Usar os ids da home aqui não
+// funciona: essas âncoras só existem na home, então na página de afiliados
+// o clique não scrollava (elemento inexistente) e o link nunca acendia.
+const AFILIADOS_LINKS: NavLink[] = [
+  {
+    href: "#como-funciona-afiliados",
+    id: "como-funciona-afiliados",
+    label: "Como funciona",
+    icon: Workflow,
+  },
+  { href: "#niveis", id: "niveis", label: "Níveis", icon: Layers },
+  { href: "#quanto-ganha", id: "quanto-ganha", label: "Simulador", icon: HandCoins },
+  { href: "#para-quem", id: "para-quem", label: "Para quem", icon: Users },
+  { href: "#faq-afiliados", id: "faq-afiliados", label: "FAQ", icon: CircleHelp },
+  { href: "/", id: null, label: "Produto", icon: Zap },
+];
+
 export function Navbar() {
+  const pathname = usePathname();
+  const links = pathname?.startsWith("/afiliados") ? AFILIADOS_LINKS : HOME_LINKS;
   const [active, setActive] = useState<string | null>(null);
   const menuRef = useRef<HTMLDialogElement>(null);
 
   // Scrollspy: acende o link da seção visível (IntersectionObserver, scroll nativo).
   useEffect(() => {
-    const sections = LINKS.map((l) => (l.id ? document.getElementById(l.id) : null)).filter(
+    setActive(null);
+    const sections = links.map((l) => (l.id ? document.getElementById(l.id) : null)).filter(
       (el): el is HTMLElement => Boolean(el),
     );
     if (sections.length === 0) return;
@@ -37,7 +71,7 @@ export function Navbar() {
     );
     sections.forEach((s) => observer.observe(s));
     return () => observer.disconnect();
-  }, []);
+  }, [links]);
 
   return (
     <header className="sticky top-0 z-40 border-b border-white/10 bg-ink/85 backdrop-blur">
@@ -49,7 +83,7 @@ export function Navbar() {
           fechai<span className="text-signal">.</span>
         </Link>
         <nav className="hidden gap-7 md:flex">
-          {LINKS.map((l) => {
+          {links.map((l) => {
             // Âncora da própria home continua <a> (scroll nativo); rota de
             // verdade usa <Link> para navegar sem recarregar a página.
             const Tag = l.id ? "a" : Link;
@@ -135,7 +169,7 @@ export function Navbar() {
           </div>
 
           <nav className="flex flex-col gap-1 px-3" aria-label="Seções da página">
-            {LINKS.map((l) => {
+            {links.map((l) => {
               const Tag = l.id ? "a" : Link;
               const on = Boolean(l.id) && active === l.id;
               return (
