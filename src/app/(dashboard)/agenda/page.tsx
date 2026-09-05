@@ -9,13 +9,14 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { describeSchedule, parseScheduleConfig } from "@/modules/scheduling/config";
 import { isGoogleCalendarConfigured } from "@/modules/scheduling/google";
+import { getCalendarFeatures } from "@/modules/scheduling/features";
 import { listMonthAppointments } from "@/modules/scheduling/repository";
 import { timeInZone, todayInZone } from "@/modules/scheduling/time";
 import { leadStatusLabel } from "../conversas/leadStatus";
 import { CalendarMonth } from "./CalendarMonth";
 import { AppointmentActions } from "./AppointmentActions";
 import { NewAppointmentDialog, type ContactOption } from "./NewAppointmentDialog";
-import { GoogleCalendarCard, type GoogleState } from "./GoogleCalendarCard";
+import { CalendarSyncStatus, type CalendarSyncItem } from "./CalendarSyncStatus";
 
 /** Quantos contatos mostrar no painel lateral — o resto fica em /contatos. */
 const SIDEBAR_CONTACTS = 6;
@@ -73,9 +74,11 @@ export default async function AgendaPage({
         ? today.day
         : null;
 
-  const [{ byDay }, integration, contacts] = await Promise.all([
+  const [{ byDay }, features, integration, clinicorp, contacts] = await Promise.all([
     listMonthAppointments(tenantId, year, month, config.timezone),
+    getCalendarFeatures(tenantId),
     prisma.calendarIntegration.findUnique({ where: { tenantId } }),
+    prisma.clinicorpIntegration.findUnique({ where: { tenantId } }),
     prisma.lead.findMany({
       where: { tenantId, isTest: false },
       orderBy: { createdAt: "desc" },
@@ -104,16 +107,30 @@ export default async function AgendaPage({
     return `/agenda?${p}`;
   };
 
-  const googleState: GoogleState = !isGoogleCalendarConfigured()
-    ? { configured: false }
-    : integration
+  // Só o ESTADO das integrações: conectar e configurar é em /integracoes.
+  // Quem olha a agenda quer saber "o que eu marcar agora chega na clínica?".
+  const syncItems: CalendarSyncItem[] = ([
+    features.googleEnabled && isGoogleCalendarConfigured()
       ? {
-          configured: true,
-          connected: true,
-          accountEmail: integration.accountEmail,
-          syncEnabled: integration.syncEnabled,
+          key: "google" as const,
+          name: "Google Agenda",
+          connected: Boolean(integration),
+          sending: Boolean(integration?.syncEnabled),
+          // O Google é espelho de mão única: só enviamos eventos para lá.
+          receiving: false,
         }
-      : { configured: true, connected: false };
+      : null,
+    features.clinicorpEnabled
+      ? {
+          key: "clinicorp" as const,
+          name: "Clinicorp",
+          connected: Boolean(clinicorp),
+          sending: Boolean(clinicorp?.syncEnabled),
+          receiving: Boolean(clinicorp?.checkAvailability),
+          error: clinicorp?.lastError ?? null,
+        }
+      : null,
+  ] as (CalendarSyncItem | null)[]).filter((x) => x !== null);
 
   const contactOptions: ContactOption[] = contacts.map((c) => ({
     id: c.id,
@@ -279,7 +296,7 @@ export default async function AgendaPage({
             )}
           </Card>
 
-          <GoogleCalendarCard state={googleState} />
+          <CalendarSyncStatus items={syncItems} />
 
           <Card>
             <div className="mb-3 flex items-center justify-between gap-3">

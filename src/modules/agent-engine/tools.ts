@@ -5,7 +5,7 @@ import {
   createAppointment,
   findOwnAppointment,
   getScheduleConfig,
-  hasConflict,
+  hasConflictAnywhere,
 } from "@/modules/scheduling/repository";
 import { formatInZone, parseLocalDateTime } from "@/modules/scheduling/time";
 import { ACTION_BY_KEY, type ActionKey } from "./actions";
@@ -151,7 +151,10 @@ const TOOLS: Record<ActionKey, ToolDef> = {
         return `Esse horário já está confirmado para ${when}${cfg.location ? ` (${cfg.location})` : ""}. Não é necessário marcar de novo — apenas confirme com o contato.`;
       }
 
-      if (await hasConflict(ctx.tenantId, startsAt, endsAt)) {
+      // Olha a nossa agenda E a do Clinicorp, quando conectado: a recepção
+      // marca paciente direto no sistema da clínica e esses horários nunca
+      // passaram por aqui.
+      if (await hasConflictAnywhere(ctx.tenantId, startsAt, endsAt, cfg.timezone)) {
         return "Já existe um compromisso nesse horário. Ofereça outro horário ao contato.";
       }
 

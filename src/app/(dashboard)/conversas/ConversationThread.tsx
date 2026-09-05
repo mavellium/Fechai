@@ -17,6 +17,8 @@ type ThreadMessage = {
   content: string;
   createdAt: Date;
   sentBy: string | null;
+  /** Mensagem entregue como voz: o player entra junto do texto. */
+  audioUrl?: string | null;
 };
 
 /**
@@ -30,11 +32,14 @@ export function ConversationThread({
   conversation,
   messages,
   backHref,
+  voiceReady = false,
 }: {
   conversation: LeadPanelData;
   messages: ThreadMessage[];
   /** Volta para a lista no celular, onde só um painel aparece por vez. */
   backHref: string;
+  /** O agente desta conversa tem voz gravada — habilita os botões de voz. */
+  voiceReady?: boolean;
 }) {
   const status = leadStatusLabel(conversation.lead.status);
   const name = conversation.lead.name ?? "Cliente sem nome";
@@ -146,8 +151,21 @@ export function ConversationThread({
               <div className={sameSpeaker ? "mt-1" : newDay ? "" : "mt-4"}>
                 <ChatBubble
                   role={m.role === "user" ? "user" : "assistant"}
-                  footer={`${senderLabel(m)} · ${timeLabel(m.createdAt)}`}
+                  footer={`${senderLabel(m)}${m.audioUrl ? " · áudio" : ""} · ${timeLabel(m.createdAt)}`}
                 >
+                  {/* Áudio + texto na MESMA bolha: o texto é o que a mensagem
+                      diz (ditado ou falado), o player é como ela chegou. Separar
+                      em duas bolhas sugeriria duas mensagens. */}
+                  {m.audioUrl && (
+                    <audio
+                      controls
+                      preload="none"
+                      src={m.audioUrl}
+                      className="mb-1 h-9 w-full min-w-[220px]"
+                    >
+                      <a href={m.audioUrl}>Baixar áudio</a>
+                    </audio>
+                  )}
                   {m.content}
                 </ChatBubble>
               </div>
@@ -176,6 +194,7 @@ export function ConversationThread({
         conversationId={conversation.id}
         isTest={conversation.isTest}
         agentPaused={conversation.agentPaused}
+        voiceReady={voiceReady}
       />
     </>
   );

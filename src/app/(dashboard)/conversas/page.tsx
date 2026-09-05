@@ -10,6 +10,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { CONVERSA_FILTERS } from "./leadStatus";
 import { ConversationList } from "./ConversationList";
 import { ConversationSearch } from "./ConversationSearch";
+import { isFishAudioConfigured } from "@/modules/voice/fish";
 import { ConversationThread } from "./ConversationThread";
 import { LeadPanel } from "./LeadPanel";
 import { SandboxDialog } from "./SandboxDialog";
@@ -68,7 +69,9 @@ export default async function ConversasPage({
           where: { id, tenantId },
           include: {
             lead: true,
-            agent: { select: { name: true } },
+            // `voiceId` vem junto do nome (mesma query) para o composer saber se
+            // pode oferecer os botões de voz — ver `voiceReady` abaixo.
+            agent: { select: { name: true, voiceId: true } },
             messages: { orderBy: { createdAt: "asc" } },
             _count: { select: { messages: true } },
           },
@@ -91,6 +94,28 @@ export default async function ConversasPage({
   };
 
   const emptyAccount = totalAll === 0;
+
+  /**
+   * O composer só oferece voz se ela existir de verdade: instalação com chave da
+   * Fish Audio E o agente desta conversa com voz gravada.
+   *
+   * Conversa sem `agentId` (as antigas, e as que nasceram antes de haver mais de
+   * um agente) cai no principal da conta — a mesma regra que `resolveAgent` usa
+   * no envio, para a tela não prometer o que a action vai recusar.
+   */
+  let voiceReady = false;
+  if (selected && isFishAudioConfigured()) {
+    if (selected.agent) {
+      voiceReady = Boolean(selected.agent.voiceId);
+    } else {
+      const primary = await prisma.agent.findFirst({
+        where: { tenantId, archived: false },
+        orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }],
+        select: { voiceId: true },
+      });
+      voiceReady = Boolean(primary?.voiceId);
+    }
+  }
 
   const detail = selected
     ? {
@@ -215,6 +240,7 @@ export default async function ConversasPage({
               conversation={detail.data}
               messages={detail.messages}
               backHref={params({ id: undefined })}
+              voiceReady={voiceReady}
             />
           ) : (
             <div className="flex flex-1 items-center justify-center">

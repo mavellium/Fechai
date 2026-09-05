@@ -52,3 +52,38 @@ export function formatWait(seconds: number): string {
   if (seconds <= 60) return "1 minuto";
   return `${Math.ceil(seconds / 60)} minutos`;
 }
+
+/**
+ * Teto de tamanho para Server Actions que NÃO recebem arquivo.
+ *
+ * `serverActions.bodySizeLimit` é global: subi-lo para 50MB por causa do upload
+ * de PDF da base de conhecimento passou a valer também para a ação que só
+ * recebe um booleano. Quem está autenticado pode mandar 50MB para qualquer
+ * uma delas e pressionar a memória de uma VPS que também roda Postgres, Redis e
+ * o worker.
+ *
+ * Devolve mensagem em vez de lançar: as ações deste app retornam
+ * `{ ok, error }` e o formulário mostra o texto: uma exceção aqui viraria tela
+ * de erro genérica para o que é, do ponto de vista do usuário, um formulário
+ * grande demais. `null` significa "pode seguir".
+ *
+ * O upload de documento (`addDocument`) NÃO usa isto — tem o próprio limite,
+ * bem maior (`MAX_KB_FILE_BYTES`).
+ */
+export const MAX_FORM_BYTES = 512 * 1024;
+
+export function payloadTooLarge(
+  formData: FormData,
+  maxBytes = MAX_FORM_BYTES,
+): string | null {
+  let total = 0;
+  for (const [, value] of formData.entries()) {
+    // File aparece aqui só se alguém anexar um a um formulário que não espera
+    // arquivo — que é justamente um dos abusos a barrar.
+    total += value instanceof File ? value.size : Buffer.byteLength(String(value), "utf8");
+    if (total > maxBytes) {
+      return "Os dados enviados são grandes demais para esta operação.";
+    }
+  }
+  return null;
+}

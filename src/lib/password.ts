@@ -172,3 +172,27 @@ export function generateStrongPassword(randomBytes: (n: number) => Uint8Array, l
   // uma senha fraca em silêncio.
   throw new Error("Não foi possível gerar uma senha dentro da política.");
 }
+
+/**
+ * Custo do bcrypt (fator de trabalho), numa constante só.
+ *
+ * Estava como o literal `10` em seis lugares — e literal repetido é como os
+ * valores divergem: basta alguém subir num arquivo e esquecer dos outros.
+ *
+ * 12 é o padrão recomendado atual (~250ms por hash contra ~60ms do 10), o que
+ * multiplica por 4 o custo de quem tenta força bruta contra um banco vazado. O
+ * custo para o produto é irrelevante: hash de senha só acontece em login,
+ * cadastro e troca — e o login já tem freio (`lib/login-throttle`) e limite por
+ * IP no cadastro, que é o que impede alguém de transformar esse custo em ataque
+ * de CPU contra o servidor.
+ *
+ * Senhas antigas continuam funcionando: o custo fica gravado no próprio hash e
+ * o `bcrypt.compare` o lê de lá. Elas seguem em 10 até a pessoa trocar a senha
+ * — não há como recalcular sem a senha em claro, e isso é o comportamento
+ * correto, não uma pendência.
+ *
+ * Ao mudar este valor, gere um DUMMY_HASH novo no mesmo custo (ver src/auth.ts):
+ * um dummy mais barato que os hashes reais devolve o "usuário não existe" mais
+ * rápido e reabre a diferença de tempo que ele existe para esconder.
+ */
+export const BCRYPT_COST = 12;

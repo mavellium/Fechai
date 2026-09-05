@@ -91,6 +91,8 @@ model Tenant {
   feedbacks        Feedback[]
   appointments     Appointment[]
   calendar         CalendarIntegration?
+  clinicorp        ClinicorpIntegration?
+  calendarFeatures CalendarFeatures?
   leadValues       TenantLeadValue[]
   referral         Referral?
 }
@@ -187,6 +189,30 @@ model Agent {
   /// agente para de responder nela (mesmo mecanismo de quando um humano assume
   /// — `agentPaused`). O dono devolve a conversa em /conversas para retomar.
   stopOnEmoji  Boolean  @default(true)
+  /// Responde em áudio, na voz gravada pelo dono da conta (`voiceId`), quando o
+  /// cliente mandou áudio — o espelho de `listenAudio`. Nasce DESLIGADO: falar
+  /// exige uma voz clonada, e a conta só tem uma depois de gravar em /agentes.
+  /// Ligado sem `voiceId`, ou com a Fish Audio fora do ar, a resposta sai em
+  /// texto: voz é forma de entrega, nunca condição para o contato ser atendido.
+  speakReplies Boolean  @default(false)
+  /// Id do modelo de voz na Fish Audio (`reference_id` do POST /v1/tts), criado
+  /// a partir da amostra que o dono gravou. Não é segredo — é um identificador
+  /// opaco, inútil sem a chave da plataforma —, por isso fica em claro, ao
+  /// contrário das credenciais de terceiros (ver `lib/crypto.ts`).
+  voiceId      String?
+  /// Nome que o dono deu à voz, só para a tela dizer qual voz está no ar.
+  voiceLabel   String?
+  /// De onde veio a voz: "recorded" (clonada da gravação do dono) ou "catalog"
+  /// (uma das vozes prontas, ver `modules/voice/catalog.ts`). Null nas contas
+  /// anteriores a este campo, que só podiam ter voz gravada.
+  ///
+  /// A distinção importa no DESCARTE: uma voz gravada é um modelo nosso na Fish
+  /// Audio e precisa ser apagada lá junto (senão fica a voz de um cliente
+  /// órfã na conta da plataforma); uma voz do catálogo é compartilhada e
+  /// apagá-la derrubaria a voz de todas as outras contas que a escolheram.
+  voiceSource  String?
+  /// Quando a voz foi gravada — a tela usa para mostrar "gravada em ...".
+  voiceCreatedAt DateTime?
   archived     Boolean  @default(false)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -350,6 +376,16 @@ model Message {
   /// resposta sairia gravada duas vezes — uma pelo orquestrador, outra pelo
   /// webhook. Null em mensagens de sandbox e nas manuais antes deste campo.
   whatsappMessageId String? @unique
+  /// Áudio desta mensagem na CDN, quando ela foi enviada como mensagem de voz.
+  /// Null = mensagem de texto comum (a esmagadora maioria).
+  ///
+  /// `content` continua sendo o TEXTO da mensagem mesmo quando há áudio — o que
+  /// foi ditado (áudio gravado à mão, transcrito) ou o que foi falado (texto
+  /// que virou voz). É `content` que vai para o contexto do LLM, para o resumo
+  /// da conversa e para a busca; `audioUrl` é só a forma de entrega, e existe
+  /// para a pessoa reouvir no painel o que de fato chegou no WhatsApp do
+  /// cliente. Guardar só o áudio deixaria o histórico cego para tudo isso.
+  audioUrl       String?
   createdAt      DateTime     @default(now())
 
   @@index([conversationId])
@@ -380,6 +416,10 @@ model Appointment {
   /// Id do evento espelhado no Google Agenda, quando a conta está integrada.
   /// Null = só existe aqui (integração desligada ou sincronização falhou).
   googleEventId String?
+  /// Id do agendamento espelhado no Clinicorp, mesma ideia do `googleEventId`.
+  /// Guardado como String porque o id de lá é um inteiro de 64 bits (ex.:
+  /// 4791226171916288) — fora do alcance seguro do Number do JS.
+  clinicorpAppointmentId String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -387,6 +427,28 @@ model Appointment {
   @@index([tenantId, startsAt])
   @@index([leadId])
   @@index([agentId])
+}
+
+/// Quais integrações de calendário a conta habilitou em /integracoes.
+///
+/// Separado das linhas de conexão (`CalendarIntegration`, `ClinicorpIntegration`)
+/// de propósito: habilitar é a decisão "quero usar isso", tomada antes de ter
+/// credencial nenhuma, e desabilitar não pode apagar o que já foi configurado —
+/// quem desliga por uma semana espera reencontrar tudo ao religar.
+///
+/// Sem linha = nada habilitado (o padrão de toda conta nova).
+model CalendarFeatures {
+  id       String @id @default(cuid())
+  tenantId String @unique
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// Mostra o card do Google Agenda na /agenda.
+  googleEnabled Boolean @default(false)
+  /// Mostra o card do Clinicorp na /agenda.
+  clinicorpEnabled Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 /// Conexão OAuth da conta com o Google Agenda (opcional). Uma por tenant.
@@ -408,6 +470,52 @@ model CalendarIntegration {
   syncEnabled  Boolean  @default(true)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+}
+
+/// Conexão da conta com o Clinicorp (software de gestão de clínicas). Uma por
+/// tenant, como a do Google — e pelo mesmo motivo: as credenciais são DO
+/// CLIENTE (cada clínica gera as suas em Gerenciar Assinatura › Acesso Externo
+/// e Integrações), não da plataforma.
+///
+/// Não há OAuth aqui: a API do Clinicorp usa HTTP Basic com um par fixo
+/// usuário/token. Por isso a pessoa cola as credenciais na tela em vez de
+/// passar por um consentimento.
+model ClinicorpIntegration {
+  id       String @id @default(cuid())
+  tenantId String @unique
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// "Usuário API" e "Token API" da tela do Clinicorp — viram o par Basic.
+  apiUser  String
+  apiToken String
+  /// Identificador do assinante. Obrigatório em boa parte dos endpoints e, em
+  /// conta de grupo/franquia, é o que diz de qual unidade se está falando.
+  subscriberId String
+
+  /// Clínica onde os horários são criados (`Clinic_BusinessId`). A conta pode
+  /// ter mais de uma; a escolhida aqui é a que recebe os agendamentos.
+  businessId String?
+  /// Profissional padrão (`Dentist_PersonId`). Opcional: sem ele o agendamento
+  /// entra na agenda da clínica sem profissional definido.
+  dentistId String?
+  /// Categoria do agendamento criado pelo agente, pelo nome cadastrado lá
+  /// (ex.: "Avaliação"). Define a cor que a clínica vê na agenda.
+  categoryDescription String?
+
+  /// Espelhar novos agendamentos pode ser desligado sem apagar as credenciais.
+  syncEnabled Boolean @default(true)
+  /// Consultar a agenda do Clinicorp antes de oferecer horário. Separado do
+  /// espelhamento: uma clínica pode querer só enviar, sem a leitura extra.
+  checkAvailability Boolean @default(true)
+
+  /// Diagnóstico da última chamada — a tela mostra para a pessoa saber que a
+  /// credencial venceu sem precisar abrir o log do servidor.
+  lastSyncAt    DateTime?
+  lastErrorAt   DateTime?
+  lastError     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 /// Configuração de IA da PLATAFORMA (não é por tenant) — linha única.

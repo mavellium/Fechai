@@ -25,11 +25,17 @@ const credentialsSchema = z.object({
 
 /**
  * Hash descartável comparado quando o e-mail não existe. Sem ele, "conta
- * inexistente" responde em ~1ms e "senha errada" em ~100ms (o custo do bcrypt),
+ * inexistente" responde em ~1ms e "senha errada" em ~235ms (o custo do bcrypt),
  * e essa diferença sozinha já permite descobrir quem é cliente do produto.
  * É um bcrypt válido de uma senha aleatória — nunca vai bater com nada.
+ *
+ * O CUSTO DELE PRECISA ACOMPANHAR `BCRYPT_COST` (src/lib/password.ts). Um dummy
+ * mais barato que os hashes reais responde mais rápido e reabre exatamente a
+ * diferença de tempo que ele existe para esconder — medido: dummy custo 10
+ * contra hash custo 12 vaza ~176ms, o mesmo custo vaza ~4ms. Para trocar:
+ *   node -e "console.log(require('bcryptjs').hashSync(require('crypto').randomBytes(24).toString('hex'), 12))"
  */
-const DUMMY_HASH = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy";
+const DUMMY_HASH = "$2b$12$9lmSi6lNXwxr03tpI4po4e9H1t5T/30TlyBgik3mGEFP7li9a84T2";
 
 const GOOGLE_PROVIDER = "google";
 

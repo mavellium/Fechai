@@ -6,10 +6,29 @@ import { createGunzip } from 'zlib'
 import { pipeline } from 'stream/promises'
 import * as dotenv from 'dotenv'
 import { resolvePgContext, buildPgCommand } from './pg-bin'
+import { decryptBackup, isEncryptedBackup } from './backup-crypto'
 
 dotenv.config()
 
 const execAsync = promisify(exec)
+
+/**
+ * Decifra um `.enc` para um arquivo temporário e devolve o caminho dele.
+ *
+ * Decifrar uma vez aqui, na entrada, mantém todo o fluxo abaixo — que já
+ * ramifica entre docker/local, gzip/plain e formato custom — sem precisar
+ * saber que criptografia existe. Backup em claro passa direto.
+ *
+ * O temporário nasce 0o600 e é apagado no `finally` de quem chama: é o dump
+ * inteiro em texto claro no disco, ainda que por segundos.
+ */
+function decryptToTemp(resolved: string): string {
+  const payload = fs.readFileSync(resolved)
+  const plaintext = decryptBackup(payload) // lança se a chave estiver errada
+  const tmp = resolved.slice(0, -'.enc'.length)
+  fs.writeFileSync(tmp, plaintext, { mode: 0o600 })
+  return tmp
+}
 
 interface DBConfig {
   host: string
@@ -34,9 +53,23 @@ async function runRestore(filePath: string): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL
   if (!databaseUrl) throw new Error('DATABASE_URL não definida no ambiente')
 
-  const resolved = path.resolve(filePath)
-  if (!fs.existsSync(resolved)) throw new Error(`Arquivo não encontrado: ${resolved}`)
+  const original = path.resolve(filePath)
+  if (!fs.existsSync(original)) throw new Error(`Arquivo não encontrado: ${original}`)
 
+  // Cifrado: decifra primeiro; daqui para baixo o fluxo é o de sempre.
+  const encrypted = isEncryptedBackup(original)
+  const resolved = encrypted ? decryptToTemp(original) : original
+
+  try {
+    await restoreFromPlainFile(resolved, databaseUrl)
+  } finally {
+    // O temporário decifrado não pode sobreviver ao processo — ele é o backup
+    // em claro, exatamente o que a cifra existe para evitar em disco.
+    if (encrypted && fs.existsSync(resolved)) fs.unlinkSync(resolved)
+  }
+}
+
+async function restoreFromPlainFile(resolved: string, databaseUrl: string): Promise<void> {
   const db = parseConnectionUrl(databaseUrl)
   const isCustomFormat = resolved.endsWith('.dump')
   const isGzip = resolved.endsWith('.gz')

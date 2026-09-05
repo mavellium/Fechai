@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import bcrypt from "bcryptjs";
 import type { PlanKey, UserRole } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { generateStrongPassword } from "@/lib/password";
+import { generateStrongPassword, BCRYPT_COST } from "@/lib/password";
 import { createTenantWithOwner } from "@/modules/tenants/provision";
 
 // Funções cross-tenant do painel admin. Autorização (SUPERADMIN) é garantida
@@ -88,7 +88,7 @@ export async function adminCreateAccount(input: {
   await createTenantWithOwner({
     tenantName: input.tenantName.trim() || email.split("@")[0],
     email,
-    passwordHash: await bcrypt.hash(password, 10),
+    passwordHash: await bcrypt.hash(password, BCRYPT_COST),
     role: input.role,
     planKey: input.planKey,
   });

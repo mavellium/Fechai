@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
+import { payloadTooLarge } from "@/lib/rate-limit";
 
 type Result = { ok: boolean; error?: string; info?: string };
 
@@ -23,6 +24,9 @@ function parseReais(raw: string): number | null {
  * no início delas, então mudar o número não recalcula períodos passados.
  */
 export async function saveLeadValue(_prev: Result | null, formData: FormData): Promise<Result> {
+  const tooLarge = payloadTooLarge(formData);
+  if (tooLarge) return { ok: false, error: tooLarge };
+
   const { tenantId } = await requireTenant();
 
   const cents = parseReais(String(formData.get("value") ?? ""));

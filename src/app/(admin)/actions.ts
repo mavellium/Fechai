@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import type { PlanKey } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { payloadTooLarge } from "@/lib/rate-limit";
 import { requireSuperadmin } from "@/lib/session";
 import { setImpersonation, clearImpersonation } from "@/lib/impersonation";
 import {
@@ -77,6 +78,9 @@ export async function createAccount(
   _prev: CreateAccountResult | null,
   formData: FormData,
 ): Promise<CreateAccountResult> {
+  const tooLarge = payloadTooLarge(formData);
+  if (tooLarge) return { ok: false, error: tooLarge };
+
   await requireSuperadmin();
 
   const parsed = createAccountSchema.safeParse(Object.fromEntries(formData));

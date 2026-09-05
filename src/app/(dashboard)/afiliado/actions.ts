@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireOwner } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
+import { payloadTooLarge } from "@/lib/rate-limit";
 import { ensureAffiliate } from "@/modules/affiliates/service";
 
 /**
@@ -42,6 +43,11 @@ export async function savePayoutInfo(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
+  // ActionState aqui é { ok?: string } — `ok` é a mensagem de sucesso, não um
+  // booleano, então o erro vai sozinho.
+  const tooLarge = payloadTooLarge(formData);
+  if (tooLarge) return { error: tooLarge };
+
   const session = await requireOwner();
 
   const parsed = payoutSchema.safeParse({

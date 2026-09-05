@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { getWhatsAppProvider } from "@/modules/whatsapp";
+import { storeVoiceMessage } from "@/modules/voice/storage";
 
 /**
  * Encontra (ou cria) o lead + conversa de um telefone, dentro do tenant.
@@ -77,9 +78,18 @@ export async function appendMessage(
   sentBy?: "agent" | "human",
   /** key.id no WhatsApp — só existe quando a mensagem foi enviada de verdade pela instância. */
   externalId?: string,
+  /** URL do áudio na CDN, quando a mensagem foi entregue como voz. Ver schema. */
+  audioUrl?: string | null,
 ) {
   const message = await prisma.message.create({
-    data: { conversationId, role, content, sentBy, whatsappMessageId: externalId },
+    data: {
+      conversationId,
+      role,
+      content,
+      sentBy,
+      whatsappMessageId: externalId,
+      audioUrl: audioUrl ?? null,
+    },
   });
   if (role === "user") {
     await prisma.conversation.update({
@@ -104,11 +114,19 @@ export type SendManualReplyResult = { ok: true } | { ok: false; error: string };
  * (sandbox), só grava — sem WhatsApp real envolvido. Sempre grava com
  * `sentBy: "human"` e liga `agentPaused`, para `runAgentTurn` não responder
  * por cima na machine seguinte.
+ *
+ * Com `audio`, a mensagem sai como **voz** (PTT) em vez de texto. O `text`
+ * continua obrigatório e continua sendo o que fica no histórico: é ele que vai
+ * para o contexto do LLM, para o resumo e para a busca (ver `Message.audioUrl`
+ * no schema). Quem chama decide de onde esse texto vem — do que foi digitado
+ * (texto→voz) ou da transcrição do que foi gravado.
  */
 export async function sendManualReply(
   tenantId: string,
   conversationId: string,
   text: string,
+  /** Manda como mensagem de voz. Sem isto, envio de texto normal. */
+  audio?: { buffer: Buffer; mime: string },
 ): Promise<SendManualReplyResult> {
   const trimmed = text.trim();
   if (!trimmed) return { ok: false, error: "Escreva algo antes de enviar." };
@@ -132,18 +150,45 @@ export async function sendManualReply(
       // Grava o key.id da mensagem que acabamos de enviar: o webhook reentrega
       // tudo que a instância manda como fromMe, e sem esse id a resposta
       // manual apareceria duas vezes no histórico.
-      externalId = await getWhatsAppProvider().sendMessage(
-        instance.externalId,
-        conversation.lead!.phone,
-        trimmed,
-      );
+      const provider = getWhatsAppProvider();
+      externalId = audio
+        ? await provider.sendAudio(instance.externalId, conversation.lead!.phone, {
+            base64: audio.buffer.toString("base64"),
+            mime: audio.mime,
+          })
+        : await provider.sendMessage(instance.externalId, conversation.lead!.phone, trimmed);
     } catch (err) {
       console.error("[agent-engine] falha ao enviar mensagem manual", err);
-      return { ok: false, error: "Não foi possível enviar pelo WhatsApp. Tente de novo." };
+      return {
+        ok: false,
+        error: audio
+          ? "Não foi possível enviar o áudio pelo WhatsApp. Tente de novo."
+          : "Não foi possível enviar pelo WhatsApp. Tente de novo.",
+      };
     }
   }
 
-  await appendMessage(conversationId, "assistant", trimmed, "human", externalId ?? undefined);
+  // Só guarda na CDN DEPOIS do envio: se o WhatsApp recusar, não sobra arquivo
+  // órfão de uma mensagem que nunca existiu. Falhar aqui não desfaz o envio —
+  // a mensagem entra no histórico com o texto e sem player (ver storage.ts).
+  let audioUrl: string | null = null;
+  if (audio) {
+    audioUrl = await storeVoiceMessage({
+      tenantId,
+      conversationId,
+      audio: audio.buffer,
+      mime: audio.mime,
+    });
+  }
+
+  await appendMessage(
+    conversationId,
+    "assistant",
+    trimmed,
+    "human",
+    externalId ?? undefined,
+    audioUrl,
+  );
   await prisma.conversation.update({
     where: { id: conversationId },
     data: { needsHuman: false, agentPaused: true },

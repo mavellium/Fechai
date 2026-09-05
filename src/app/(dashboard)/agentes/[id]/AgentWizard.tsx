@@ -59,7 +59,7 @@ const STEPS = [
     label: "Comportamento",
     icon: Mic,
     title: "Como ele conversa",
-    help: "Dois comportamentos de conversa: ouvir mensagens de voz e encerrar quando a pessoa reage com um emoji ou manda só um emoji. Os dois vêm ligados por padrão.",
+    help: "Como ele se comporta na conversa: ouvir mensagens de voz, responder falando na sua voz e encerrar quando a pessoa manda só um emoji.",
   },
   {
     key: "testar",
@@ -93,7 +93,11 @@ export function AgentWizard({
   followUpConfig,
   enabled,
   listenAudio,
+  speakReplies,
   stopOnEmoji,
+  voice,
+  catalogKey = null,
+  voiceAvailable,
   done,
 }: {
   agentId: string;
@@ -109,7 +113,12 @@ export function AgentWizard({
   enabled: boolean;
   /** Comportamentos de conversa (ver BehaviorSettings). */
   listenAudio: boolean;
+  speakReplies: boolean;
   stopOnEmoji: boolean;
+  /** Voz clonada do dono da conta, usada quando `speakReplies` está ligado. */
+  voice: { label: string | null; createdAt: Date | null; source: string | null } | null;
+  catalogKey?: string | null;
+  voiceAvailable: boolean;
   done: Record<string, boolean>;
 }) {
   // Abre no primeiro passo pendente — quem volta continua de onde parou em vez
@@ -223,7 +232,11 @@ export function AgentWizard({
                   <BehaviorSettings
                     agentId={agentId}
                     listenAudio={listenAudio}
+                    speakReplies={speakReplies}
                     stopOnEmoji={stopOnEmoji}
+                    voice={voice}
+                    catalogKey={catalogKey}
+                    voiceAvailable={voiceAvailable}
                   />
                 ),
               },

@@ -14,6 +14,43 @@ import {
 const GUEST_ONLY_ROUTES = new Set(["/login", "/cadastro"]);
 
 /**
+ * Rede de segurança das rotas autenticadas.
+ *
+ * NÃO é a autorização do produto: quem decide acesso continua sendo o
+ * `layout.tsx` de cada pasta (`requireProductAccess`) e o guard de sessão de
+ * cada action/rota — só eles conhecem tenant, papel e plano. Isto aqui existe
+ * para que uma pasta nova, criada sem `layout.tsx`, não nasça aberta: hoje
+ * isso depende de alguém lembrar, e é o esquecimento que só aparece depois
+ * de virar incidente.
+ *
+ * É a camada mais fraca das três, e de propósito. O `next` em uso tem CVE de
+ * bypass de proxy/middleware em App Router (docs/SECURITY_AUDIT.md, VULN-02),
+ * então tratá-la como defesa única seria construir sobre o que já se sabe
+ * frágil. Ela reduz a janela de erro; a decisão real acontece no servidor.
+ *
+ * Só verifica se EXISTE sessão. Papel e tenant ficam de fora para não criar
+ * uma segunda fonte de verdade, que divergiria da primeira com o tempo.
+ */
+const PROTECTED_PREFIXES = [
+  "/inicio",
+  "/agentes",
+  "/conversas",
+  "/contatos",
+  "/agenda",
+  "/relatorios",
+  "/integracoes",
+  "/whatsapp",
+  "/configuracoes",
+  "/afiliado",
+  "/onboarding",
+  "/admin",
+];
+
+function isProtected(pathname: string) {
+  return PROTECTED_PREFIXES.some((r) => pathname === r || pathname.startsWith(`${r}/`));
+}
+
+/**
  * Grava o código do afiliado num cookie quando a URL traz `?ref=`.
  *
  * Fica aqui, e não numa página, porque o afiliado divulga o link para
@@ -67,11 +104,44 @@ export default auth((req) => {
     return captureReferral(req, NextResponse.redirect(new URL(dest, nextUrl)));
   }
 
+  // Rota do produto sem sessão nenhuma: manda para o login levando o destino,
+  // para a pessoa voltar onde estava depois de entrar.
+  if (!session?.user && isProtected(nextUrl.pathname)) {
+    const login = new URL("/login", nextUrl);
+    login.searchParams.set("callbackUrl", nextUrl.pathname);
+    return captureReferral(req, NextResponse.redirect(login));
+  }
+
   return captureReferral(req, NextResponse.next());
 });
 
 export const config = {
-  // Além das telas de convidado, o matcher cobre as rotas públicas onde um
-  // link de afiliado pode cair (home, planos, landing do programa).
-  matcher: ["/", "/login", "/cadastro", "/planos", "/afiliados"],
+  /**
+   * Rotas públicas onde um link de afiliado pode cair (home, planos, landing),
+   * as telas de convidado, e todas as rotas do produto.
+   *
+   * `/api` fica de fora: cada rota de API tem a própria regra — o webhook do
+   * WhatsApp autentica por segredo compartilhado, o do Stripe por assinatura,
+   * o widget é público com rate limit. Um redirect para /login em cima de um
+   * webhook quebraria a integração em vez de proteger alguma coisa.
+   */
+  matcher: [
+    "/",
+    "/login",
+    "/cadastro",
+    "/planos",
+    "/afiliados",
+    "/inicio/:path*",
+    "/agentes/:path*",
+    "/conversas/:path*",
+    "/contatos/:path*",
+    "/agenda/:path*",
+    "/relatorios/:path*",
+    "/integracoes/:path*",
+    "/whatsapp/:path*",
+    "/configuracoes/:path*",
+    "/afiliado/:path*",
+    "/onboarding/:path*",
+    "/admin/:path*",
+  ],
 };

@@ -6,7 +6,31 @@ on:
       - main 
 
 jobs:
+  # Portão antes do deploy: tipos, lint e os testes de autorização.
+  #
+  # Antes o push para main ia direto para produção. Uma ação sem guard de
+  # sessão, ou um `update` por id cru, chegava ao servidor sem ninguém ver —
+  # e é justamente esse tipo de regressão que os testes cobrem.
+  #
+  # A auditoria de dependências fica fora deste caminho de propósito: CVE nova
+  # aparece sem ninguém commitar nada, então travar o deploy por causa dela
+  # empurraria o time a burlar o portão. Ela roda no workflow Seguranca.
+  verificacoes:
+    name: Verificacoes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm run lint
+      - run: npm test
+
   deploy:
+    needs: verificacoes
     runs-on: ubuntu-latest
 
     steps:

@@ -162,7 +162,16 @@ export async function deleteDocument(tenantId: string, documentId: string) {
 // Busca semântica para o motor (Milestone 5). Retorna os trechos mais próximos
 // da base DAQUELE agente — o filtro por agentId é o que impede o agente de
 // vendas responder com documento do suporte.
+//
+// `tenantId` é obrigatório e vem primeiro por decisão de segurança: esta era a
+// única query de dados de tenant do código sem ele. Não havia como explorar
+// (o agentId sempre passa por `getAgentOwned` antes), mas a garantia dependia
+// de todo chamador futuro lembrar disso. Como parâmetro obrigatório, quem
+// esquecer não compila — e o custo de errar aqui é a base de conhecimento de
+// um cliente (tabela de preços, procedimentos internos) entrar no prompt da IA
+// de outro.
 export async function searchSimilarChunks(
+  tenantId: string,
   agentId: string,
   queryEmbedding: number[],
   limit = 4,
@@ -171,7 +180,7 @@ export async function searchSimilarChunks(
   return prisma.$queryRaw<{ content: string; distance: number }[]>(Prisma.sql`
     SELECT content, embedding <=> ${literal}::vector AS distance
     FROM "KnowledgeChunk"
-    WHERE "agentId" = ${agentId} AND embedding IS NOT NULL
+    WHERE "tenantId" = ${tenantId} AND "agentId" = ${agentId} AND embedding IS NOT NULL
     ORDER BY embedding <=> ${literal}::vector
     LIMIT ${limit}`);
 }

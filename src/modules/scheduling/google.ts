@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { getCalendarFeatures } from "./features";
 
 /**
  * Integração opcional com o Google Agenda.
@@ -142,7 +143,12 @@ async function validAccessToken(tenantId: string): Promise<string | null> {
     });
     return token.access_token;
   } catch (err) {
-    console.error("[google-calendar] falha ao renovar token", err);
+    // Só a mensagem: respostas de erro do OAuth às vezes trazem o próprio
+    // refresh token no corpo, e log costuma ir para um agregador de terceiros.
+    console.error(
+      "[google-calendar] falha ao renovar token:",
+      err instanceof Error ? err.message : "erro desconhecido",
+    );
     return null;
   }
 }
@@ -170,6 +176,9 @@ export async function pushEventToGoogle(
   try {
     const integration = await prisma.calendarIntegration.findUnique({ where: { tenantId } });
     if (!integration || !integration.syncEnabled) return null;
+    // Desabilitar em /integracoes precisa PARAR o espelho, não só esconder o
+    // card da agenda.
+    if (!(await getCalendarFeatures(tenantId)).googleEnabled) return null;
 
     const accessToken = await validAccessToken(tenantId);
     if (!accessToken) return null;

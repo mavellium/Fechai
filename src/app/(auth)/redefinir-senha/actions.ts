@@ -1,8 +1,10 @@
 "use server";
 
 import bcrypt from "bcryptjs";
+import { BCRYPT_COST } from "@/lib/password";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
+import { payloadTooLarge } from "@/lib/rate-limit";
 import { strongPassword } from "@/lib/password-schema";
 import { clearLoginFailures } from "@/lib/login-throttle";
 import { requestContext } from "@/modules/auth/attempts";
@@ -27,6 +29,9 @@ export async function resetPassword(
   _prev: ResetPasswordState,
   formData: FormData,
 ): Promise<ResetPasswordState> {
+  const tooLarge = payloadTooLarge(formData);
+  if (tooLarge) return { ok: false, error: tooLarge };
+
   const parsed = schema.safeParse({
     token: formData.get("token"),
     password: formData.get("password"),
@@ -42,7 +47,7 @@ export async function resetPassword(
   const resolved = await resolveUsableResetToken(parsed.data.token);
   if (!resolved) return { ok: false, error: INVALID_TOKEN };
 
-  const passwordHash = await bcrypt.hash(parsed.data.password, 10);
+  const passwordHash = await bcrypt.hash(parsed.data.password, BCRYPT_COST);
 
   /*
    * Tudo numa transação com a marcação de uso: se a senha for gravada e o token

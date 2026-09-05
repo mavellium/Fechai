@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import bcrypt from "bcryptjs";
+import { BCRYPT_COST } from "@/lib/password";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
+import { rateLimit, formatWait } from "@/lib/rate-limit";
 import { createTenantWithOwner } from "@/modules/tenants/provision";
 import { REFERRAL_COOKIE } from "@/modules/affiliates/config";
 import { attachReferralToTenant, ensureAffiliate } from "@/modules/affiliates/service";
@@ -69,7 +71,47 @@ const schema = z.object({
     .default(["cliente"]),
 });
 
+/**
+ * Freio por IP no cadastro.
+ *
+ * Cada requisição aqui roda um `bcrypt.hash` — caro em CPU de propósito — e
+ * cria tenant + usuário. Sem limite, algumas requisições paralelas saturam a
+ * VPS que também hospeda Postgres, Redis e o worker, derrubando o atendimento
+ * de todos os tenants. O limite é generoso: ninguém cria 5 contas por hora do
+ * mesmo IP de boa-fé, mas escritório com IP compartilhado não é bloqueado.
+ */
+const REGISTER_MAX_PER_IP = 5;
+const REGISTER_WINDOW_SECONDS = 60 * 60;
+
+async function clientIp(): Promise<string> {
+  const h = await headers();
+  return (
+    h.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    h.get("x-real-ip")?.trim() ||
+    "desconhecido"
+  );
+}
+
 export async function POST(req: Request) {
+  // Antes do parse e, principalmente, antes do bcrypt: quem está no limite não
+  // deve custar a CPU que o ataque quer consumir (mesma ordem do login).
+  const limit = await rateLimit(
+    "register:ip",
+    await clientIp(),
+    REGISTER_MAX_PER_IP,
+    REGISTER_WINDOW_SECONDS,
+  );
+  if (!limit.allowed) {
+    return NextResponse.json(
+      {
+        error: `Muitas contas criadas deste endereço. Tente de novo em ${formatWait(
+          limit.retryAfterSeconds,
+        )}.`,
+      },
+      { status: 429, headers: { "Retry-After": String(limit.retryAfterSeconds) } },
+    );
+  }
+
   const body = await req.json().catch(() => null);
   const parsed = schema.safeParse(body);
   if (!parsed.success) {
@@ -87,7 +129,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "E-mail já cadastrado" }, { status: 409 });
   }
 
-  const passwordHash = await bcrypt.hash(password, 10);
+  const passwordHash = await bcrypt.hash(password, BCRYPT_COST);
   const { tenant, user } = await createTenantWithOwner({
     tenantName: name?.trim() || email.split("@")[0],
     email,

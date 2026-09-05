@@ -18,10 +18,39 @@ export type Impersonation = {
   email: string;
   role: string;
   tenantId: string;
+  /**
+   * Instante de expiração, DENTRO do payload assinado. O `maxAge` do cookie
+   * não serve para isso: ele é uma instrução ao navegador, e quem captura o
+   * cookie simplesmente não a obedece — sem este campo, um cookie de
+   * personificação vazado valeria para sempre.
+   */
+  exp?: number;
 };
 
+/**
+ * Segredo de assinatura. Antes era `process.env.AUTH_SECRET ?? ""`, e o fallback
+ * era o problema: sem a variável, o HMAC passava a usar chave vazia — conhecida
+ * por qualquer um — e a verificação continuava "passando", sem nenhum sinal de
+ * que a proteção havia sumido. Como o NextAuth v5 aceita tanto `AUTH_SECRET`
+ * quanto `NEXTAUTH_SECRET`, uma instalação com só a segunda logava normalmente
+ * enquanto a personificação ficava forjável.
+ *
+ * Agora lança, como em `lib/crypto`: falhar alto na hora é melhor que degradar
+ * em silêncio numa função de autorização.
+ */
+function secret(): string {
+  const value = process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET;
+  if (!value || value.length < 32) {
+    throw new Error(
+      "AUTH_SECRET ausente ou curta demais (mínimo 32 caracteres) — " +
+        "personificação desabilitada. Gere uma com: openssl rand -base64 32",
+    );
+  }
+  return value;
+}
+
 function hmac(value: string) {
-  return createHmac("sha256", process.env.AUTH_SECRET ?? "").update(value).digest("hex");
+  return createHmac("sha256", secret()).update(value).digest("hex");
 }
 
 function encode(payload: Impersonation) {
@@ -32,18 +61,35 @@ function encode(payload: Impersonation) {
 function decode(value: string): Impersonation | null {
   const [raw, sig] = value.split(".");
   if (!raw || !sig) return null;
-  const expected = Buffer.from(hmac(raw), "hex");
+
+  let expected: Buffer;
+  try {
+    expected = Buffer.from(hmac(raw), "hex");
+  } catch {
+    // Segredo mal configurado: nenhum cookie é válido. Não derruba a página —
+    // quem chama trata como "não está personificando".
+    return null;
+  }
+
   const actual = Buffer.from(sig, "hex");
   if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return null;
+
   try {
-    return JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as Impersonation;
+    const payload = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as Impersonation;
+    // Assinatura boa, prazo vencido: recusa. Cookie antigo sem `exp` também sai
+    // de circulação, em vez de virar uma exceção permanente à regra.
+    if (typeof payload.exp !== "number" || payload.exp <= Date.now()) return null;
+    return payload;
   } catch {
     return null;
   }
 }
 
 export async function setImpersonation(data: Impersonation) {
-  (await cookies()).set(COOKIE_NAME, encode(data), {
+  // O prazo entra no payload assinado e no cookie: o primeiro é o que vale,
+  // o segundo só evita que o navegador guarde lixo já vencido.
+  const payload: Impersonation = { ...data, exp: Date.now() + COOKIE_TTL_SECONDS * 1000 };
+  (await cookies()).set(COOKIE_NAME, encode(payload), {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",

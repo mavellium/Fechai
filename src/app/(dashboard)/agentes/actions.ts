@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
+import { payloadTooLarge } from "@/lib/rate-limit";
 import { planOf } from "@/modules/billing/plans";
 import { composeSystemPrompt, type PersonaAnswers } from "@/modules/agent-engine/persona";
 import { ACTION_BY_KEY, type ActionKey } from "@/modules/agent-engine/actions";
@@ -19,6 +20,15 @@ import {
 } from "@/modules/knowledge-base/repository";
 import { extractTextFromFile } from "@/modules/knowledge-base/extract";
 import { uploadToBunny } from "@/lib/bunny";
+import {
+  VOICE_SAMPLE_MAX_BYTES,
+  VOICE_SAMPLE_MIN_BYTES,
+  cloneVoice,
+  deleteVoice,
+  isFishAudioConfigured,
+  synthesize,
+} from "@/modules/voice/fish";
+import { SAMPLE_TEXT, findCatalogVoice } from "@/modules/voice/catalog";
 
 export type Result = { ok: boolean; error?: string; info?: string };
 
@@ -46,6 +56,9 @@ const nameSchema = z.string().trim().min(1, "Dê um nome ao agente").max(60, "No
 
 /** Cria um agente e leva direto ao passo a passo dele. */
 export async function createAgentAction(_prev: Result | null, formData: FormData): Promise<Result> {
+  const tooLarge = payloadTooLarge(formData);
+  if (tooLarge) return { ok: false, error: tooLarge };
+
   const { tenantId } = await requireTenant();
   const parsed = nameSchema.safeParse(formData.get("name"));
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message };
@@ -117,25 +130,258 @@ export async function setAgentEnabled(agentId: string, enabled: boolean): Promis
 
 /**
  * Liga/desliga um comportamento de conversa do agente (passo Comportamento):
- * `listenAudio` (ouvir mensagens de voz) e `stopOnEmoji` (encerrar quando o
- * cliente manda só um emoji). São colunas do Agent, não ações com limite de
- * plano — por isso não passam por `setActionEnabled`.
+ * `listenAudio` (ouvir mensagens de voz), `stopOnEmoji` (encerrar quando o
+ * cliente manda só um emoji) e `speakReplies` (responder em áudio). São colunas
+ * do Agent, não ações com limite de plano — por isso não passam por
+ * `setActionEnabled`.
  */
+const BEHAVIOR_FIELDS = ["listenAudio", "stopOnEmoji", "speakReplies"] as const;
+type BehaviorField = (typeof BEHAVIOR_FIELDS)[number];
+
 export async function setAgentBehavior(
   agentId: string,
-  field: "listenAudio" | "stopOnEmoji",
+  field: BehaviorField,
   enabled: boolean,
 ): Promise<Result> {
   const { agent } = await requireAgent(agentId);
   if (!agent) return { ok: false, error: "Agente não encontrado" };
 
-  if (field !== "listenAudio" && field !== "stopOnEmoji") {
+  if (!BEHAVIOR_FIELDS.includes(field)) {
     return { ok: false, error: "Comportamento inválido" };
+  }
+
+  // Ligar "responder com áudio" sem voz gravada não quebra nada (a resposta sai
+  // em texto), mas o toggle ligado prometeria algo que não acontece. Recusar
+  // aqui é o que faz a tela contar a verdade.
+  if (field === "speakReplies" && enabled) {
+    if (!isFishAudioConfigured()) {
+      return { ok: false, error: "A resposta em áudio não está disponível nesta instalação." };
+    }
+    const voice = await prisma.agent.findUnique({
+      where: { id: agent.id },
+      select: { voiceId: true },
+    });
+    if (!voice?.voiceId) {
+      return { ok: false, error: "Grave a voz do agente antes de ligar a resposta em áudio." };
+    }
   }
 
   await prisma.agent.update({ where: { id: agent.id }, data: { [field]: enabled } });
   revalidateAgent(agent.id);
   return { ok: true, info: "Comportamento atualizado." };
+}
+
+// ------------------------------------------------------------------ voz
+
+/**
+ * Formatos que os navegadores produzem ao gravar (`MediaRecorder` entrega webm
+ * no Chrome/Firefox e mp4 no Safari) mais os que a pessoa pode enviar de um
+ * arquivo. A lista existe para não mandar um PDF renomeado para a Fish Audio.
+ */
+const VOICE_MIMES = [
+  "audio/webm",
+  "audio/ogg",
+  "audio/mpeg",
+  "audio/mp3",
+  "audio/mp4",
+  "audio/m4a",
+  "audio/x-m4a",
+  "audio/wav",
+  "audio/x-wav",
+];
+
+/**
+ * Clona a voz do dono da conta na Fish Audio e guarda o id no agente.
+ *
+ * A amostra NÃO é armazenada por nós: ela vai para a Fish Audio, vira um modelo
+ * e o buffer morre com a request. Guardar a gravação significaria assumir a
+ * custódia da voz de uma pessoa (dado biométrico) para nunca mais usá-la — o
+ * modelo é a única coisa que o produto precisa de volta.
+ *
+ * Regravar SUBSTITUI: o modelo anterior é apagado lá antes de gravarmos o novo
+ * id, senão cada regravação deixaria um modelo órfão na conta da plataforma,
+ * cobrando e guardando a voz de um cliente para sempre.
+ */
+export async function saveAgentVoice(
+  _prev: Result | null,
+  formData: FormData,
+): Promise<Result> {
+  const tooLarge = payloadTooLarge(formData);
+  if (tooLarge) return { ok: false, error: tooLarge };
+
+  const agentId = String(formData.get("agentId") ?? "");
+  const { agent } = await requireAgent(agentId);
+  if (!agent) return { ok: false, error: "Agente não encontrado" };
+
+  if (!isFishAudioConfigured()) {
+    return { ok: false, error: "A resposta em áudio não está disponível nesta instalação." };
+  }
+
+  const file = formData.get("sample");
+  if (!(file instanceof File) || file.size === 0) {
+    return { ok: false, error: "Grave ou envie uma amostra da sua voz." };
+  }
+  if (file.size > VOICE_SAMPLE_MAX_BYTES) {
+    return { ok: false, error: "A gravação é grande demais. Grave algo em torno de 30 segundos." };
+  }
+  if (file.size < VOICE_SAMPLE_MIN_BYTES) {
+    return { ok: false, error: "A gravação ficou curta demais. Fale por uns 20 a 30 segundos." };
+  }
+
+  const mime = (file.type || "audio/webm").split(";")[0].trim();
+  if (!VOICE_MIMES.includes(mime)) {
+    return { ok: false, error: "Formato de áudio não suportado. Grave pelo painel ou envie um MP3." };
+  }
+
+  const label = String(formData.get("label") ?? "").trim().slice(0, 60) || "Minha voz";
+
+  const cloned = await cloneVoice({
+    audio: Buffer.from(await file.arrayBuffer()),
+    mime,
+    // Identifica o dono do modelo dentro da conta da plataforma na Fish Audio,
+    // onde convivem as vozes de todos os tenants.
+    title: `fechai · ${agent.id} · ${label}`,
+  });
+  if (!cloned.ok) return { ok: false, error: cloned.error };
+
+  const previous = await prisma.agent.findUnique({
+    where: { id: agent.id },
+    select: { voiceId: true, voiceSource: true },
+  });
+
+  await prisma.agent.update({
+    where: { id: agent.id },
+    data: {
+      voiceId: cloned.referenceId,
+      voiceLabel: label,
+      voiceSource: "recorded",
+      voiceCreatedAt: new Date(),
+    },
+  });
+
+  // Só depois de a nova voz estar salva: se apagássemos antes e o update
+  // falhasse, a conta ficaria sem voz nenhuma. E só se a anterior era nossa —
+  // voz do catálogo é compartilhada (ver deleteAgentVoice).
+  if (previous?.voiceId && previous.voiceSource !== "catalog") {
+    await deleteVoice(previous.voiceId);
+  }
+
+  revalidateAgent(agent.id);
+  return { ok: true, info: "Voz gravada. Ligue “Responder com áudio” para o agente usá-la." };
+}
+
+/**
+ * Gera a amostra de uma voz pronta para a pessoa ouvir ANTES de escolher.
+ *
+ * Devolve data URL em vez de guardar arquivo: a amostra é descartável, vive só
+ * enquanto a tela está aberta, e subir isso para a CDN encheria o storage de
+ * áudio que ninguém vai reouvir.
+ *
+ * Custa uma síntese (~R$0,007) por clique no play — por isso a tela pede o
+ * áudio só quando a pessoa clica, e não ao abrir a lista.
+ */
+export async function previewCatalogVoice(
+  voiceKey: string,
+): Promise<{ ok: true; dataUrl: string } | { ok: false; error: string }> {
+  // Só exige sessão de tenant: a amostra não toca em nenhum agente.
+  await requireTenant();
+
+  if (!isFishAudioConfigured()) {
+    return { ok: false, error: "A resposta em áudio não está disponível nesta instalação." };
+  }
+
+  const voice = findCatalogVoice(voiceKey);
+  if (!voice) return { ok: false, error: "Voz não encontrada." };
+
+  const audio = await synthesize({ text: SAMPLE_TEXT, referenceId: voice.referenceId });
+  if (!audio) return { ok: false, error: "Não foi possível gerar a amostra agora." };
+
+  return {
+    ok: true,
+    dataUrl: `data:${audio.mime};base64,${audio.audio.toString("base64")}`,
+  };
+}
+
+/**
+ * Escolhe uma das vozes prontas (ver `modules/voice/catalog.ts`).
+ *
+ * Substitui a voz atual, qualquer que fosse. Se a anterior era GRAVADA, o
+ * modelo dela é apagado na Fish Audio: trocar por uma voz pronta é abandonar a
+ * gravação, e deixá-la lá guardaria a voz de um cliente sem ninguém usando.
+ */
+export async function setAgentCatalogVoice(agentId: string, voiceKey: string): Promise<Result> {
+  const { agent } = await requireAgent(agentId);
+  if (!agent) return { ok: false, error: "Agente não encontrado" };
+
+  if (!isFishAudioConfigured()) {
+    return { ok: false, error: "A resposta em áudio não está disponível nesta instalação." };
+  }
+
+  // A tela manda a CHAVE, não o `reference_id`: assim um id arbitrário nunca
+  // entra no banco pela action, só os que nós curamos.
+  const voice = findCatalogVoice(voiceKey);
+  if (!voice) return { ok: false, error: "Voz não encontrada." };
+
+  const previous = await prisma.agent.findUnique({
+    where: { id: agent.id },
+    select: { voiceId: true, voiceSource: true },
+  });
+
+  await prisma.agent.update({
+    where: { id: agent.id },
+    data: {
+      voiceId: voice.referenceId,
+      voiceLabel: voice.name,
+      voiceSource: "catalog",
+      voiceCreatedAt: new Date(),
+    },
+  });
+
+  // Só a voz GRAVADA é nossa para apagar (ver `voiceSource` no schema).
+  if (previous?.voiceSource === "recorded" && previous.voiceId) {
+    await deleteVoice(previous.voiceId);
+  }
+
+  revalidateAgent(agent.id);
+  return { ok: true, info: `Voz ${voice.name} selecionada.` };
+}
+
+/**
+ * Apaga a voz do agente. Desliga a resposta em áudio junto: sem voz ela não
+ * aconteceria de todo jeito, e um toggle ligado que não faz nada é pior que um
+ * desligado.
+ *
+ * O modelo na Fish Audio só é apagado quando a voz era GRAVADA. Voz do catálogo
+ * é compartilhada entre todas as contas — apagá-la derrubaria a voz de quem
+ * mais tivesse escolhido a mesma.
+ */
+export async function deleteAgentVoice(agentId: string): Promise<Result> {
+  const { agent } = await requireAgent(agentId);
+  if (!agent) return { ok: false, error: "Agente não encontrado" };
+
+  const current = await prisma.agent.findUnique({
+    where: { id: agent.id },
+    select: { voiceId: true, voiceSource: true },
+  });
+
+  await prisma.agent.update({
+    where: { id: agent.id },
+    data: {
+      voiceId: null,
+      voiceLabel: null,
+      voiceSource: null,
+      voiceCreatedAt: null,
+      speakReplies: false,
+    },
+  });
+  // `voiceSource` null = conta anterior a este campo, quando só existia voz
+  // gravada — apagar continua certo nesse caso.
+  if (current?.voiceId && current.voiceSource !== "catalog") {
+    await deleteVoice(current.voiceId);
+  }
+
+  revalidateAgent(agent.id);
+  return { ok: true, info: "Voz removida. O agente volta a responder só em texto." };
 }
 
 /**
@@ -182,6 +428,9 @@ const personaSchema = z.object({
 });
 
 export async function savePersona(_prev: Result | null, formData: FormData): Promise<Result> {
+  const tooLarge = payloadTooLarge(formData);
+  if (tooLarge) return { ok: false, error: tooLarge };
+
   const agentId = String(formData.get("agentId") ?? "");
   const { agent } = await requireAgent(agentId);
   if (!agent) return { ok: false, error: "Agente não encontrado" };
@@ -221,6 +470,9 @@ const rulesSchema = z.object({
  * faria o resto da persona cair no `.default("")` e ser apagado.
  */
 export async function saveRules(_prev: Result | null, formData: FormData): Promise<Result> {
+  const tooLarge = payloadTooLarge(formData);
+  if (tooLarge) return { ok: false, error: tooLarge };
+
   const agentId = String(formData.get("agentId") ?? "");
   const { agent } = await requireAgent(agentId);
   if (!agent) return { ok: false, error: "Agente não encontrado" };
@@ -303,6 +555,9 @@ export async function saveScheduleConfigAction(
   _prev: Result | null,
   formData: FormData,
 ): Promise<Result> {
+  const tooLarge = payloadTooLarge(formData);
+  if (tooLarge) return { ok: false, error: tooLarge };
+
   const agentId = String(formData.get("agentId") ?? "");
   const { tenantId, agent } = await requireAgent(agentId);
   if (!agent) return { ok: false, error: "Agente não encontrado" };
@@ -349,6 +604,9 @@ export async function saveFollowUpConfigAction(
   _prev: Result | null,
   formData: FormData,
 ): Promise<Result> {
+  const tooLarge = payloadTooLarge(formData);
+  if (tooLarge) return { ok: false, error: tooLarge };
+
   const agentId = String(formData.get("agentId") ?? "");
   const { tenantId, agent } = await requireAgent(agentId);
   if (!agent) return { ok: false, error: "Agente não encontrado" };
@@ -453,6 +711,9 @@ export async function getDocumentContent(
 }
 
 export async function updateDocumentAction(_prev: Result | null, formData: FormData): Promise<Result> {
+  const tooLarge = payloadTooLarge(formData);
+  if (tooLarge) return { ok: false, error: tooLarge };
+
   const agentId = String(formData.get("agentId") ?? "");
   const documentId = String(formData.get("documentId") ?? "");
   const { tenantId, agent } = await requireAgent(agentId);

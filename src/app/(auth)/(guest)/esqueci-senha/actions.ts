@@ -4,7 +4,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { appBaseUrl } from "@/lib/app-url";
 import { sendMail } from "@/lib/mail";
-import { formatWait, rateLimit } from "@/lib/rate-limit";
+import { formatWait, rateLimit, payloadTooLarge } from "@/lib/rate-limit";
 import { requestContext } from "@/modules/auth/attempts";
 import { issueResetToken } from "@/modules/auth/password-reset";
 import { buildPasswordResetEmail } from "@/modules/auth/reset-email";
@@ -32,6 +32,9 @@ export async function requestPasswordReset(
   _prev: ForgotPasswordState,
   formData: FormData,
 ): Promise<ForgotPasswordState> {
+  const tooLarge = payloadTooLarge(formData);
+  if (tooLarge) return { ok: false, error: tooLarge };
+
   const parsed = schema.safeParse({ email: formData.get("email") });
   if (!parsed.success) {
     return { ok: false, error: "Informe um e-mail válido." };

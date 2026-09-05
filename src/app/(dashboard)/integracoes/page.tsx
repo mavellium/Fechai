@@ -1,5 +1,6 @@
 // `AtSign` e não um ícone de marca: o lucide removeu os logos de terceiros, e
 // inventar um SVG do Instagram aqui criaria um ícone fora do conjunto.
+import Link from "next/link";
 import { AtSign, Globe, MessageCircle } from "lucide-react";
 import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
@@ -9,8 +10,16 @@ import { Badge, StatusDot } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button";
 import { Card, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { FilterTabs } from "@/components/ui/filter-tabs";
 import { dateLabel } from "@/lib/format";
 import { ensureTenantWidgetDeployed } from "@/lib/widget/deploy";
+import { isGoogleCalendarConfigured } from "@/modules/scheduling/google";
+import { getCalendarFeatures } from "@/modules/scheduling/features";
+import { listClinicorpBusinesses } from "@/modules/scheduling/clinicorp";
+import { isEncryptionConfigured } from "@/lib/crypto";
+import { CalendarFeatureToggles } from "./CalendarFeatureToggles";
+import { GoogleCalendarCard, type GoogleState } from "./GoogleCalendarCard";
+import { ClinicorpCard, type ClinicorpState } from "./ClinicorpCard";
 import { WhatsappConnect } from "./WhatsappConnect";
 import { SnippetBox } from "./SnippetBox";
 
@@ -20,8 +29,21 @@ const STATUS_LABEL: Record<string, { label: string; tone: "success" | "warn" | "
   connected: { label: "Conectado", tone: "success" },
 };
 
-export default async function IntegracoesPage() {
+/** As duas famílias de integração da tela. `canais` é o padrão. */
+const TABS = [
+  { key: "canais", label: "Canais" },
+  { key: "calendarios", label: "Calendários" },
+] as const;
+
+export default async function IntegracoesPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ aba?: string }>;
+}) {
   const { tenantId } = await requireTenant();
+  const { aba } = await searchParams;
+  // Parâmetro de URL é editável: qualquer coisa fora da lista cai em "canais".
+  const tab = TABS.some((t) => t.key === aba) ? (aba as (typeof TABS)[number]["key"]) : "canais";
 
   const since = new Date(new Date().getTime() - 7 * 86_400_000);
   const [instance, inboundLast7, tenant, agent] = await Promise.all([
@@ -54,6 +76,50 @@ export default async function IntegracoesPage() {
   // manual. No-op se já foi publicado (ver ensureTenantWidgetDeployed).
   await ensureTenantWidgetDeployed(tenantId);
 
+  // Só a aba de calendários precisa disso: nada de pagar por essas queries em
+  // quem abriu a tela para conectar o WhatsApp.
+  const calendars =
+    tab === "calendarios"
+      ? await Promise.all([
+          getCalendarFeatures(tenantId),
+          prisma.calendarIntegration.findUnique({ where: { tenantId } }),
+          prisma.clinicorpIntegration.findUnique({ where: { tenantId } }),
+        ])
+      : null;
+
+  const [features, googleRow, clinicorpRow] = calendars ?? [null, null, null];
+
+  const googleState: GoogleState | null = !features?.googleEnabled
+    ? null
+    : !isGoogleCalendarConfigured()
+      ? { configured: false }
+      : googleRow
+        ? {
+            configured: true,
+            connected: true,
+            accountEmail: googleRow.accountEmail,
+            syncEnabled: googleRow.syncEnabled,
+          }
+        : { configured: true, connected: false };
+
+  // As clínicas do assinante são uma chamada de rede ao Clinicorp — só quando
+  // há conexão de pé para consultar.
+  const clinicorpState: ClinicorpState | null = !features?.clinicorpEnabled
+    ? null
+    : clinicorpRow
+      ? {
+          connected: true,
+          subscriberId: clinicorpRow.subscriberId,
+          businessId: clinicorpRow.businessId,
+          dentistId: clinicorpRow.dentistId,
+          categoryDescription: clinicorpRow.categoryDescription,
+          syncEnabled: clinicorpRow.syncEnabled,
+          checkAvailability: clinicorpRow.checkAvailability,
+          lastError: clinicorpRow.lastError,
+          businesses: await listClinicorpBusinesses(tenantId),
+        }
+      : { connected: false };
+
   const configured = getWhatsAppProvider().isConfigured();
   const status = instance?.status ?? "disconnected";
   const connected = status === "connected";
@@ -71,6 +137,66 @@ export default async function IntegracoesPage() {
         }
       />
 
+      <FilterTabs
+        options={TABS.map((t) => ({ key: t.key, label: t.label }))}
+        active={tab}
+        href={(key) => (key === "canais" ? "/integracoes" : `/integracoes?aba=${key}`)}
+        label="Tipo de integração"
+      />
+
+      {tab === "calendarios" && features && (
+        <section className="space-y-3">
+          <div>
+            <h2 className="font-display text-lg font-semibold text-white">Calendários</h2>
+            <p className="mt-1 max-w-prose text-sm text-white/60">
+              Habilite os calendários que sua conta usa e conecte cada um aqui. O que estiver
+              ligado aparece como status na{" "}
+              <Link
+                href="/agenda"
+                className="rounded-control underline underline-offset-4 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris"
+              >
+                Agenda
+              </Link>
+              .
+            </p>
+          </div>
+
+          <CalendarFeatureToggles
+            items={[
+              {
+                key: "google",
+                name: "Google Agenda",
+                description: "Espelha os horários marcados aqui na agenda do Google.",
+                enabled: features.googleEnabled,
+                connected: Boolean(googleRow),
+                unavailable: isGoogleCalendarConfigured()
+                  ? undefined
+                  : "Faltam as credenciais do Google no servidor desta instalação.",
+              },
+              {
+                key: "clinicorp",
+                name: "Clinicorp",
+                description:
+                  "Envia os horários para a agenda da clínica e consulta o que já está ocupado lá.",
+                enabled: features.clinicorpEnabled,
+                connected: Boolean(clinicorpRow),
+                unavailable: isEncryptionConfigured()
+                  ? undefined
+                  : "Falta a chave de criptografia no servidor desta instalação.",
+              },
+            ]}
+            // Cada formulário renderiza dentro do card do seu toggle: ligar e
+            // configurar viraram um passo só, sem card solto embaixo.
+            panels={{
+              google: googleState ? <GoogleCalendarCard state={googleState} /> : null,
+              clinicorp: clinicorpState ? <ClinicorpCard state={clinicorpState} /> : null,
+            }}
+          />
+        </section>
+      )}
+
+      {tab === "canais" && (
+        <>
       {!configured && (
         <Alert tone="warn" title="Conexão indisponível neste ambiente">
           Não dá para conectar o WhatsApp agora. Enquanto isso, você pode conversar com seu agente
@@ -172,6 +298,8 @@ export default async function IntegracoesPage() {
           <Badge>em breve</Badge>
         </Card>
       </section>
+        </>
+      )}
     </div>
   );
 }

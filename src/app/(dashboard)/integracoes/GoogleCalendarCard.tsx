@@ -31,21 +31,17 @@ export function GoogleCalendarCard({ state }: { state: GoogleState }) {
 
   if (!state.configured) {
     return (
-      <div className="rounded-surface border border-white/10 bg-white/5 p-4">
-        <p className="font-medium text-white">Google Agenda</p>
-        <p className="mt-1 text-sm text-white/55">
-          Integração indisponível nesta instalação — faltam as credenciais do Google no servidor.
-          Seus horários continuam sendo salvos aqui normalmente.
-        </p>
-      </div>
+      <p className="text-sm text-white/55">
+        Integração indisponível nesta instalação — faltam as credenciais do Google no servidor.
+        Seus horários continuam sendo salvos aqui normalmente.
+      </p>
     );
   }
 
   if (!state.connected) {
     return (
-      <div className="rounded-surface border border-white/10 bg-white/5 p-4">
-        <p className="font-medium text-white">Google Agenda</p>
-        <p className="mt-1 text-sm text-white/55">
+      <div>
+        <p className="text-sm text-white/55">
           Conecte para que todo horário marcado aqui apareça também na sua agenda do Google.
         </p>
         {/* `<a>` puro, não `<Link>`: o destino é uma rota de API que redireciona
@@ -64,15 +60,12 @@ export function GoogleCalendarCard({ state }: { state: GoogleState }) {
   }
 
   return (
-    <div className="space-y-3 rounded-surface border border-success/30 bg-success/10 p-4">
+    <div className="space-y-3">
       <div className="flex items-start gap-2">
-        <CalendarCheck2 size={18} aria-hidden className="mt-0.5 shrink-0 text-success" />
-        <div className="min-w-0">
-          <p className="font-medium text-white">Google Agenda conectado</p>
-          <p className="mt-0.5 truncate text-sm text-white/60">
-            {state.accountEmail ?? "conta do Google"}
-          </p>
-        </div>
+        <CalendarCheck2 size={16} aria-hidden className="mt-0.5 shrink-0 text-success" />
+        <p className="min-w-0 truncate text-sm text-white/70">
+          {state.accountEmail ?? "conta do Google"}
+        </p>
       </div>
 
       <div className="flex items-center justify-between gap-3">

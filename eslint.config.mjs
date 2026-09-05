@@ -13,6 +13,13 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
   ]),
+  {
+    // Scripts que rodam soltos dentro do container, fora do bundle do Next:
+    // são CommonJS por necessidade (o healthcheck é executado por `node` puro,
+    // sem transpilação), então `require` aqui é o formato certo, não um deslize.
+    files: ["docker/**/*.js"],
+    rules: { "@typescript-eslint/no-require-imports": "off" },
+  },
 ]);
 
 export default eslintConfig;

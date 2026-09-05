@@ -1,10 +1,12 @@
 "use server";
 
 import bcrypt from "bcryptjs";
+import { BCRYPT_COST } from "@/lib/password";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
+import { payloadTooLarge } from "@/lib/rate-limit";
 import { strongPassword } from "@/lib/password-schema";
 import { createFeedback } from "@/modules/feedback/service";
 import { ensureAffiliate } from "@/modules/affiliates/service";
@@ -18,6 +20,9 @@ const schema = z.object({
 type Result = { ok: boolean; error?: string; info?: string };
 
 export async function submitFeedback(_prev: Result | null, formData: FormData): Promise<Result> {
+  const tooLarge = payloadTooLarge(formData);
+  if (tooLarge) return { ok: false, error: tooLarge };
+
   const { tenantId } = await requireTenant();
   const raw = {
     message: formData.get("message"),
@@ -36,6 +41,9 @@ const profileSchema = z.object({
 });
 
 export async function updateProfile(_prev: Result | null, formData: FormData): Promise<Result> {
+  const tooLarge = payloadTooLarge(formData);
+  if (tooLarge) return { ok: false, error: tooLarge };
+
   const { session } = await requireTenant();
   const parsed = profileSchema.safeParse({ name: formData.get("name") });
   if (!parsed.success) {
@@ -66,6 +74,9 @@ const passwordSchema = z
   });
 
 export async function changePassword(_prev: Result | null, formData: FormData): Promise<Result> {
+  const tooLarge = payloadTooLarge(formData);
+  if (tooLarge) return { ok: false, error: tooLarge };
+
   const { session } = await requireTenant();
   const parsed = passwordSchema.safeParse({
     currentPassword: formData.get("currentPassword"),
@@ -84,7 +95,7 @@ export async function changePassword(_prev: Result | null, formData: FormData): 
   const matches = await bcrypt.compare(parsed.data.currentPassword, user.passwordHash);
   if (!matches) return { ok: false, error: "Senha atual incorreta." };
 
-  const passwordHash = await bcrypt.hash(parsed.data.newPassword, 10);
+  const passwordHash = await bcrypt.hash(parsed.data.newPassword, BCRYPT_COST);
   await prisma.user.update({ where: { id: user.id }, data: { passwordHash } });
   return { ok: true, info: "Senha alterada com sucesso." };
 }
@@ -108,6 +119,9 @@ export async function updateAccountRoles(
   _prev: Result | null,
   formData: FormData,
 ): Promise<Result> {
+  const tooLarge = payloadTooLarge(formData);
+  if (tooLarge) return { ok: false, error: tooLarge };
+
   const { session } = await requireTenant();
 
   // Checkbox ausente no FormData = desmarcado.

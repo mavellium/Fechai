@@ -38,7 +38,13 @@ export async function POST(req: Request) {
     });
     return NextResponse.json({ url: checkout.url });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Falha ao criar checkout";
-    return NextResponse.json({ error: message }, { status: 500 });
+    // O detalhe fica no log do servidor, não na resposta: mensagens do SDK do
+    // Stripe e do Prisma carregam id interno de preço, nome de coluna e estado
+    // da configuração da conta — mapa gratuito para quem estiver sondando.
+    console.error("[checkout]", err);
+    return NextResponse.json(
+      { error: "Não foi possível iniciar o pagamento. Tente novamente." },
+      { status: 500 },
+    );
   }
 }

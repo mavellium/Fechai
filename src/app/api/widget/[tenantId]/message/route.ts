@@ -22,11 +22,39 @@ const bodySchema = z.object({
 const RATE_LIMIT_WINDOW_SECONDS = 60;
 const RATE_LIMIT_MAX = 20;
 
+/**
+ * Teto por IP, e por hora. O limite por `visitorId` abaixo continua valendo
+ * para a experiência normal, mas sozinho ele não segura nada: o `visitorId` vem
+ * no corpo da requisição, então basta gerar um novo a cada envio para zerar o
+ * contador. Como cada mensagem processada é uma chamada paga de LLM, isso era
+ * um caminho direto para esgotar a cota (e a conta) de qualquer tenant com
+ * widget ativo — o tenantId está no widget.js público de cada site cliente.
+ *
+ * O IP vem do proxy e o visitante não escolhe qual manda.
+ */
+const IP_RATE_LIMIT_WINDOW_SECONDS = 60 * 60;
+const IP_RATE_LIMIT_MAX = 120;
+
+function clientIp(request: Request): string {
+  return (
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    request.headers.get("x-real-ip")?.trim() ||
+    "desconhecido"
+  );
+}
+
 async function isRateLimited(tenantId: string, visitorId: string): Promise<boolean> {
   const key = `widget-rl:${tenantId}:${visitorId}`;
   const count = await redis.incr(key);
   if (count === 1) await redis.expire(key, RATE_LIMIT_WINDOW_SECONDS);
   return count > RATE_LIMIT_MAX;
+}
+
+async function isIpRateLimited(tenantId: string, ip: string): Promise<boolean> {
+  const key = `widget-rl-ip:${tenantId}:${ip}`;
+  const count = await redis.incr(key);
+  if (count === 1) await redis.expire(key, IP_RATE_LIMIT_WINDOW_SECONDS);
+  return count > IP_RATE_LIMIT_MAX;
 }
 
 export async function OPTIONS() {
@@ -51,6 +79,14 @@ export async function POST(
   });
   if (!tenant || tenant.status !== "active" || !tenant.widgetEnabled) {
     return NextResponse.json({ error: "Atendimento indisponível" }, { status: 404, headers: CORS_HEADERS });
+  }
+
+  // Camada que o cliente não contorna trocando de visitorId.
+  if (await isIpRateLimited(tenantId, clientIp(request))) {
+    return NextResponse.json(
+      { error: "Muitas mensagens em pouco tempo. Tente novamente mais tarde." },
+      { status: 429, headers: CORS_HEADERS },
+    );
   }
 
   if (await isRateLimited(tenantId, visitorId)) {

@@ -4,9 +4,19 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
+import { payloadTooLarge } from "@/lib/rate-limit";
 import { getWhatsAppProvider } from "@/modules/whatsapp";
 import { deployTenantWidget, WIDGET_CONFIG_SELECT } from "@/lib/widget/deploy";
 import { uploadToBunny } from "@/lib/bunny";
+import { setCalendarFeature, type CalendarFeatureKey } from "@/modules/scheduling/features";
+import { disconnectGoogleCalendar } from "@/modules/scheduling/google";
+import {
+  disconnectClinicorp,
+  listClinicorpProfessionals,
+  saveClinicorpCredentials,
+  verifyClinicorpCredentials,
+} from "@/modules/scheduling/clinicorp";
+import { isEncryptionConfigured } from "@/lib/crypto";
 
 type ConnectResult = {
   ok: boolean;
@@ -157,6 +167,9 @@ export async function updateWidgetConfig(
   _prev: WidgetConfigResult | null,
   formData: FormData,
 ): Promise<WidgetConfigResult> {
+  const tooLarge = payloadTooLarge(formData);
+  if (tooLarge) return { ok: false, error: tooLarge };
+
   const { tenantId } = await requireTenant();
 
   const currentTenant = await prisma.tenant.findUnique({
@@ -272,4 +285,165 @@ export async function setWidgetEnabled(enabled: boolean): Promise<WidgetConfigRe
   });
   revalidatePath("/integracoes");
   return { ok: true, info: enabled ? "O botão agora aparece no seu site." : "O botão foi desativado no seu site." };
+}
+
+/**
+ * Habilita ou desabilita um calendário.
+ *
+ * Só a decisão "quero usar isso": as credenciais e a configuração ficam na
+ * /agenda, e desabilitar aqui **não** as apaga (isso é desconectar, lá). Quem
+ * desliga por uma semana reencontra tudo ao religar.
+ */
+export async function setCalendarFeatureAction(
+  key: CalendarFeatureKey,
+  enabled: boolean,
+): Promise<WhatsappControlResult> {
+  const { tenantId } = await requireTenant();
+  await setCalendarFeature(tenantId, key, enabled);
+  revalidatePath("/integracoes");
+  revalidatePath("/agenda");
+  return {
+    ok: true,
+    info: enabled ? "Calendário habilitado. Configure na Agenda." : "Calendário desabilitado.",
+  };
+}
+
+// --- Calendários: Google e Clinicorp --------------------------------------
+
+/** Desliga o espelhamento sem desfazer a autorização do Google. */
+export async function setGoogleSyncEnabled(enabled: boolean): Promise<WhatsappControlResult> {
+  const { tenantId } = await requireTenant();
+  const { count } = await prisma.calendarIntegration.updateMany({
+    where: { tenantId },
+    data: { syncEnabled: enabled },
+  });
+  if (count === 0) return { ok: false, error: "Google Agenda não está conectado." };
+  revalidatePath("/integracoes");
+  revalidatePath("/agenda");
+  return { ok: true };
+}
+
+export async function disconnectGoogleAction(): Promise<WhatsappControlResult> {
+  const { tenantId } = await requireTenant();
+  await disconnectGoogleCalendar(tenantId);
+  revalidatePath("/integracoes");
+  revalidatePath("/agenda");
+  return { ok: true, info: "Google Agenda desconectado." };
+}
+
+// --- Clinicorp ------------------------------------------------------------
+
+const clinicorpSchema = z.object({
+  apiUser: z.string().trim().min(1, "Informe o usuário da API"),
+  apiToken: z.string().trim().min(1, "Informe o token da API"),
+  subscriberId: z.string().trim().min(1, "Informe o id do assinante"),
+});
+
+/**
+ * Conecta a conta ao Clinicorp.
+ *
+ * As credenciais só são gravadas depois de a API aceitá-las: colar um token
+ * errado e só descobrir dias depois, quando um agendamento não chegou na
+ * clínica, seria o pior jeito de errar. A mesma chamada devolve as clínicas do
+ * assinante, e quando só existe uma ela já fica escolhida — a maioria das
+ * contas não é franquia e não deveria ter que escolher nada.
+ */
+export async function connectClinicorpAction(
+  _prev: WhatsappControlResult | null,
+  formData: FormData,
+): Promise<WhatsappControlResult> {
+  const tooLarge = payloadTooLarge(formData);
+  if (tooLarge) return { ok: false, error: tooLarge };
+
+  const { tenantId } = await requireTenant();
+  const parsed = clinicorpSchema.safeParse(Object.fromEntries(formData));
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Dados inválidos" };
+  }
+
+  // Sem chave de criptografia não se guarda credencial de cliente em texto
+  // claro: recusa com uma mensagem útil em vez de deixar `encryptSecret` lançar.
+  if (!isEncryptionConfigured()) {
+    return {
+      ok: false,
+      error: "Integração indisponível nesta instalação — falta a chave de criptografia no servidor.",
+    };
+  }
+
+  const check = await verifyClinicorpCredentials(parsed.data);
+  if (!check.ok) return { ok: false, error: check.error };
+
+  // Uma clínica só: já fica escolhida. A maioria das contas não é franquia e não
+  // deveria ter que escolher nada.
+  const onlyBusiness = check.businesses.length === 1 ? check.businesses[0].id : null;
+
+  await saveClinicorpCredentials(tenantId, parsed.data, { businessId: onlyBusiness });
+
+  revalidatePath("/integracoes");
+  revalidatePath("/agenda");
+  return { ok: true, info: "Clinicorp conectado." };
+}
+
+const clinicorpSettingsSchema = z.object({
+  businessId: z.string().trim().optional(),
+  dentistId: z.string().trim().optional(),
+  categoryDescription: z.string().trim().max(120).optional(),
+});
+
+export async function saveClinicorpSettingsAction(
+  _prev: WhatsappControlResult | null,
+  formData: FormData,
+): Promise<WhatsappControlResult> {
+  const tooLarge = payloadTooLarge(formData);
+  if (tooLarge) return { ok: false, error: tooLarge };
+
+  const { tenantId } = await requireTenant();
+  const parsed = clinicorpSettingsSchema.safeParse(Object.fromEntries(formData));
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Dados inválidos" };
+  }
+
+  const { count } = await prisma.clinicorpIntegration.updateMany({
+    where: { tenantId },
+    data: {
+      businessId: parsed.data.businessId || null,
+      dentistId: parsed.data.dentistId || null,
+      categoryDescription: parsed.data.categoryDescription || null,
+    },
+  });
+  if (count === 0) return { ok: false, error: "Clinicorp não está conectado." };
+
+  revalidatePath("/integracoes");
+  revalidatePath("/agenda");
+  return { ok: true, info: "Preferências salvas." };
+}
+
+/** Espelhar novos horários e ler a agenda de lá são dois botões separados. */
+export async function setClinicorpToggle(
+  field: "syncEnabled" | "checkAvailability",
+  enabled: boolean,
+): Promise<WhatsappControlResult> {
+  const { tenantId } = await requireTenant();
+  const { count } = await prisma.clinicorpIntegration.updateMany({
+    where: { tenantId },
+    data: { [field]: enabled },
+  });
+  if (count === 0) return { ok: false, error: "Clinicorp não está conectado." };
+  revalidatePath("/integracoes");
+  revalidatePath("/agenda");
+  return { ok: true };
+}
+
+export async function disconnectClinicorpAction(): Promise<WhatsappControlResult> {
+  const { tenantId } = await requireTenant();
+  await disconnectClinicorp(tenantId);
+  revalidatePath("/integracoes");
+  revalidatePath("/agenda");
+  return { ok: true, info: "Clinicorp desconectado." };
+}
+
+/** Profissionais para o seletor — buscado sob demanda, não a cada render. */
+export async function loadClinicorpProfessionalsAction() {
+  const { tenantId } = await requireTenant();
+  return listClinicorpProfessionals(tenantId);
 }

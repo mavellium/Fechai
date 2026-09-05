@@ -3,11 +3,21 @@
 import { revalidatePath } from "next/cache";
 import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
+import { payloadTooLarge } from "@/lib/rate-limit";
 import { sendManualReply } from "@/modules/agent-engine/conversation";
 import { summarizeConversation } from "@/modules/agent-engine/summary";
-import { runAgentTurn } from "@/modules/agent-engine/orchestrator";
+import { runAgentTurn, resolveAgent } from "@/modules/agent-engine/orchestrator";
+import { transcribeAudio } from "@/modules/ai/transcribe";
+import { MAX_TTS_CHARS, isFishAudioConfigured, synthesize } from "@/modules/voice/fish";
 
 type Result = { ok: boolean; error?: string };
+
+/**
+ * Teto do áudio gravado à mão (~2 min de voz). Bem acima do `MAX_FORM_BYTES`
+ * padrão (512 KB), que existe para formulários de texto: aqui o arquivo É o
+ * conteúdo, como no upload da base de conhecimento.
+ */
+const MAX_VOICE_MESSAGE_BYTES = 8 * 1024 * 1024;
 
 /**
  * Tira a conversa da fila "precisa de você".
@@ -66,6 +76,136 @@ export async function reopenConversation(id: string): Promise<Result> {
 export async function sendManualMessage(conversationId: string, text: string): Promise<Result> {
   const { tenantId } = await requireTenant();
   const res = await sendManualReply(tenantId, conversationId, text);
+  if (!res.ok) return res;
+
+  revalidatePath("/conversas");
+  revalidatePath("/inicio");
+  return { ok: true };
+}
+
+/**
+ * Manda a resposta como ÁUDIO, na voz do agente: você escreve, a Fish Audio
+ * fala. É a mesma voz que o agente usa sozinho — o cliente não percebe a
+ * diferença entre a resposta automática e esta, que é justamente o ponto.
+ *
+ * Diferente do envio automático (`speakReply` no webhook), aqui NÃO existe
+ * degradação silenciosa para texto: quem clicou em "enviar como áudio" pediu
+ * áudio, e mandar texto no lugar sem avisar seria trocar a decisão da pessoa.
+ * Falhou, a mensagem não sai e a tela explica por quê — o texto continua no
+ * campo, e mandar como texto é um clique.
+ */
+export async function sendManualAudioMessage(
+  conversationId: string,
+  text: string,
+): Promise<Result> {
+  const { tenantId } = await requireTenant();
+
+  const trimmed = text.trim();
+  if (!trimmed) return { ok: false, error: "Escreva algo antes de enviar." };
+  if (trimmed.length > MAX_TTS_CHARS) {
+    return {
+      ok: false,
+      error: `Texto longo demais para áudio (máximo ${MAX_TTS_CHARS} caracteres). Encurte ou envie como texto.`,
+    };
+  }
+
+  if (!isFishAudioConfigured()) {
+    return { ok: false, error: "A resposta em áudio não está disponível nesta instalação." };
+  }
+
+  // A voz é a do agente que atende esta conversa; sem agente definido, a do
+  // principal da conta (mesma regra do webhook).
+  const conversation = await prisma.conversation.findFirst({
+    where: { id: conversationId, tenantId },
+    select: { agentId: true, isTest: true },
+  });
+  if (!conversation) return { ok: false, error: "Conversa não encontrada." };
+
+  // Funciona no chat de teste TAMBÉM, de propósito: é onde se experimenta como
+  // a voz soa antes de mandar para um cliente de verdade. A síntese é paga
+  // mesmo no teste (a Fish cobra por caractere, não por destinatário), mas
+  // conferir a própria voz antes de usá-la com cliente é justamente o uso que
+  // paga esse custo. No sandbox a mensagem fica só no histórico — nada sai
+  // para o WhatsApp, como qualquer outra mensagem de teste.
+
+  const agent = await resolveAgent(tenantId, conversation.agentId ?? undefined);
+  if (!agent?.voiceId) {
+    return {
+      ok: false,
+      error: "Este agente ainda não tem voz gravada. Grave em Agentes › Comportamento.",
+    };
+  }
+
+  const audio = await synthesize({ text: trimmed, referenceId: agent.voiceId });
+  if (!audio) {
+    return { ok: false, error: "Não foi possível gerar o áudio agora. Tente de novo ou envie como texto." };
+  }
+
+  const res = await sendManualReply(tenantId, conversationId, trimmed, {
+    buffer: audio.audio,
+    mime: audio.mime,
+  });
+  if (!res.ok) return res;
+
+  revalidatePath("/conversas");
+  revalidatePath("/inicio");
+  return { ok: true };
+}
+
+/**
+ * Manda um áudio GRAVADO POR VOCÊ — sua voz real, não a sintetizada.
+ *
+ * O áudio é transcrito antes de sair (`transcribeAudio`, o mesmo usado no
+ * webhook para ouvir o cliente) e o texto vai para o histórico junto. Sem isso
+ * a conversa ficaria cega: o resumo, os relatórios e o próximo turno da IA não
+ * saberiam o que você falou — só que "houve um áudio".
+ *
+ * A transcrição NÃO bloqueia o envio: se falhar, a mensagem sai mesmo assim com
+ * um marcador no lugar do texto. O áudio é o conteúdo real aqui; a transcrição
+ * é conveniência.
+ */
+export async function sendRecordedAudioMessage(
+  _prev: Result | null,
+  formData: FormData,
+): Promise<Result> {
+  const tooLarge = payloadTooLarge(formData, MAX_VOICE_MESSAGE_BYTES);
+  if (tooLarge) return { ok: false, error: tooLarge };
+
+  const { tenantId } = await requireTenant();
+  const conversationId = String(formData.get("conversationId") ?? "");
+
+  const file = formData.get("audio");
+  if (!(file instanceof File) || file.size === 0) {
+    return { ok: false, error: "Grave um áudio antes de enviar." };
+  }
+  if (file.size > MAX_VOICE_MESSAGE_BYTES) {
+    return { ok: false, error: "O áudio é longo demais. Grave até 2 minutos." };
+  }
+
+  const mime = (file.type || "audio/webm").split(";")[0].trim();
+  if (!mime.startsWith("audio/")) {
+    return { ok: false, error: "Formato de áudio não suportado." };
+  }
+
+  // Sem bloqueio de sandbox aqui, ao contrário do texto→voz: gravar a própria
+  // voz não custa síntese paga, e `sendManualReply` já sabe que numa conversa
+  // de teste a mensagem só é gravada (nada sai para o WhatsApp). O áudio fica
+  // no histórico do teste como ficaria numa conversa real.
+  const buffer = Buffer.from(await file.arrayBuffer());
+
+  // Transcreve antes de enviar para o texto entrar junto na mesma mensagem —
+  // gravar duas linhas no histórico separaria o áudio do que ele diz.
+  let text: string | null = null;
+  try {
+    text = await transcribeAudio(buffer.toString("base64"), mime);
+  } catch (err) {
+    console.error("[conversas] falha ao transcrever áudio gravado", err);
+  }
+
+  const res = await sendManualReply(tenantId, conversationId, text ?? "🎙️ Áudio enviado", {
+    buffer,
+    mime,
+  });
   if (!res.ok) return res;
 
   revalidatePath("/conversas");

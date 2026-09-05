@@ -33,6 +33,16 @@ export interface WhatsAppProvider {
   getQrCode(externalId: string): Promise<{ status: WhatsAppStatus; qrCode?: string }>;
   /** Envia e devolve o key.id da mensagem no WhatsApp (null se o provedor não o expuser). */
   sendMessage(externalId: string, toPhone: string, text: string): Promise<string | null>;
+  /**
+   * Envia áudio como MENSAGEM DE VOZ (PTT) — a bolha com onda e play, não um
+   * arquivo anexado. É assim que a resposta em voz do agente chega parecida com
+   * o áudio que o contato mandou.
+   */
+  sendAudio(
+    externalId: string,
+    toPhone: string,
+    audio: { base64: string; mime: string },
+  ): Promise<string | null>;
   /** Desloga o número da instância (exige novo QR para voltar). */
   disconnect(externalId: string): Promise<void>;
   /** Baixa a mídia de uma mensagem recebida em base64 (ex.: mensagem de voz). */

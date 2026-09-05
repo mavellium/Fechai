@@ -1,0 +1,99 @@
+name: Seguranca
+
+# Roda em todo push e PR para main, e uma vez por semana.
+#
+# O agendamento semanal é o ponto principal: CVE nova é publicada contra código
+# que ninguém tocou. Sem ele, uma dependência vulnerável só apareceria no
+# próximo commit — que pode demorar meses.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Segunda, 09:00 BRT (12:00 UTC) — começo da semana, não madrugada de sábado.
+    - cron: "0 12 * * 1"
+  workflow_dispatch:
+
+jobs:
+  auditoria-dependencias:
+    name: Auditoria de dependencias
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      # `npm ci` roda o postinstall (prisma generate), que precisa do schema.
+      - name: Instalar dependencias
+        run: npm ci
+
+      # --omit=dev: o que roda em produção. Vulnerabilidade em ferramenta de
+      # build importa menos e geraria ruído que faz o time ignorar o alerta.
+      # --audit-level=high: quebra em alta e crítica; média vira relatório.
+      - name: npm audit (producao, alta e critica)
+        run: npm audit --omit=dev --audit-level=high
+
+      # Roda mesmo se o passo acima falhar, para o log mostrar o quadro inteiro
+      # em vez de só a primeira falha.
+      - name: Relatorio completo (nao bloqueia)
+        if: always()
+        run: npm audit --omit=dev || true
+
+  analise-estatica:
+    name: Analise estatica (CodeQL)
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          # Inclui as regras de segurança que não entram no conjunto padrão
+          # (injeção, dado sensível em log, redirect aberto).
+          queries: security-extended
+
+      - uses: github/codeql-action/analyze@v3
+
+  verificacoes:
+    name: Lint e tipos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Tipos
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npm run lint
+
+      # Testes de regressão de autorização: cobram que toda Server Action tenha
+      # guard de sessão, que escrita entre tenants não use id cru, e que as
+      # defesas das rotas públicas continuem no lugar. Rodam sem banco.
+      - name: Testes de seguranca
+        run: npm test
+
+      # Rede contra o erro que a auditoria encontrou: segredo commitado por
+      # engano. `git ls-files` mostra o que está VERSIONADO — o .env local não
+      # aparece porque está no .gitignore, e é exatamente isso que se confirma.
+      - name: Nenhum .env versionado
+        run: |
+          if git ls-files | grep -E '^\.env($|\.)' | grep -v '\.env\.example'; then
+            echo "ERRO: arquivo .env versionado."
+            exit 1
+          fi
+          echo "OK: nenhum .env versionado."

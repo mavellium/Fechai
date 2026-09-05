@@ -1,6 +1,11 @@
 import { prisma } from "@/lib/prisma";
 import { parseScheduleConfig, type ScheduleConfig } from "./config";
 import { deleteEventFromGoogle, pushEventToGoogle } from "./google";
+import {
+  cancelAppointmentInClinicorp,
+  hasClinicorpConflict,
+  pushAppointmentToClinicorp,
+} from "./clinicorp";
 import { dayKeyInZone, monthRangeUtc } from "./time";
 
 /**
@@ -71,6 +76,27 @@ export async function hasConflict(
 }
 
 /**
+ * Como `hasConflict`, mas olhando também a agenda do Clinicorp quando a conta
+ * está conectada.
+ *
+ * Existe separado porque a nossa agenda não é a agenda inteira da clínica: a
+ * recepção marca gente direto no sistema deles o dia todo, e o agente não pode
+ * oferecer um horário que já tem paciente na cadeira. A consulta local vem
+ * primeiro — é a barata, e quando ela já acusa conflito não há motivo para
+ * gastar uma chamada de rede.
+ */
+export async function hasConflictAnywhere(
+  tenantId: string,
+  startsAt: Date,
+  endsAt: Date,
+  timezone: string,
+  ignoreId?: string,
+): Promise<boolean> {
+  if (await hasConflict(tenantId, startsAt, endsAt, ignoreId)) return true;
+  return hasClinicorpConflict(tenantId, startsAt, endsAt, timezone);
+}
+
+/**
  * A própria conversa já tem esse horário marcado?
  *
  * O agente confirma um agendamento chamando `schedule_meeting` de novo mais
@@ -119,18 +145,46 @@ export async function createAppointment(input: CreateAppointmentInput) {
       .catch(() => {});
   }
 
-  const googleEventId = await pushEventToGoogle(input.tenantId, {
-    title: input.title,
-    description: input.notes ?? undefined,
-    startsAt: input.startsAt,
-    endsAt,
-    timeZone: input.timezone,
-  });
-  if (googleEventId) {
-    await prisma.appointment.update({ where: { id: appointment.id }, data: { googleEventId } });
+  // O Clinicorp liga o horário ao cadastro do paciente pelo telefone, então
+  // precisa do contato — o Google não usa nada disso.
+  const lead = input.leadId
+    ? await prisma.lead
+        .findUnique({ where: { id: input.leadId }, select: { name: true, phone: true } })
+        .catch(() => null)
+    : null;
+
+  // Os dois espelhos são independentes e nenhum lança: em paralelo, porque um
+  // agendamento feito no meio de uma conversa não pode esperar duas APIs de
+  // terceiro em sequência.
+  const [googleEventId, clinicorpAppointmentId] = await Promise.all([
+    pushEventToGoogle(input.tenantId, {
+      title: input.title,
+      description: input.notes ?? undefined,
+      startsAt: input.startsAt,
+      endsAt,
+      timeZone: input.timezone,
+    }),
+    pushAppointmentToClinicorp(input.tenantId, {
+      title: input.title,
+      notes: input.notes,
+      startsAt: input.startsAt,
+      endsAt,
+      timeZone: input.timezone,
+      lead,
+    }),
+  ]);
+
+  if (googleEventId || clinicorpAppointmentId) {
+    await prisma.appointment.update({
+      where: { id: appointment.id },
+      data: {
+        ...(googleEventId ? { googleEventId } : {}),
+        ...(clinicorpAppointmentId ? { clinicorpAppointmentId } : {}),
+      },
+    });
   }
 
-  return { ...appointment, googleEventId };
+  return { ...appointment, googleEventId, clinicorpAppointmentId };
 }
 
 export async function cancelAppointment(tenantId: string, id: string) {
@@ -138,9 +192,14 @@ export async function cancelAppointment(tenantId: string, id: string) {
   if (!appointment) return null;
 
   await prisma.appointment.update({ where: { id }, data: { status: "canceled" } });
-  if (appointment.googleEventId) {
-    await deleteEventFromGoogle(tenantId, appointment.googleEventId);
-  }
+  await Promise.all([
+    appointment.googleEventId
+      ? deleteEventFromGoogle(tenantId, appointment.googleEventId)
+      : Promise.resolve(),
+    appointment.clinicorpAppointmentId
+      ? cancelAppointmentInClinicorp(tenantId, appointment.clinicorpAppointmentId)
+      : Promise.resolve(),
+  ]);
   return appointment;
 }
 

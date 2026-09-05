@@ -4,14 +4,14 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
+import { payloadTooLarge } from "@/lib/rate-limit";
 import {
   cancelAppointment,
   createAppointment,
   getScheduleConfig,
-  hasConflict,
+  hasConflictAnywhere,
   markAppointmentDone,
 } from "@/modules/scheduling/repository";
-import { disconnectGoogleCalendar } from "@/modules/scheduling/google";
 import { parseLocalDateTime } from "@/modules/scheduling/time";
 
 type Result = { ok: boolean; error?: string; info?: string };
@@ -52,6 +52,9 @@ export async function createManualAppointment(
   _prev: Result | null,
   formData: FormData,
 ): Promise<Result> {
+  const tooLarge = payloadTooLarge(formData);
+  if (tooLarge) return { ok: false, error: tooLarge };
+
   const { tenantId } = await requireTenant();
   const parsed = newSchema.safeParse(Object.fromEntries(formData));
   if (!parsed.success) {
@@ -67,7 +70,7 @@ export async function createManualAppointment(
   if (!startsAt) return { ok: false, error: "Data ou hora inválida." };
 
   const endsAt = new Date(startsAt.getTime() + durationMinutes * 60_000);
-  if (await hasConflict(tenantId, startsAt, endsAt)) {
+  if (await hasConflictAnywhere(tenantId, startsAt, endsAt, timezone)) {
     return { ok: false, error: "Já existe um compromisso nesse horário." };
   }
 
@@ -113,23 +116,4 @@ export async function completeAppointmentAction(id: string): Promise<Result> {
   if (!ok) return { ok: false, error: "Compromisso não encontrado." };
   revalidateAgenda();
   return { ok: true, info: "Marcado como realizado." };
-}
-
-/** Desliga o espelhamento sem desfazer a autorização do Google. */
-export async function setGoogleSyncEnabled(enabled: boolean): Promise<Result> {
-  const { tenantId } = await requireTenant();
-  const { count } = await prisma.calendarIntegration.updateMany({
-    where: { tenantId },
-    data: { syncEnabled: enabled },
-  });
-  if (count === 0) return { ok: false, error: "Google Agenda não está conectado." };
-  revalidateAgenda();
-  return { ok: true };
-}
-
-export async function disconnectGoogleAction(): Promise<Result> {
-  const { tenantId } = await requireTenant();
-  await disconnectGoogleCalendar(tenantId);
-  revalidateAgenda();
-  return { ok: true, info: "Google Agenda desconectado." };
 }

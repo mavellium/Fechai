@@ -8,6 +8,8 @@ import { getAgentOwned } from "@/modules/agent-engine/agents";
 import { isActionAvailable } from "@/modules/agent-engine/actions";
 import { getScheduleConfig } from "@/modules/scheduling/repository";
 import { getFollowUpConfig } from "@/modules/follow-up/config";
+import { isFishAudioConfigured } from "@/modules/voice/fish";
+import { catalogVoiceByReferenceId } from "@/modules/voice/catalog";
 import type { PersonaAnswers } from "@/modules/agent-engine/persona";
 import { AgentWizard } from "./AgentWizard";
 import { AgentHeader } from "./AgentHeader";
@@ -84,7 +86,19 @@ export default async function AgentePage({ params }: { params: Promise<{ id: str
         followUpConfig={followUpConfig}
         enabled={agent.enabled}
         listenAudio={agent.listenAudio}
+        speakReplies={agent.speakReplies}
         stopOnEmoji={agent.stopOnEmoji}
+        voice={
+          agent.voiceId
+            ? {
+                label: agent.voiceLabel,
+                createdAt: agent.voiceCreatedAt,
+                source: agent.voiceSource,
+              }
+            : null
+        }
+        catalogKey={catalogVoiceByReferenceId(agent.voiceId)?.key ?? null}
+        voiceAvailable={isFishAudioConfigured()}
         done={done}
       />
     </div>

@@ -1,5 +1,6 @@
 import { PrismaClient, type PlanKey, type UserRole } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import { BCRYPT_COST } from "../src/lib/password";
 
 const prisma = new PrismaClient();
 
@@ -28,7 +29,7 @@ async function upsertTenantWithOwner(opts: {
     return;
   }
 
-  const passwordHash = await bcrypt.hash(opts.password, 10);
+  const passwordHash = await bcrypt.hash(opts.password, BCRYPT_COST);
   const tenant = await prisma.tenant.create({
     data: {
       name: opts.tenantName,

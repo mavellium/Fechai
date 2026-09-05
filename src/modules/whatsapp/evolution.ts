@@ -70,6 +70,29 @@ export class EvolutionProvider implements WhatsAppProvider {
     return data.key?.id ?? null;
   }
 
+  async sendAudio(
+    externalId: string,
+    toPhone: string,
+    audio: { base64: string; mime: string },
+  ): Promise<string | null> {
+    // `/message/sendWhatsAppAudio` (e não `sendMedia`) é o que produz uma
+    // mensagem de VOZ: a Evolution converte para o opus/ogg do PTT e o WhatsApp
+    // mostra a onda com play. `sendMedia` com o mesmo arquivo entregaria um
+    // anexo de áudio — que toca, mas parece um documento na conversa.
+    const res = await fetch(`${this.baseUrl}/message/sendWhatsAppAudio/${externalId}`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ number: toPhone, audio: audio.base64 }),
+    });
+    if (!res.ok) {
+      throw new Error(
+        `Evolution sendWhatsAppAudio falhou (${res.status}): ${(await res.text().catch(() => "")).slice(0, 200)}`,
+      );
+    }
+    const data = (await res.json()) as { key?: { id?: string } };
+    return data.key?.id ?? null;
+  }
+
   async disconnect(externalId: string): Promise<void> {
     const res = await fetch(`${this.baseUrl}/instance/logout/${externalId}`, {
       method: "POST",

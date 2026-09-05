@@ -53,9 +53,20 @@ export function Navbar() {
   const [active, setActive] = useState<string | null>(null);
   const menuRef = useRef<HTMLDialogElement>(null);
 
+  /**
+   * Troca de rota zera o destaque — as seções da página anterior não existem
+   * mais. Derivado durante o render (o padrão do React para "estado que muda
+   * quando uma prop muda") em vez de `setActive(null)` dentro do efeito, que
+   * pintava a barra com o item errado por um quadro antes de corrigir.
+   */
+  const [rotaAnterior, setRotaAnterior] = useState(pathname);
+  if (rotaAnterior !== pathname) {
+    setRotaAnterior(pathname);
+    setActive(null);
+  }
+
   // Scrollspy: acende o link da seção visível (IntersectionObserver, scroll nativo).
   useEffect(() => {
-    setActive(null);
     const sections = links.map((l) => (l.id ? document.getElementById(l.id) : null)).filter(
       (el): el is HTMLElement => Boolean(el),
     );

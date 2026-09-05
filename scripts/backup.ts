@@ -5,6 +5,11 @@ import { createGzip } from 'zlib'
 import { pipeline } from 'stream/promises'
 import * as dotenv from 'dotenv'
 import { resolvePgContext } from './pg-bin'
+import {
+  ENCRYPTED_SUFFIX,
+  createEncryptStream,
+  isBackupEncryptionConfigured,
+} from './backup-crypto'
 
 dotenv.config()
 
@@ -31,9 +36,11 @@ function parseConnectionUrl(url: string): DBConfig {
   }
 }
 
-function buildFilename(type: BackupType): string {
+function buildFilename(type: BackupType, encrypted: boolean): string {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-  return `fechai-${type}-${timestamp}.sql.gz`
+  // O sufixo .enc é o que permite ao restore saber o que fazer com o arquivo
+  // sem depender de configuração — inclusive com backups antigos, em claro.
+  return `fechai-${type}-${timestamp}.sql.gz${encrypted ? ENCRYPTED_SUFFIX : ''}`
 }
 
 function buildDumpSpawn(
@@ -61,10 +68,21 @@ export async function runBackup(type: BackupType): Promise<string> {
   const db = parseConnectionUrl(databaseUrl)
 
   if (!fs.existsSync(BACKUPS_DIR)) {
-    fs.mkdirSync(BACKUPS_DIR, { recursive: true })
+    // 0o700: só o dono lê. Um diretório de backup legível por qualquer usuário
+    // da máquina anula a cifra para quem já tem uma conta local no servidor.
+    fs.mkdirSync(BACKUPS_DIR, { recursive: true, mode: 0o700 })
   }
 
-  const filename = buildFilename(type)
+  const encrypt = isBackupEncryptionConfigured()
+  if (!encrypt) {
+    console.warn(
+      '[backup] BACKUP_ENCRYPTION_KEY não configurada — gravando SEM criptografia.\n' +
+        '         O arquivo conterá dados pessoais de todos os tenants em claro.\n' +
+        '         Gere uma chave com: openssl rand -base64 32',
+    )
+  }
+
+  const filename = buildFilename(type, encrypt)
   const filepath = path.join(BACKUPS_DIR, filename)
 
   const ctx = resolvePgContext(db.port)
@@ -98,11 +116,19 @@ export async function runBackup(type: BackupType): Promise<string> {
   })
 
   const gzip = createGzip({ level: 1 })
-  const output = fs.createWriteStream(filepath)
+  // 0o600 no próprio open: criar aberto e restringir depois deixa uma janela em
+  // que o arquivo já tem conteúdo e ainda está legível por todos.
+  const output = fs.createWriteStream(filepath, { mode: 0o600 })
 
   try {
-    await Promise.all([pipeline(child.stdout, gzip, output), dumpExit])
+    // Comprime e só então cifra: gzip sobre texto cifrado não reduz nada.
+    const stages = encrypt
+      ? pipeline(child.stdout, gzip, createEncryptStream(), output)
+      : pipeline(child.stdout, gzip, output)
+    await Promise.all([stages, dumpExit])
   } catch (err) {
+    // Backup pela metade é pior que backup nenhum: some com o arquivo para
+    // ninguém confiar num dump truncado na hora do aperto.
     if (fs.existsSync(filepath)) fs.unlinkSync(filepath)
     throw err
   }

@@ -12,6 +12,7 @@
 // Uso em prod: docker compose exec web npm run db:admin
 import { PrismaClient, type PlanKey, type Prisma, type UserRole } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import { BCRYPT_COST } from "../src/lib/password";
 
 const prisma = new PrismaClient();
 
@@ -66,7 +67,7 @@ async function main() {
     return;
   }
 
-  const passwordHash = await bcrypt.hash(password, 10);
+  const passwordHash = await bcrypt.hash(password, BCRYPT_COST);
   await prisma.$transaction((tx) => createAdmin(tx, { email, passwordHash, name, role, planKey }));
 
   console.log(`✓ Admin criado: ${email} / ${password} (${role})`);

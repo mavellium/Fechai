@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
+import { payloadTooLarge } from "@/lib/rate-limit";
 import { getOrCreateConversation, sendManualReply } from "@/modules/agent-engine/conversation";
 
 type Result = { ok: boolean; error?: string; info?: string };
@@ -69,6 +70,9 @@ export async function sendMessageToContact(leadId: string, text: string): Promis
  * devolve o contato existente em vez de duplicar (mesma regra do webhook).
  */
 export async function addContact(_prev: Result | null, formData: FormData): Promise<Result> {
+  const tooLarge = payloadTooLarge(formData);
+  if (tooLarge) return { ok: false, error: tooLarge };
+
   const { tenantId } = await requireTenant();
 
   const rawPhone = phoneSchema.safeParse(formData.get("phone"));
