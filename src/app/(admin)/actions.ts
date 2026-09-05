@@ -14,6 +14,7 @@ import {
   adminSetUsageLimit,
   adminSetTrialEndsAt,
   adminCreateAccount,
+  deleteTenant,
 } from "@/modules/admin/service";
 import { strongPassword } from "@/lib/password-schema";
 import { setFeedbackStatus, type FeedbackStatus } from "@/modules/feedback/service";
@@ -23,6 +24,47 @@ export async function suspendTenant(tenantId: string, suspend: boolean) {
   await requireSuperadmin();
   await setTenantStatus(tenantId, suspend ? "suspended" : "active");
   revalidatePath("/admin/contas");
+}
+
+export type DeleteTenantResult = { ok: boolean; error?: string };
+
+/**
+ * Exclui uma conta DEFINITIVAMENTE. Sem desfazer.
+ *
+ * Exige a conta já **suspensa**. Não é burocracia: suspender é o passo
+ * reversível que dá tempo de perceber o engano, e obrigá-lo antes torna
+ * impossível apagar a conta errada num clique só — a lista tem contas de nomes
+ * parecidos e a linha de cima já é destrutiva. Quem confirma a exclusão já viu
+ * a conta parada e sabe qual é.
+ *
+ * As checagens moram aqui, no servidor, e não só no botão: esconder a ação da
+ * tela não é autorização, e a action é chamável direto.
+ */
+export async function deleteTenantAccount(tenantId: string): Promise<DeleteTenantResult> {
+  const session = await requireSuperadmin();
+
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { status: true, users: { select: { role: true } } },
+  });
+  if (!tenant) return { ok: false, error: "Conta não encontrada." };
+
+  // A própria conta do admin logado — apagá-la derrubaria quem está apagando.
+  if (tenantId === session.user.tenantId) {
+    return { ok: false, error: "Não é possível excluir a sua própria conta." };
+  }
+  // Conta de plataforma. Apagar a última SUPERADMIN tranca todo mundo para fora
+  // do /admin, sem caminho de volta pela interface.
+  if (tenant.users.some((u) => u.role === "SUPERADMIN")) {
+    return { ok: false, error: "Contas de admin não podem ser excluídas pelo painel." };
+  }
+  if (tenant.status !== "suspended") {
+    return { ok: false, error: "Suspenda a conta antes de excluí-la." };
+  }
+
+  await deleteTenant(tenantId);
+  revalidatePath("/admin/contas");
+  return { ok: true };
 }
 
 export async function changePlan(tenantId: string, planKey: PlanKey) {

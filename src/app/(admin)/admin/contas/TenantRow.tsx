@@ -1,14 +1,21 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { Eye } from "lucide-react";
+import { useRef, useState, useTransition } from "react";
+import { Eye, Trash2 } from "lucide-react";
 import type { PlanKey } from "@prisma/client";
 import { PLANS, planOf } from "@/modules/billing/plans";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmButton } from "@/components/ui/confirm-dialog";
 import { Select } from "@/components/ui/select";
-import { suspendTenant, changePlan, setTenantUsageLimit, setTenantTrial, impersonateUser } from "../../actions";
+import {
+  suspendTenant,
+  changePlan,
+  setTenantUsageLimit,
+  setTenantTrial,
+  impersonateUser,
+  deleteTenantAccount,
+} from "../../actions";
 
 type Props = {
   id: string;
@@ -45,6 +52,35 @@ export function TenantRow(t: Props) {
   const suspended = t.status === "suspended";
   const planDirty = plan !== t.planKey;
   const [impError, setImpError] = useState<string | null>(null);
+
+  // Exclusão definitiva: diálogo próprio (em vez de ConfirmButton) porque aqui
+  // não basta um "confirmar" — o admin digita o nome da conta. A lista tem
+  // nomes parecidos e não há desfazer.
+  const deleteDialog = useRef<HTMLDialogElement>(null);
+  const [deleteTyped, setDeleteTyped] = useState("");
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const deleteArmed = deleteTyped.trim() === t.name.trim();
+
+  function openDelete() {
+    setDeleteTyped("");
+    setDeleteError(null);
+    deleteDialog.current?.showModal();
+  }
+
+  function confirmDelete() {
+    if (!deleteArmed) return;
+    setDeleteError(null);
+    start(async () => {
+      const result = await deleteTenantAccount(t.id);
+      if (result?.ok) {
+        deleteDialog.current?.close();
+        return;
+      }
+      // A conta continua na lista: mostra o motivo no próprio diálogo, onde o
+      // admin está olhando, em vez de fechar como se tivesse dado certo.
+      setDeleteError(result?.error ?? "Não foi possível excluir a conta.");
+    });
+  }
 
   function impersonate(userId: string) {
     setImpError(null);
@@ -267,6 +303,22 @@ export function TenantRow(t: Props) {
             >
               {suspended ? "Reativar" : "Suspender"}
             </ConfirmButton>
+
+            {/* Só depois de suspensa — e nunca para conta de admin. A action
+                revalida as duas coisas no servidor; isto é só a tela. */}
+            {suspended && !t.isAdminAccount && (
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={pending}
+                title="Excluir esta conta e todos os seus dados, definitivamente"
+                aria-label={`Excluir definitivamente a conta ${t.name}`}
+                onClick={openDelete}
+              >
+                <Trash2 size={15} aria-hidden />
+                Excluir
+              </Button>
+            )}
           </div>
           {impError && (
             <p role="alert" className="max-w-56 text-right font-mono text-micro text-danger">
@@ -274,6 +326,69 @@ export function TenantRow(t: Props) {
             </p>
           )}
         </div>
+
+        <dialog
+          ref={deleteDialog}
+          aria-labelledby={`${t.id}-excluir-titulo`}
+          className="m-auto w-[calc(100%-2rem)] max-w-md rounded-surface border border-white/15 bg-ink p-6 text-left text-white backdrop:bg-ink/70"
+          onClose={() => {
+            setDeleteTyped("");
+            setDeleteError(null);
+          }}
+        >
+          <h2 id={`${t.id}-excluir-titulo`} className="font-display text-lg font-semibold">
+            Excluir {t.name} definitivamente?
+          </h2>
+          <p className="mt-2 text-sm leading-relaxed text-white/65">
+            Apaga a conta e tudo que pertence a ela: {t.counts.users} usuário
+            {t.counts.users === 1 ? "" : "s"}, {t.counts.leads} lead
+            {t.counts.leads === 1 ? "" : "s"}, {t.counts.conversations} conversa
+            {t.counts.conversations === 1 ? "" : "s"} com todo o histórico, agentes, base de
+            conhecimento, agendamentos e credenciais de integração. O WhatsApp é desconectado e os
+            arquivos saem da CDN. <strong className="text-white">Não há como desfazer.</strong>
+          </p>
+
+          <label
+            htmlFor={`${t.id}-excluir-nome`}
+            className="mt-4 block font-mono text-micro uppercase tracking-wide text-white/55"
+          >
+            Digite <span className="text-white">{t.name}</span> para confirmar
+          </label>
+          <input
+            id={`${t.id}-excluir-nome`}
+            type="text"
+            autoComplete="off"
+            value={deleteTyped}
+            disabled={pending}
+            onChange={(e) => setDeleteTyped(e.target.value)}
+            className="mt-1.5 w-full rounded-control border border-white/10 bg-white/5 px-3 py-2 text-sm text-white focus:border-danger focus:outline-none focus-visible:ring-2 focus-visible:ring-danger"
+          />
+
+          {deleteError && (
+            <p role="alert" className="mt-3 font-mono text-micro text-danger">
+              {deleteError}
+            </p>
+          )}
+
+          <div className="mt-5 flex justify-end gap-2">
+            <Button
+              variant="ghost"
+              disabled={pending}
+              onClick={() => deleteDialog.current?.close()}
+            >
+              Cancelar
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={!deleteArmed}
+              loading={pending}
+              loadingLabel="Excluindo conta"
+              onClick={confirmDelete}
+            >
+              Excluir para sempre
+            </Button>
+          </div>
+        </dialog>
       </td>
     </tr>
   );

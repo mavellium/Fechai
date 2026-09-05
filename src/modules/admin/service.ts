@@ -4,6 +4,9 @@ import type { PlanKey, UserRole } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { generateStrongPassword, BCRYPT_COST } from "@/lib/password";
 import { createTenantWithOwner } from "@/modules/tenants/provision";
+import { deleteFromBunny } from "@/lib/bunny";
+import { getWhatsAppProvider } from "@/modules/whatsapp";
+import { deleteVoice } from "@/modules/voice/fish";
 
 // Funções cross-tenant do painel admin. Autorização (SUPERADMIN) é garantida
 // na rota (admin)/ via requireSuperadmin — nunca chamar fora dela.
@@ -104,4 +107,104 @@ export async function adminCreateAccount(input: {
  */
 function generatePassword(): string {
   return generateStrongPassword((n) => new Uint8Array(randomBytes(n)));
+}
+
+/**
+ * Apaga uma conta e tudo que pende dela, definitivamente.
+ *
+ * Só existe como último passo depois de suspender: `deleteTenant` recusa conta
+ * ativa (ver a action). Suspender é reversível e cobre 99% dos casos — este
+ * caminho é para pedido de exclusão de dados (LGPD art. 18, VI) e para limpar
+ * conta de teste. Não há desfazer.
+ *
+ * O `onDelete: Cascade` do schema derruba users, agentes, leads, conversas,
+ * mensagens, agendamentos, documentos e credenciais numa linha só. Duas coisas
+ * NÃO são cobertas por ele, e é por isso que esta função é maior que um
+ * `prisma.tenant.delete`:
+ *
+ *   1. O que vive fora do Postgres — a instância na Evolution (o número segue
+ *      conectado, recebendo e queimando sessão) e os arquivos na BunnyCDN
+ *      (widget.js, anexos da base de conhecimento, ícone, áudios). Apagar a
+ *      linha e deixar isso de pé é o pior dos dois mundos: some do painel e
+ *      continua existindo.
+ *   2. `Referral.tenantId` é `SetNull` de propósito — a comissão já paga ao
+ *      afiliado não é reescrita porque o cliente saiu. O histórico financeiro
+ *      sobrevive à conta.
+ *
+ * A limpeza externa vem ANTES do delete e **nunca lança**: se a Evolution ou a
+ * Bunny estiverem fora do ar, a exclusão continua. O contrário — abortar a
+ * exclusão porque um terceiro caiu — deixaria o admin sem conseguir cumprir um
+ * pedido de exclusão de dados por causa de um serviço de arquivo estático.
+ */
+export async function deleteTenant(tenantId: string): Promise<void> {
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: {
+      id: true,
+      whatsappInstance: { select: { externalId: true } },
+      agents: { select: { voiceId: true, voiceSource: true } },
+      knowledgeDocs: { select: { fileUrl: true } },
+    },
+  });
+  if (!tenant) return;
+
+  await releaseExternalResources(tenant);
+
+  await prisma.tenant.delete({ where: { id: tenantId } });
+}
+
+/**
+ * Solta o que a conta ocupa fora do nosso banco. Cada passo é isolado: a falha
+ * de um não impede os outros nem a exclusão em si — só vira log.
+ */
+async function releaseExternalResources(tenant: {
+  id: string;
+  whatsappInstance: { externalId: string | null } | null;
+  agents: { voiceId: string | null; voiceSource: string | null }[];
+  knowledgeDocs: { fileUrl: string | null }[];
+}): Promise<void> {
+  const externalId = tenant.whatsappInstance?.externalId;
+  if (externalId) {
+    try {
+      // Logout, não delete: derruba a sessão do WhatsApp para o número não
+      // seguir conectado a uma conta que não existe mais.
+      await getWhatsAppProvider().disconnect(externalId);
+    } catch (err) {
+      console.error("[admin] falha ao desconectar WhatsApp da conta excluída", tenant.id, err);
+    }
+  }
+
+  for (const agent of tenant.agents) {
+    // Voz do catálogo é um modelo COMPARTILHADO entre contas: apagá-lo derruba
+    // a voz de todo mundo que a escolheu. Só a gravada é nossa para apagar.
+    if (agent.voiceId && agent.voiceSource !== "catalog") {
+      try {
+        await deleteVoice(agent.voiceId);
+      } catch (err) {
+        console.error("[admin] falha ao apagar voz da conta excluída", tenant.id, err);
+      }
+    }
+  }
+
+  // Arquivos da CDN. `deleteFromBunny` já é silencioso por dentro.
+  await deleteFromBunny(`widget/${tenant.id}/widget.js`);
+  for (const doc of tenant.knowledgeDocs) {
+    const path = bunnyPathFromUrl(doc.fileUrl);
+    if (path) await deleteFromBunny(path);
+  }
+}
+
+/**
+ * Converte a URL pública guardada no banco de volta no caminho da storage zone.
+ * Guardamos a URL da pull zone (`https://<pull>/knowledge/...`), mas a API de
+ * storage endereça pelo caminho — sem essa conversão o DELETE bate em 404 e o
+ * arquivo fica órfão.
+ */
+function bunnyPathFromUrl(url: string | null): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).pathname.replace(/^\/+/, "") || null;
+  } catch {
+    return null;
+  }
 }
