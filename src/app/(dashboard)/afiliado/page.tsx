@@ -83,7 +83,7 @@ export default async function AfiliadoPage() {
   const { earnings, funnel } = overview;
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-6">
+    <div className="mx-auto w-full max-w-[1600px] space-y-6">
       <PageHeader
         eyebrow="afiliado"
         title="Seu programa de afiliados"

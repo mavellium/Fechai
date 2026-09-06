@@ -24,7 +24,7 @@ export default async function FeedbacksPage({
   const feedbacks = await listFeedbacks(status !== "all" ? { status } : undefined);
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
+    <div className="mx-auto w-full max-w-6xl space-y-6">
       <PageHeader
         eyebrow="admin"
         title="Feedbacks"

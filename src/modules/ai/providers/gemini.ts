@@ -26,14 +26,25 @@ type GeminiContent = { role: "user" | "model"; parts: GeminiPart[] };
 export class GeminiProvider implements LLMProvider {
   readonly provider = "gemini" as const;
 
-  constructor(readonly model: string) {}
+  /**
+   * Chave cadastrada no painel, quando o degrau da cadeia aponta para uma.
+   * Sem ela vale a do `.env` — ver `src/modules/ai/credentials.ts`.
+   */
+  constructor(
+    readonly model: string,
+    private readonly apiKeyOverride?: string,
+  ) {}
+
+  private apiKey(): string | undefined {
+    return this.apiKeyOverride ?? process.env.GEMINI_API_KEY;
+  }
 
   isConfigured() {
-    return Boolean(process.env.GEMINI_API_KEY);
+    return Boolean(this.apiKey());
   }
 
   async complete(messages: LlmMessage[], tools: LlmToolSchema[]): Promise<LlmResult> {
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = this.apiKey();
     if (!apiKey) {
       // Mesma degradação graciosa do resto do app: sem chave, não quebra o fluxo.
       return {

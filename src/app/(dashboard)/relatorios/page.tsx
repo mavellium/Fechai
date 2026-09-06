@@ -83,7 +83,7 @@ export default async function RelatoriosPage({
   // precisa ver o que indicou.
   if (hasAnyData === 0 && view !== "afiliados") {
     return (
-      <div className="mx-auto max-w-6xl space-y-8">
+      <div className="mx-auto w-full max-w-[1600px] space-y-8">
         <PageHeader
           eyebrow="relatórios"
           title="Números da sua conta"
@@ -118,7 +118,7 @@ export default async function RelatoriosPage({
   if (!de) exportQs.set("periodo", period);
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-6">
+    <div className="mx-auto w-full max-w-[1600px] space-y-6">
       <PageHeader
         eyebrow="relatórios"
         title="Números da sua conta"
@@ -164,7 +164,7 @@ export default async function RelatoriosPage({
       {view === "operacional" && report ? (
         <>
           <FadeIn>
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
               <Stat
                 label="Conversas ativas"
                 value={String(report.kpis.conversations)}
@@ -193,11 +193,8 @@ export default async function RelatoriosPage({
               <Stat
                 label="Taxa de resposta"
                 value={`${Math.round(report.kpis.responseRate * 100)}%`}
-                hint={
-                  prev
-                    ? `antes ${Math.round(prev.responseRate * 100)}%`
-                    : "conversas em que o lead respondeu 2+ vezes"
-                }
+                hint={prev ? `antes ${Math.round(prev.responseRate * 100)}%` : undefined}
+                about="Conversas em que o lead respondeu duas vezes ou mais."
               />
               <Stat label="Leads quentes" value={String(report.kpis.hotLeads)} hint="agora" />
               <Stat label="Precisam de você" value={String(report.kpis.needsHuman)} hint="agora" />

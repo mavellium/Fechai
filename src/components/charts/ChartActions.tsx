@@ -103,7 +103,15 @@ export function ChartActions({
             <X size={18} aria-hidden />
           </button>
         </div>
-        <p className="text-sm leading-relaxed text-neutral panel:text-white/65">{description}</p>
+        {/*
+          O resumo de uma linha saiu de baixo do título do card e entrou aqui,
+          antes do detalhe: primeiro o que o gráfico mostra, depois como é
+          apurado. Quem abriu quer os dois, e nessa ordem.
+        */}
+        <p className="text-sm font-medium leading-relaxed text-ink panel:text-white">{hint}</p>
+        <p className="mt-2 text-sm leading-relaxed text-neutral panel:text-white/65">
+          {description}
+        </p>
         <dl className="mt-4 space-y-2">
           {sources.map(([name, value]) => (
             <div

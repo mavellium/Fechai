@@ -5,11 +5,10 @@ import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
-import { FilterTabs } from "@/components/ui/filter-tabs";
 import { PageHeader } from "@/components/ui/page-header";
-import { CONVERSA_FILTERS } from "./leadStatus";
 import { ConversationList } from "./ConversationList";
 import { ConversationSearch } from "./ConversationSearch";
+import { ConversationFilters } from "./ConversationFilters";
 import { isFishAudioConfigured } from "@/modules/voice/fish";
 import { ConversationThread } from "./ConversationThread";
 import { LeadPanel } from "./LeadPanel";
@@ -142,7 +141,7 @@ export default async function ConversasPage({
     // página passa a ocupá-la para que cada painel role sozinho, como em qualquer
     // caixa de entrada. Antes a página inteira rolava e o cabeçalho da conversa
     // saía de vista.
-    <div className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col gap-4">
+    <div className="mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 flex-col gap-4">
       <PageHeader
         eyebrow="conversas"
         title="Conversas"
@@ -163,19 +162,10 @@ export default async function ConversasPage({
 
           <div className="space-y-3 border-b border-white/10 p-4">
             <ConversationSearch status={status} q={search} />
-            <FilterTabs
-              label="Filtrar conversas por status"
-              options={CONVERSA_FILTERS.map((f) =>
-                f.key === "needs_human"
-                  ? { ...f, count: needsHumanCount }
-                  : f.key === "all"
-                    ? { ...f, count: totalAll }
-                    : f.key === "test"
-                      ? { ...f, count: testCount }
-                      : f,
-              )}
-              active={status}
-              href={(key) => `/conversas?status=${key}${search ? `&q=${encodeURIComponent(search)}` : ""}`}
+            <ConversationFilters
+              status={status}
+              search={search}
+              counts={{ all: totalAll, needsHuman: needsHumanCount, test: testCount }}
             />
           </div>
 
@@ -193,7 +183,7 @@ export default async function ConversasPage({
                 description={
                   emptyAccount
                     ? "Quando um cliente falar com seu agente, a conversa aparece aqui. Quer ver como funciona antes? Faça um teste."
-                    : "Ajuste a busca ou volte para “Todos” para ver a lista inteira."
+                    : "Ajuste a busca ou veja a lista inteira."
                 }
                 action={
                   emptyAccount ? (

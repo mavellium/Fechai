@@ -6,6 +6,7 @@ import { getWhatsAppProvider } from "@/modules/whatsapp";
 import { Card } from "@/components/ui/card";
 import { ButtonLink } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
+import { InfoHint } from "@/components/ui/info-hint";
 import { PageHeader } from "@/components/ui/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
@@ -81,7 +82,7 @@ export default async function ContatosPage({
   const connected = provider.isConfigured() && whatsapp?.status === "connected";
 
   return (
-    <div className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col gap-4">
+    <div className="mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 flex-col gap-4">
       <PageHeader
         eyebrow="contatos"
         title="Contatos"
@@ -98,13 +99,13 @@ export default async function ContatosPage({
 
       {recentConvs.length > 0 && (
         <section aria-label="Conversas recentes">
-          <h2 className="font-display text-lg font-semibold text-ink panel:text-white">
+          <h2 className="font-display flex items-center gap-1.5 text-lg font-semibold text-ink panel:text-white">
             Continuar conversa
+            <InfoHint label="continuar conversa">
+              Os últimos contatos que conversaram com você — mande uma mensagem ou abra a conversa.
+            </InfoHint>
           </h2>
-          <p className="mt-1 text-sm text-neutral panel:text-white/55">
-            Os últimos contatos que conversaram com você — mande uma mensagem ou abra a conversa.
-          </p>
-          <div className="mt-3 grid gap-4 md:grid-cols-3">
+          <div className="mt-3 grid gap-4 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
             {recentConvs.map((conv) => {
               const lead = conv.lead;
               const last = conv.messages[0];

@@ -8,7 +8,7 @@ import {
   PERSONA_GROUPS,
   type PersonaAnswers,
 } from "@/modules/agent-engine/persona";
-import { Alert, FormFeedback } from "@/components/ui/alert";
+import { FormFeedback } from "@/components/ui/alert";
 import { Field, fieldProps } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -55,10 +55,14 @@ export function PersonaForm({
   const tabs: StepTab[] = PERSONA_GROUPS.map((group) => ({
     key: group.key,
     label: group.legend.replace(/^\d+\.\s*/, ""),
+    hint: group.hint,
     content: (
       <fieldset className="min-w-0 space-y-5">
-        <legend className="font-display text-base font-semibold text-white">{group.legend}</legend>
-        <p className="-mt-3 max-w-prose text-sm text-white/55">{group.hint}</p>
+        {/* A sub-aba ativa logo acima já mostra o nome do grupo — repetir aqui
+            como título numerado, com um parágrafo embaixo, era a segunda vez
+            que a mesma frase aparecia. Fica só a legenda acessível (o
+            `<fieldset>` precisa de uma) e a explicação na bolinha. */}
+        <legend className="sr-only">{group.legend}</legend>
 
         {PERSONA_FIELDS.filter((f) => f.group === group.key).map((f) => {
           // `name` já é único e estável — serve de id sem precisar de useId().
@@ -68,9 +72,12 @@ export function PersonaForm({
           const Control = f.type === "textarea" ? Textarea : Input;
 
           return (
-            <Field key={f.name} label={f.label} htmlFor={id} hint={f.hint} optional={!required}>
+            // O hint da persona explica o que é o campo, não como preenchê-lo
+            // (disso cuida o placeholder) — por isso vai na bolinha, não em
+            // linha: sete parágrafos empilhados afogavam os sete campos.
+            <Field key={f.name} label={f.label} htmlFor={id} about={f.hint} optional={!required}>
               <Control
-                {...fieldProps(id, { hint: true })}
+                {...fieldProps(id)}
                 name={f.name}
                 placeholder={f.placeholder}
                 value={answers[f.name]}
@@ -90,12 +97,9 @@ export function PersonaForm({
     <form action={formAction} className="space-y-8">
       <input type="hidden" name="agentId" value={agentId} />
 
-      <Alert tone="info">
-        O que você escrever aqui vira as instruções que o agente recebe em toda
-        conversa. Fatos que mudam (preço, horário, cardápio) não entram aqui — vão na
-        <strong className="font-medium"> Base de conhecimento</strong>, alguns passos à frente.
-      </Alert>
-
+      {/* O aviso "isto vira instrução permanente; fato que muda vai na Base de
+          conhecimento" migrou para a bolinha do título do passo (AgentWizard):
+          era a terceira vez que a mesma ideia aparecia antes do primeiro campo. */}
       <StepTabs tabs={tabs} />
 
       {/* Prévia fechada por padrão: é para conferir, não para editar — quem

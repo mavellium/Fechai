@@ -18,7 +18,21 @@ import {
 } from "@/modules/admin/service";
 import { strongPassword } from "@/lib/password-schema";
 import { setFeedbackStatus, type FeedbackStatus } from "@/modules/feedback/service";
-import { setActiveModelId } from "@/modules/ai";
+import {
+  createProvider,
+  getActiveModel,
+  getActiveModelId,
+  invalidateChainCache,
+  isAiError,
+  getUsableChain,
+  resolveSecret,
+  setActiveModelId,
+} from "@/modules/ai";
+import { addCredential, clearCooldown, deleteCredential } from "@/modules/ai/credentials";
+import { saveChain } from "@/modules/ai/chain";
+import { isEncryptionConfigured } from "@/lib/crypto";
+
+import { recordUsage } from "@/modules/ai/usage";
 
 export async function suspendTenant(tenantId: string, suspend: boolean) {
   await requireSuperadmin();
@@ -142,6 +156,243 @@ export async function changeAiModel(modelId: string) {
   const session = await requireSuperadmin();
   await setActiveModelId(modelId, session.user.email ?? undefined);
   revalidatePath("/admin/ia");
+}
+
+/**
+ * Teto por provedor no teste do painel. Sem isto, um provedor pendurado
+ * deixaria o botão girando sem fim — e a chain nem chegaria a ser tentada.
+ * Generoso porque um "cold start" de LLM passa de 30s em condição normal.
+ */
+const TEST_TIMEOUT_MS = 45_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`sem resposta em ${ms / 1000}s`)), ms),
+    ),
+  ]);
+}
+
+export type AiTestResult = {
+  ok: boolean;
+  /** Quem respondeu DE FATO — pode não ser o modelo ativo (ver abaixo). */
+  provider?: string;
+  model?: string;
+  modelLabel?: string;
+  /** O primeiro degrau da cadeia falhou e outro respondeu no lugar dele. */
+  usedFallback?: boolean;
+  /** Rótulo da chave que respondeu, ou null quando foi a do `.env`. */
+  credentialLabel?: string | null;
+  /** Modelo que estava configurado quando o teste rodou. */
+  activeModel?: string;
+  activeModelLabel?: string;
+  /** Trecho da resposta — sinal de vida da API, não prova de identidade. */
+  reply?: string;
+  latencyMs?: number;
+  tokens?: number;
+  error?: string;
+};
+
+/**
+ * Dispara uma chamada real ao LLM e diz QUEM respondeu.
+ *
+ * O painel mostrava o modelo configurado, mas o agente tem uma chain de
+ * fallback (Gemini free → Grok → Groq): quando o modelo ativo estoura a cota,
+ * outro provedor responde em silêncio. Sem esta prova, ler "Gemini 2.5 Flash"
+ * na tela não significava que era o Gemini atendendo os leads.
+ *
+ * Percorre a MESMA chain do orquestrador (`getGeminiFallbackChain`) para que o
+ * resultado valha para a conversa de verdade — um teste que só chamasse o
+ * modelo ativo responderia outra pergunta.
+ *
+ * Não passa por `runAgentTurn` de propósito: nada de tenant, conversa, cota ou
+ * histórico. É um ping ao provedor, e o custo é de uma frase.
+ */
+export async function testAiModel(): Promise<AiTestResult> {
+  await requireSuperadmin();
+
+  const active = await getActiveModel();
+  const started = Date.now();
+
+  // A MESMA cadeia do orquestrador — a que o admin montou, com as credenciais
+  // dele. Um teste que percorresse outra ordem responderia outra pergunta.
+  const chain = await getUsableChain();
+
+  let lastError = "Nenhum provedor respondeu.";
+
+  for (const [i, step] of chain.entries()) {
+    const model = step.model;
+    const isFallback = i > 0;
+    const apiKey = await resolveSecret(model.provider, step.credentialId);
+    if (!apiKey) {
+      lastError = step.credentialId
+        ? `A chave "${step.credentialLabel}" não pôde ser lida.`
+        : `${model.envKey} não está configurada neste ambiente.`;
+      continue;
+    }
+    try {
+      const provider = createProvider(model, apiKey);
+      // Um prompt trivial de propósito. Perguntar "qual modelo é você?" parece
+      // a prova óbvia e não é: num teste real o Gemini respondeu "GPT-4o" —
+      // modelos não sabem com segurança o próprio nome. Quem responde é o
+      // provider que executou a chamada (`provider.provider`/`.model`), não o
+      // texto gerado; o texto fica só como sinal de que a API respondeu.
+      const result = await withTimeout(
+        provider.complete([{ role: "user", content: "Responda apenas: ok" }], []),
+        TEST_TIMEOUT_MS,
+      );
+
+      // Contabiliza como qualquer outra chamada: o teste gasta tokens de
+      // verdade e some do relatório de uso seria mentir sobre o consumo.
+      await recordUsage(provider.provider, result.usage).catch(() => {});
+
+      return {
+        ok: true,
+        provider: provider.provider,
+        model: provider.model,
+        modelLabel: model.label,
+        usedFallback: isFallback,
+        credentialLabel: step.credentialLabel,
+        activeModel: active.id,
+        activeModelLabel: active.label,
+        reply: result.content.trim().slice(0, 200),
+        latencyMs: Date.now() - started,
+        tokens: result.usage?.totalTokens,
+      };
+    } catch (err) {
+      const who = step.credentialLabel ? `${model.label} (${step.credentialLabel})` : model.label;
+      lastError = isAiError(err)
+        ? `${who}: ${err.code}`
+        : `${who}: ${err instanceof Error ? err.message : "falha inesperada"}.`;
+    }
+  }
+
+  return { ok: false, error: lastError, activeModel: active.id, activeModelLabel: active.label };
+}
+
+/* ------------------------------------------------------------------ *
+ * Cadeia de fallback e credenciais de IA.
+ * ------------------------------------------------------------------ */
+
+const credentialSchema = z
+  .object({
+    provider: z.enum(["gemini", "openai", "grok", "groq", "custom"]),
+    label: z.string().trim().max(60),
+    // Sem `.max()` apertado: chaves de provedores variam muito de formato e
+    // tamanho, e recusar uma válida por palpite seria pior que aceitar.
+    secret: z.string().trim().min(8, "Chave curta demais para ser válida."),
+    baseUrl: z.string().trim().optional(),
+    modelId: z.string().trim().max(120).optional(),
+  })
+  .refine((v) => v.provider !== "custom" || Boolean(v.baseUrl && v.modelId), {
+    message: "Provedor personalizado precisa de URL base e nome do modelo.",
+  })
+  .refine((v) => v.provider !== "custom" || /^https:\/\//i.test(v.baseUrl ?? ""), {
+    // https obrigatório: a chave viaja no header, e http entregaria a
+    // credencial em texto claro para qualquer um no caminho.
+    message: "A URL base precisa começar com https://",
+  });
+
+export type SaveResult = { ok: boolean; error?: string };
+
+/** Cadastra uma chave de API. O segredo é cifrado antes de tocar o banco. */
+export async function addAiCredential(
+  _prev: SaveResult | null,
+  formData: FormData,
+): Promise<SaveResult> {
+  const session = await requireSuperadmin();
+
+  if (!isEncryptionConfigured()) {
+    return {
+      ok: false,
+      error: "Falta ENCRYPTION_KEY no servidor — sem ela a chave não pode ser guardada com segurança.",
+    };
+  }
+
+  const parsed = credentialSchema.safeParse({
+    provider: formData.get("provider"),
+    label: formData.get("label"),
+    secret: formData.get("secret"),
+    baseUrl: formData.get("baseUrl") ?? undefined,
+    modelId: formData.get("modelId") ?? undefined,
+  });
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Dados inválidos." };
+  }
+
+  try {
+    await addCredential({ ...parsed.data, createdBy: session.user.email ?? undefined });
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Não foi possível salvar." };
+  }
+
+  revalidatePath("/admin/ia");
+  return { ok: true };
+}
+
+export async function removeAiCredential(id: string): Promise<SaveResult> {
+  await requireSuperadmin();
+  try {
+    await deleteCredential(id);
+  } catch {
+    return { ok: false, error: "Não foi possível remover a chave." };
+  }
+  invalidateChainCache();
+  revalidatePath("/admin/ia");
+  return { ok: true };
+}
+
+/** Tira a credencial da quarentena antes da hora. */
+export async function clearAiCooldown(id: string): Promise<SaveResult> {
+  await requireSuperadmin();
+  try {
+    await clearCooldown(id);
+  } catch {
+    return { ok: false, error: "Não foi possível liberar a chave." };
+  }
+  invalidateChainCache();
+  revalidatePath("/admin/ia");
+  return { ok: true };
+}
+
+/** Regrava a cadeia inteira, na ordem que o admin montou. */
+export async function saveAiChain(
+  steps: { modelId: string; credentialId: string | null; enabled: boolean }[],
+): Promise<SaveResult> {
+  await requireSuperadmin();
+  try {
+    await saveChain(steps);
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "Não foi possível salvar a sequência.",
+    };
+  }
+  revalidatePath("/admin/ia");
+  return { ok: true };
+}
+
+/** Minutos de quarentena depois de uma falha de cota (0 desliga). */
+export async function setAiCooldownMinutes(minutes: number): Promise<SaveResult> {
+  const session = await requireSuperadmin();
+  const value = Math.trunc(minutes);
+  if (!Number.isInteger(value) || value < 0 || value > 10_080) {
+    return { ok: false, error: "Informe de 0 a 10080 minutos (até uma semana)." };
+  }
+  await prisma.aiSetting.upsert({
+    where: { id: "singleton" },
+    create: {
+      id: "singleton",
+      modelId: await getActiveModelId(),
+      cooldownMinutes: value,
+      updatedBy: session.user.email ?? undefined,
+    },
+    update: { cooldownMinutes: value, updatedBy: session.user.email ?? undefined },
+  });
+  invalidateChainCache();
+  revalidatePath("/admin/ia");
+  return { ok: true };
 }
 
 export type ImpersonateResult = { ok: boolean; error?: string };

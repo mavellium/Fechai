@@ -9,6 +9,7 @@ import { Alert } from "@/components/ui/alert";
 import { Badge, StatusDot } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button";
 import { Card, CardTitle } from "@/components/ui/card";
+import { InfoHint } from "@/components/ui/info-hint";
 import { PageHeader } from "@/components/ui/page-header";
 import { FilterTabs } from "@/components/ui/filter-tabs";
 import { dateLabel } from "@/lib/format";
@@ -126,7 +127,7 @@ export default async function IntegracoesPage({
   const s = STATUS_LABEL[status] ?? { label: status, tone: "neutral" as const };
 
   return (
-    <div className="mx-auto w-full max-w-4xl space-y-8">
+    <div className="mx-auto w-full max-w-6xl space-y-8">
       <PageHeader
         eyebrow="integracoes"
         title="Integrações"
@@ -146,19 +147,23 @@ export default async function IntegracoesPage({
 
       {tab === "calendarios" && features && (
         <section className="space-y-3">
-          <div>
-            <h2 className="font-display text-lg font-semibold text-white">Calendários</h2>
-            <p className="mt-1 max-w-prose text-sm text-white/60">
-              Habilite os calendários que sua conta usa e conecte cada um aqui. O que estiver
-              ligado aparece como status na{" "}
-              <Link
-                href="/agenda"
-                className="rounded-control underline underline-offset-4 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris"
-              >
-                Agenda
-              </Link>
-              .
-            </p>
+          {/* A explicação virou bolinha (os cards abaixo já mostram o toggle e
+              o que fazer), mas o link para a Agenda continua clicável ao lado:
+              um balão que fecha ao perder o foco não é lugar para navegação. */}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="font-display flex items-center gap-1.5 text-lg font-semibold text-white">
+              Calendários
+              <InfoHint label="calendários">
+                Habilite os calendários que sua conta usa e conecte cada um aqui. O que estiver
+                ligado aparece como status na Agenda.
+              </InfoHint>
+            </h2>
+            <Link
+              href="/agenda"
+              className="rounded-control font-mono text-micro uppercase tracking-[0.15em] text-white/60 underline underline-offset-4 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris"
+            >
+              Ver na Agenda
+            </Link>
           </div>
 
           <CalendarFeatureToggles
@@ -214,6 +219,7 @@ export default async function IntegracoesPage({
       */}
       <Card className="md:p-8">
         <CardTitle
+          hintLabel="WhatsApp"
           hint={
             connected
               ? "Este é o número que seus clientes usam para falar com o agente."

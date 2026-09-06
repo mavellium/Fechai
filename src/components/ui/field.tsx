@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { InfoHint } from "./info-hint";
 
 /**
  * Campo de formulário do produto: label sempre visível, dica opcional acima do
@@ -8,13 +9,16 @@ import { cn } from "@/lib/utils";
  * no onboarding e `<label className="...">` solto no painel (sem `htmlFor`, ou
  * seja, sem associação com o input). Esta é a única.
  *
- * Server-safe de propósito (nenhum hook): o `id` vem de quem chama, via `useId()`
- * em componentes client ou de uma string estável em Server Components.
+ * Renderizável a partir de um Server Component (nenhum hook aqui): o `id` vem
+ * de quem chama, via `useId()` em componentes client ou de uma string estável
+ * no servidor. O `about` traz um filho `"use client"` (`InfoHint`), o que é
+ * válido — o servidor só o referencia, não o executa.
  */
 export function Field({
   label,
   htmlFor,
   hint,
+  about,
   error,
   optional,
   className,
@@ -23,7 +27,17 @@ export function Field({
   label: string;
   /** Precisa bater com o `id` do controle — use `fieldProps()` para garantir. */
   htmlFor: string;
+  /**
+   * Dica de preenchimento: unidade, formato, exemplo. Fica **visível** de
+   * propósito — quem está digitando precisa dela antes de digitar, e um texto
+   * que exige passar o mouse não existe para quem usa toque.
+   */
   hint?: string;
+  /**
+   * Explicação de o que o campo faz no produto — contexto, não instrução. Vai
+   * para a bolinha de dúvida ao lado do rótulo, fora do caminho de quem já sabe.
+   */
+  about?: React.ReactNode;
   error?: string | null;
   /** Marca o campo como opcional em texto (não só visualmente). */
   optional?: boolean;
@@ -34,12 +48,13 @@ export function Field({
     <div className={className}>
       <label
         htmlFor={htmlFor}
-        className="block text-sm font-medium text-ink panel:text-white/85"
+        className="flex items-center gap-1.5 text-sm font-medium text-ink panel:text-white/85"
       >
         {label}
         {optional && (
-          <span className="ml-2 font-normal text-neutral panel:text-white/50">(opcional)</span>
+          <span className="font-normal text-neutral panel:text-white/50">(opcional)</span>
         )}
+        {about && <InfoHint label={label}>{about}</InfoHint>}
       </label>
 
       {hint && (

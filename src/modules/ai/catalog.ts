@@ -20,8 +20,14 @@ export type AiModelInfo = {
   limits: string;
   /** Custo por 1M tokens entrada/saída. */
   pricing: string;
-  /** Exige chave do provedor nesta env var. */
-  envKey: "GEMINI_API_KEY" | "OPENAI_API_KEY" | "XAI_API_KEY" | "GROQ_API_KEY";
+  /** Exige chave do provedor nesta env var. Vazio nos provedores cadastrados
+   *  pelo admin, cuja chave vem sempre do banco. */
+  envKey: "GEMINI_API_KEY" | "OPENAI_API_KEY" | "XAI_API_KEY" | "GROQ_API_KEY" | "";
+  /**
+   * URL base da API — presente só nos provedores cadastrados pelo admin
+   * (`provider: "custom"`). Os embutidos têm a URL no próprio adapter.
+   */
+  baseUrl?: string;
 };
 
 export const AI_MODELS: AiModelInfo[] = [

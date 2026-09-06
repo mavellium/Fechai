@@ -90,12 +90,8 @@ export function BehaviorSettings({
 
   return (
     <div className="space-y-3">
-      <Alert tone="info">
-        Como o agente se comporta na conversa: se ouve áudios, se responde falando e se encerra
-        quando a pessoa manda um emoji. Ouvir e encerrar vêm ligados; responder com áudio você liga
-        depois de escolher uma voz.
-      </Alert>
-
+      {/* Só o erro fica: a descrição dos três comportamentos repetia o título
+          do passo, e cada linha abaixo já se explica sozinha. */}
       {error && <Alert tone="danger">{error}</Alert>}
 
       {/* A voz vem ANTES do toggle que depende dela: gravar é o pré-requisito,

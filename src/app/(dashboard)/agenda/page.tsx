@@ -147,7 +147,7 @@ export default async function AgendaPage({
     : null;
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-6">
+    <div className="mx-auto w-full max-w-[1600px] space-y-6">
       <PageHeader
         eyebrow="agenda"
         title="Agenda"

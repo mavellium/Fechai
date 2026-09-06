@@ -11,7 +11,7 @@ export default async function AgentesPage() {
   const [agents, usage] = await Promise.all([listAgents(tenantId), getAgentUsage(tenantId)]);
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
+    <div className="mx-auto w-full max-w-6xl space-y-6">
       <PageHeader
         eyebrow="agentes"
         title="Seus agentes"
@@ -20,26 +20,24 @@ export default async function AgentesPage() {
         actions={<NewAgentButton usage={usage} />}
       />
 
-      {/* Uso do plano em texto explícito: antes não havia nenhum lugar no
-          produto que dissesse quantos agentes a conta tem nem qual o teto. */}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-surface border border-white/10 bg-white/5 px-5 py-4">
-        <div>
-          <p className="font-mono text-micro uppercase tracking-[0.2em] text-white/55">
-            agentes do seu plano
-          </p>
-          <p className="mt-1 text-sm text-white/80">
-            <span className="font-display text-lg font-bold tabular-nums text-white">
-              {usage.used}
-            </span>
-            <span className="text-white/55"> de {usage.limit} em uso</span>
-          </p>
-        </div>
-        {usage.canCreate ? (
-          <p className="text-xs text-white/55">
-            Você ainda pode criar {usage.remaining}{" "}
-            {usage.remaining === 1 ? "agente" : "agentes"}.
-          </p>
-        ) : (
+      {/*
+        Uso do plano numa linha só. Eram quatro: rótulo, "N de M em uso" e uma
+        terceira frase ("você ainda pode criar 2 agentes") que apenas repetia a
+        subtração que os dois números já mostram. O caso de limite atingido
+        continua com texto — ali a frase carrega uma AÇÃO (mudar de plano), que
+        não se deduz de número nenhum.
+      */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-surface border border-white/10 bg-white/5 px-5 py-3">
+        <p className="font-mono text-micro uppercase tracking-[0.2em] text-white/55">
+          <span className="font-display text-base font-bold tabular-nums text-white">
+            {usage.used}
+          </span>
+          <span className="normal-case tracking-normal text-white/55">
+            {" "}
+            de {usage.limit} agentes do seu plano
+          </span>
+        </p>
+        {!usage.canCreate && (
           <p className="text-xs text-white/70">
             Limite atingido.{" "}
             <Link href="/planos" className="text-signal underline underline-offset-2">

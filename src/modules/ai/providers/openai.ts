@@ -32,19 +32,34 @@ export class OpenAICompatProvider implements LLMProvider {
   readonly provider: ProviderKey;
   readonly model: string;
   private client: OpenAI | null = null;
+  /**
+   * Chave cadastrada no painel, quando o degrau da cadeia aponta para uma.
+   * Sem ela vale o `.env`, que continua sendo o padrão de quem nunca mexeu
+   * em /admin/ia — ver `src/modules/ai/credentials.ts`.
+   */
+  private readonly apiKeyOverride?: string;
 
-  constructor(model: string, private readonly config: OpenAICompatConfig) {
+  constructor(
+    model: string,
+    private readonly config: OpenAICompatConfig,
+    apiKeyOverride?: string,
+  ) {
     this.model = model;
     this.provider = config.provider;
+    this.apiKeyOverride = apiKeyOverride;
+  }
+
+  private apiKey(): string | undefined {
+    return this.apiKeyOverride ?? process.env[this.config.envKey];
   }
 
   isConfigured() {
-    return Boolean(process.env[this.config.envKey]);
+    return Boolean(this.apiKey());
   }
 
   private getClient() {
     this.client ??= new OpenAI({
-      apiKey: process.env[this.config.envKey],
+      apiKey: this.apiKey(),
       baseURL: this.config.baseURL,
     });
     return this.client;
@@ -140,8 +155,8 @@ export class OpenAICompatProvider implements LLMProvider {
 
 /** Adapter da OpenAI. */
 export class OpenAIProvider extends OpenAICompatProvider {
-  constructor(model: string) {
-    super(model, { provider: "openai", envKey: "OPENAI_API_KEY", displayName: "OpenAI" });
+  constructor(model: string, apiKeyOverride?: string) {
+    super(model, { provider: "openai", envKey: "OPENAI_API_KEY", displayName: "OpenAI" }, apiKeyOverride);
   }
 }
 

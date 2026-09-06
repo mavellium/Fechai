@@ -2,6 +2,7 @@ import type { ProviderKey } from "@/modules/ai/types";
 import { PROVIDER_ENV_KEY, type ProviderUsage } from "@/modules/ai/usage";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import { InfoHint } from "@/components/ui/info-hint";
 import { MeterChart } from "@/components/charts/MeterChart";
 
 const PROVIDER_LABEL: Record<ProviderKey, string> = {
@@ -9,6 +10,7 @@ const PROVIDER_LABEL: Record<ProviderKey, string> = {
   openai: "OpenAI",
   grok: "xAI (Grok)",
   groq: "Groq",
+  custom: "Personalizado",
 };
 
 /** "1.234" / "12,3K" / "1,2M" — compacto o bastante pra caber num card. */
@@ -18,24 +20,32 @@ function formatTokens(n: number): string {
   return `${(n / 1_000_000).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}M`;
 }
 
+/**
+ * Por que este provedor não mostra % de cota. Era um parágrafo dentro de cada
+ * card — quatro cards, quatro blocos de texto cinza para dizer o que, na
+ * prática, é "sem teto conhecido". Agora o rótulo é curto e o porquê vive na
+ * bolinha, para quem estiver investigando.
+ */
 function NoQuotaNote({ reason }: { reason: NonNullable<ProviderUsage["noQuotaReason"]> }) {
-  if (reason === "not_supported") {
-    return (
-      <p className="mt-2 text-xs text-white/55">
-        Não é possível identificar a cota desse provedor — a API do Gemini não expõe limite/uso sem uma
-        integração separada de conta de serviço do Google Cloud.
-      </p>
-    );
-  }
-  if (reason === "no_admin_key") {
-    return (
-      <p className="mt-2 text-xs text-white/55">
-        Sem teto conhecido — o provedor só devolve a cota do plano com uma chave de administração
-        separada da usada aqui, que esta versão não configura.
-      </p>
-    );
-  }
-  return <p className="mt-2 text-xs text-white/55">Ainda sem chamada recente para ler a cota.</p>;
+  const [label, detail] =
+    reason === "not_supported"
+      ? [
+          "cota não exposta",
+          "A API do Gemini não informa limite nem uso sem uma integração separada de conta de serviço do Google Cloud.",
+        ]
+      : reason === "no_admin_key"
+        ? [
+            "sem teto conhecido",
+            "O provedor só devolve a cota do plano com uma chave de administração separada da usada aqui, que esta versão não configura.",
+          ]
+        : ["aguardando chamada", "A cota é lida do cabeçalho da última resposta — ainda não houve uma."];
+
+  return (
+    <p className="mt-2 flex items-center gap-1.5 font-mono text-micro uppercase tracking-wide text-white/45">
+      {label}
+      <InfoHint label={label}>{detail}</InfoHint>
+    </p>
+  );
 }
 
 /**
@@ -58,11 +68,13 @@ export function UsagePanel({
 }) {
   return (
     <section>
-      <h2 className="font-display text-lg font-semibold text-white">Uso das chaves de IA</h2>
-      <p className="mb-4 mt-1 text-sm text-white/60">
-        Consumo de tokens desde que este painel passou a registrar — sem histórico de antes disso (ver
-        nota abaixo).
-      </p>
+      <h2 className="font-display mb-4 flex items-center gap-1.5 text-lg font-semibold text-white">
+        Uso das chaves
+        <InfoHint label="uso das chaves">
+          Consumo de tokens registrado por este painel. Chamadas anteriores à instrumentação não
+          entram na contagem — veja a estimativa no rodapé.
+        </InfoHint>
+      </h2>
 
       <div className="grid gap-4 sm:grid-cols-2">
         {providers.map((p) => {
@@ -103,13 +115,17 @@ export function UsagePanel({
         })}
       </div>
 
-      <p className="mt-4 text-xs text-white/50">
-        ≈ {formatTokens(historicalEstimateTokens)} tokens estimados nas conversas geradas antes desta
-        instrumentação — estimativa grosseira (tamanho do histórico de mensagens ÷ 4, uma aproximação
-        comum de caracteres por token), atribuída inteira ao modelo ativo hoje. Não reflete trocas de
-        modelo nem o fallback automático (Gemini → Grok → Groq) que pode ter respondido no lugar do
-        modelo ativo em qualquer momento do passado — não há registro de qual provedor gerou cada
-        mensagem antes de hoje.
+      {/* Cinco linhas de ressalva viraram uma com bolinha: quem lê o número
+          precisa saber que é estimativa; o método e os limites dela interessam
+          a quem for investigar. */}
+      <p className="mt-4 flex flex-wrap items-center gap-1.5 text-xs text-white/45">
+        ≈ {formatTokens(historicalEstimateTokens)} tokens estimados antes desta instrumentação
+        <InfoHint label="estimativa histórica">
+          Estimativa grosseira: tamanho do histórico de mensagens ÷ 4, uma aproximação comum de
+          caracteres por token, atribuída inteira ao modelo ativo hoje. Não reflete trocas de modelo
+          nem o fallback automático (Gemini → Grok → Groq) — não há registro de qual provedor gerou
+          cada mensagem antes de hoje.
+        </InfoHint>
       </p>
     </section>
   );

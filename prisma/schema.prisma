@@ -25,11 +25,11 @@ enum PlanKey {
 }
 
 model Tenant {
-  id               String            @id @default(cuid())
-  name             String
-  planKey          PlanKey           @default(FREE)
-  status           String            @default("active") // active | suspended
-  createdAt        DateTime          @default(now())
+  id        String   @id @default(cuid())
+  name      String
+  planKey   PlanKey  @default(FREE)
+  status    String   @default("active") // active | suspended
+  createdAt DateTime @default(now())
 
   // Cota de mensagens/mês: null = usa o teto do plano (`messagesPerMonth`).
   // Preenchido pelo superadmin em /admin/contas para dar um teto diferente do
@@ -59,7 +59,7 @@ model Tenant {
   // esse arquivo já existe; null = ainda não foi publicado nenhuma vez.
   // `widgetEnabled` nasce falso: o botão só aparece no site depois de ativado
   // na tela de Integrações (setWidgetEnabled).
-  widgetEnabled    Boolean   @default(false)
+  widgetEnabled     Boolean   @default(false)
   widgetColor       String    @default("#6d5ef8")
   widgetGreeting    String    @default("Olá! Como posso ajudar?")
   widgetIconType    String    @default("emoji") // "emoji" | "image"
@@ -76,10 +76,10 @@ model Tenant {
   // capturada no /cadastro a partir desta reformulação — contas criadas antes
   // ficam null, não é retroativo. Dados sobre o NEGÓCIO ficam aqui no Tenant;
   // dados PESSOAIS de quem preencheu o formulário ficam no User (ver abaixo).
-  city             String? // cidade do negócio
-  state            String? // UF (2 letras)
-  businessSegment  String? // ex: "estetica", "advocacia", "imobiliaria" — ver BUSINESS_SEGMENTS
-  referralSource   String? // como conheceu o fechai — ver REFERRAL_SOURCES
+  city            String? // cidade do negócio
+  state           String? // UF (2 letras)
+  businessSegment String? // ex: "estetica", "advocacia", "imobiliaria" — ver BUSINESS_SEGMENTS
+  referralSource  String? // como conheceu o fechai — ver REFERRAL_SOURCES
 
   users            User[]
   agents           Agent[]
@@ -98,14 +98,14 @@ model Tenant {
 }
 
 model User {
-  id           String    @id @default(cuid())
-  email        String    @unique
+  id           String   @id @default(cuid())
+  email        String   @unique
   name         String?
   passwordHash String?
-  role         UserRole  @default(OWNER)
+  role         UserRole @default(OWNER)
   tenantId     String
-  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdAt    DateTime  @default(now())
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt    DateTime @default(now())
 
   // Dados pessoais de quem preencheu o /cadastro — exigidos no formulário
   // desde a reformulação (ver AGENTS.md), mas nulos em contas anteriores (não
@@ -129,22 +129,20 @@ model User {
 
   // Programa de afiliados: presente só se a pessoa optou por ser afiliada
   // (no /cadastro ou ativando depois). Papel, não conta separada.
-  affiliate           Affiliate?
+  affiliate Affiliate?
 
   /**
    * Usa o produto (agente de WhatsApp), e não só o programa de afiliados.
-   *
    * Os dois papéis são independentes e ambos ajustáveis em /configuracoes:
    * "cliente" mora aqui, "afiliado" é a existência de `affiliate`. Quem marca
    * só "afiliado" no /cadastro fica com `false` e vê um painel enxuto — sem
    * agentes, conversas nem aviso de teste grátis, que não valem para quem não
    * usa o agente.
-   *
    * Default `true` porque toda conta anterior a este campo é de cliente: o
    * programa de afiliados nasceu depois, e ninguém deve perder o painel numa
    * migração.
    */
-  usesProduct         Boolean   @default(true)
+  usesProduct Boolean @default(true)
 
   @@index([tenantId])
 }
@@ -167,41 +165,41 @@ model Feedback {
 /// agentes da mesma conta atendem contextos diferentes e não podem se
 /// contaminar (o de vendas respondendo com documento do suporte).
 model Agent {
-  id           String   @id @default(cuid())
-  tenantId     String
-  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  name         String   @default("Meu agente")
-  systemPrompt String   @default("")
-  objective    String   @default("")
-  personaDraft Json? // respostas cruas do wizard, para reeditar
+  id             String    @id @default(cuid())
+  tenantId       String
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name           String    @default("Meu agente")
+  systemPrompt   String    @default("")
+  objective      String    @default("")
+  personaDraft   Json? // respostas cruas do wizard, para reeditar
   /// Agente que atende o número de WhatsApp da conta. Enquanto o WhatsApp for
   /// um por conta (ver CHANGELOG), exatamente um agente é o principal.
-  isPrimary    Boolean  @default(false)
+  isPrimary      Boolean   @default(false)
   /// Chave geral do agente. `false` = ele para de responder em qualquer canal
   /// (WhatsApp, widget do site e sandbox) sem perder persona, base nem ações.
   /// Existe porque a única forma de calar um agente era excluí-lo ou desligar
   /// o WhatsApp inteiro — as duas destrutivas demais para uma pausa.
-  enabled      Boolean  @default(true)
+  enabled        Boolean   @default(true)
   /// Ouve mensagens de voz do WhatsApp: o áudio é transcrito e o agente
   /// responde como se fosse texto. Desligado, áudios são ignorados.
-  listenAudio  Boolean  @default(true)
+  listenAudio    Boolean   @default(true)
   /// Cliente reage com um emoji ou manda só um emoji: a conversa encerra e o
   /// agente para de responder nela (mesmo mecanismo de quando um humano assume
   /// — `agentPaused`). O dono devolve a conversa em /conversas para retomar.
-  stopOnEmoji  Boolean  @default(true)
+  stopOnEmoji    Boolean   @default(true)
   /// Responde em áudio, na voz gravada pelo dono da conta (`voiceId`), quando o
   /// cliente mandou áudio — o espelho de `listenAudio`. Nasce DESLIGADO: falar
   /// exige uma voz clonada, e a conta só tem uma depois de gravar em /agentes.
   /// Ligado sem `voiceId`, ou com a Fish Audio fora do ar, a resposta sai em
   /// texto: voz é forma de entrega, nunca condição para o contato ser atendido.
-  speakReplies Boolean  @default(false)
+  speakReplies   Boolean   @default(false)
   /// Id do modelo de voz na Fish Audio (`reference_id` do POST /v1/tts), criado
   /// a partir da amostra que o dono gravou. Não é segredo — é um identificador
   /// opaco, inútil sem a chave da plataforma —, por isso fica em claro, ao
   /// contrário das credenciais de terceiros (ver `lib/crypto.ts`).
-  voiceId      String?
+  voiceId        String?
   /// Nome que o dono deu à voz, só para a tela dizer qual voz está no ar.
-  voiceLabel   String?
+  voiceLabel     String?
   /// De onde veio a voz: "recorded" (clonada da gravação do dono) ou "catalog"
   /// (uma das vozes prontas, ver `modules/voice/catalog.ts`). Null nas contas
   /// anteriores a este campo, que só podiam ter voz gravada.
@@ -210,12 +208,12 @@ model Agent {
   /// Audio e precisa ser apagada lá junto (senão fica a voz de um cliente
   /// órfã na conta da plataforma); uma voz do catálogo é compartilhada e
   /// apagá-la derrubaria a voz de todas as outras contas que a escolheram.
-  voiceSource  String?
+  voiceSource    String?
   /// Quando a voz foi gravada — a tela usa para mostrar "gravada em ...".
   voiceCreatedAt DateTime?
-  archived     Boolean  @default(false)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  archived       Boolean   @default(false)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   knowledgeDocs KnowledgeDocument[]
   actions       TenantAction[]
@@ -226,41 +224,41 @@ model Agent {
 }
 
 model KnowledgeDocument {
-  id        String            @id @default(cuid())
+  id        String           @id @default(cuid())
   tenantId  String
-  tenant    Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant    Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   // Documento pertence a UM agente. `tenantId` segue aqui porque a regra de
   // ouro do multi-tenant é toda query filtrar por ele (ver topo do arquivo).
   agentId   String
-  agent     Agent             @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  agent     Agent            @relation(fields: [agentId], references: [id], onDelete: Cascade)
   title     String
   content   String
-  status    String            @default("pending") // pending | ready | failed | no_embeddings
+  status    String           @default("pending") // pending | ready | failed | no_embeddings
   // Arquivo original enviado pelo cliente, guardado na BunnyCDN (ver
   // src/lib/bunny.ts). `content` continua sendo o texto extraído — o
   // arquivo em si só existia em memória até aqui e nunca era persistido.
   fileUrl   String?
   fileName  String?
   chunks    KnowledgeChunk[]
-  createdAt DateTime          @default(now())
+  createdAt DateTime         @default(now())
 
   @@index([tenantId])
   @@index([agentId])
 }
 
 model KnowledgeChunk {
-  id         String            @id @default(cuid())
+  id         String                       @id @default(cuid())
   tenantId   String
   // Desnormalizado do documento para o RAG filtrar por agente direto no SQL
   // cru do pgvector, sem join (ver searchSimilarChunks).
   agentId    String
   documentId String
-  document   KnowledgeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  document   KnowledgeDocument            @relation(fields: [documentId], references: [id], onDelete: Cascade)
   content    String
   // embedding via pgvector (text-embedding-3-small = 1536 dims).
   // Unsupported: gravado/consultado via $queryRaw (ver módulo knowledge-base).
   embedding  Unsupported("vector(1536)")?
-  createdAt  DateTime          @default(now())
+  createdAt  DateTime                     @default(now())
 
   @@index([documentId])
   @@index([tenantId])
@@ -314,39 +312,39 @@ model Lead {
 }
 
 model Conversation {
-  id         String    @id @default(cuid())
-  tenantId   String
-  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id              String    @id @default(cuid())
+  tenantId        String
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   // Qual agente atendeu. `SetNull` (e não Cascade): excluir um agente não pode
   // apagar o histórico de conversas nem os leads que ele gerou.
-  agentId    String?
-  agent      Agent?    @relation(fields: [agentId], references: [id], onDelete: SetNull)
-  leadId     String    @unique
-  lead       Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  messages   Message[]
-  needsHuman Boolean   @default(false)
+  agentId         String?
+  agent           Agent?    @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  leadId          String    @unique
+  lead            Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  messages        Message[]
+  needsHuman      Boolean   @default(false)
   /// Verdadeiro depois que um humano responde manualmente pelo painel
   /// (`sendManualMessage`). Enquanto ligado, `runAgentTurn` não gera resposta
   /// automática NESTA conversa — as outras do mesmo agente continuam normais.
   /// `needsHuman` sozinho não bastava: é só sinalizador de fila, nada no motor
   /// olhava pra ele antes de responder.
-  agentPaused Boolean  @default(false)
+  agentPaused     Boolean   @default(false)
   /// Espelha `Lead.isTest` para as consultas de conversa não precisarem de join.
-  isTest     Boolean   @default(false)
-  lastInboundAt DateTime?
-  followUpSentAt DateTime?
+  isTest          Boolean   @default(false)
+  lastInboundAt   DateTime?
+  followUpSentAt  DateTime?
   /// Resumo em texto do que foi conversado, gerado sob demanda pelo LLM ativo
   /// (`summarizeConversation`). Existe para o dono da conta entender uma
   /// conversa de 60 mensagens sem ler tudo. Null = nunca resumida.
-  summary        String?
+  summary         String?
   /// Quando o resumo foi gerado — mostrado na interface como "resumido há X".
-  summaryAt      DateTime?
+  summaryAt       DateTime?
   /// Quantas mensagens a conversa tinha quando o resumo foi gerado. É o que
   /// permite dizer "desatualizado, N mensagens novas" sem regerar nada: basta
   /// comparar com a contagem atual. Sem isso, o resumo em cache mentiria em
   /// silêncio conforme a conversa continuasse.
   summaryMsgCount Int?
-  updatedAt  DateTime  @updatedAt
+  updatedAt       DateTime  @updatedAt
 
   appointments Appointment[]
 
@@ -356,11 +354,11 @@ model Conversation {
 }
 
 model Message {
-  id             String       @id @default(cuid())
-  conversationId String
-  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  role           String // user | assistant | system
-  content        String
+  id                String       @id @default(cuid())
+  conversationId    String
+  conversation      Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role              String // user | assistant | system
+  content           String
   /// Quem gerou uma mensagem "assistant": "agent" (a IA respondeu sozinha) ou
   /// "human" (o dono da conta respondeu manualmente pelo painel). Null em
   /// mensagens "user"/"system", onde a distinção não existe. Sem isto, uma
@@ -368,14 +366,14 @@ model Message {
   /// quem disse aquilo nos próximos turnos — `sentBy` deixa `role` intacto
   /// (o histórico que vai pro LLM continua "assistant", que é o que importa
   /// pro contexto) e só a UI e a auditoria usam este campo pra diferenciar.
-  sentBy         String?
+  sentBy            String?
   /// id da mensagem no WhatsApp (key.id da Evolution). Só mensagens enviadas
   /// ou recebidas pelo WhatsApp têm. Serve para **deduplicar o webhook**: a
   /// Evolution reentrega o que a própria instância enviou (ex.: resposta do
   /// agente) como `messages.upsert` com `fromMe: true`, e sem esse id cada
   /// resposta sairia gravada duas vezes — uma pelo orquestrador, outra pelo
   /// webhook. Null em mensagens de sandbox e nas manuais antes deste campo.
-  whatsappMessageId String? @unique
+  whatsappMessageId String?      @unique
   /// Áudio desta mensagem na CDN, quando ela foi enviada como mensagem de voz.
   /// Null = mensagem de texto comum (a esmagadora maioria).
   ///
@@ -385,8 +383,8 @@ model Message {
   /// da conversa e para a busca; `audioUrl` é só a forma de entrega, e existe
   /// para a pessoa reouvir no painel o que de fato chegou no WhatsApp do
   /// cliente. Guardar só o áudio deixaria o histórico cego para tudo isso.
-  audioUrl       String?
-  createdAt      DateTime     @default(now())
+  audioUrl          String?
+  createdAt         DateTime     @default(now())
 
   @@index([conversationId])
 }
@@ -407,15 +405,15 @@ model Appointment {
   conversationId String?
   conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
 
-  title     String
-  notes     String?
-  startsAt  DateTime
-  endsAt    DateTime
-  status    String   @default("scheduled") // scheduled | done | canceled
-  source    String   @default("agent") // agent | manual
+  title                  String
+  notes                  String?
+  startsAt               DateTime
+  endsAt                 DateTime
+  status                 String   @default("scheduled") // scheduled | done | canceled
+  source                 String   @default("agent") // agent | manual
   /// Id do evento espelhado no Google Agenda, quando a conta está integrada.
   /// Null = só existe aqui (integração desligada ou sincronização falhou).
-  googleEventId String?
+  googleEventId          String?
   /// Id do agendamento espelhado no Clinicorp, mesma ideia do `googleEventId`.
   /// Guardado como String porque o id de lá é um inteiro de 64 bits (ex.:
   /// 4791226171916288) — fora do alcance seguro do Number do JS.
@@ -443,7 +441,7 @@ model CalendarFeatures {
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   /// Mostra o card do Google Agenda na /agenda.
-  googleEnabled Boolean @default(false)
+  googleEnabled    Boolean @default(false)
   /// Mostra o card do Clinicorp na /agenda.
   clinicorpEnabled Boolean @default(false)
 
@@ -486,33 +484,33 @@ model ClinicorpIntegration {
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   /// "Usuário API" e "Token API" da tela do Clinicorp — viram o par Basic.
-  apiUser  String
-  apiToken String
+  apiUser      String
+  apiToken     String
   /// Identificador do assinante. Obrigatório em boa parte dos endpoints e, em
   /// conta de grupo/franquia, é o que diz de qual unidade se está falando.
   subscriberId String
 
   /// Clínica onde os horários são criados (`Clinic_BusinessId`). A conta pode
   /// ter mais de uma; a escolhida aqui é a que recebe os agendamentos.
-  businessId String?
+  businessId          String?
   /// Profissional padrão (`Dentist_PersonId`). Opcional: sem ele o agendamento
   /// entra na agenda da clínica sem profissional definido.
-  dentistId String?
+  dentistId           String?
   /// Categoria do agendamento criado pelo agente, pelo nome cadastrado lá
   /// (ex.: "Avaliação"). Define a cor que a clínica vê na agenda.
   categoryDescription String?
 
   /// Espelhar novos agendamentos pode ser desligado sem apagar as credenciais.
-  syncEnabled Boolean @default(true)
+  syncEnabled       Boolean @default(true)
   /// Consultar a agenda do Clinicorp antes de oferecer horário. Separado do
   /// espelhamento: uma clínica pode querer só enviar, sem a leitura extra.
   checkAvailability Boolean @default(true)
 
   /// Diagnóstico da última chamada — a tela mostra para a pessoa saber que a
   /// credencial venceu sem precisar abrir o log do servidor.
-  lastSyncAt    DateTime?
-  lastErrorAt   DateTime?
-  lastError     String?
+  lastSyncAt  DateTime?
+  lastErrorAt DateTime?
+  lastError   String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -521,10 +519,93 @@ model ClinicorpIntegration {
 /// Configuração de IA da PLATAFORMA (não é por tenant) — linha única.
 /// Trocada pelo superadmin em /admin/ia; lida por src/modules/ai/settings.ts.
 model AiSetting {
-  id        String   @id @default("singleton")
-  modelId   String // id do modelo no catálogo (src/modules/ai/catalog.ts)
+  id              String   @id @default("singleton")
+  modelId         String // id do modelo no catálogo (src/modules/ai/catalog.ts)
+  /// Minutos que uma credencial fica em quarentena depois de estourar cota.
+  /// Configurável porque a janela certa depende do provedor: free tier do
+  /// Gemini renova por minuto, cota diária de outro provedor só no dia
+  /// seguinte. 0 desliga a quarentena (tenta sempre a ordem inteira).
+  cooldownMinutes Int      @default(5)
+  updatedAt       DateTime @updatedAt
+  updatedBy       String? // e-mail do superadmin que trocou
+}
+
+/// Um degrau da cadeia de fallback da IA, na ordem em que o agente tenta.
+///
+/// Antes a cadeia era fixa no código (Gemini free → Grok → Groq, em
+/// `catalog.ts`): mudar a ordem ou acrescentar um provedor exigia deploy. Cada
+/// linha aqui é "tente este modelo com esta credencial"; `position` dá a ordem
+/// e `enabled` permite desligar um degrau sem perder a configuração dele.
+///
+/// A cadeia do código continua valendo como padrão enquanto não houver
+/// nenhuma linha — conta nova não fica sem fallback por omissão.
+model AiFallbackStep {
+  id       String  @id @default(cuid())
+  /// Id do modelo no catálogo (src/modules/ai/catalog.ts).
+  modelId  String
+  /// Ordem de tentativa, do menor para o maior. O primeiro é o modelo que
+  /// atende normalmente; os seguintes só entram quando o anterior falha.
+  position Int
+  enabled  Boolean @default(true)
+
+  /// Credencial a usar neste degrau. Nulo = a chave do `.env` do provedor,
+  /// que continua sendo o padrão de quem nunca mexeu no painel.
+  credentialId String?
+  credential   AiCredential? @relation(fields: [credentialId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  updatedBy String? // e-mail do superadmin que trocou
+
+  @@unique([position])
+  @@index([credentialId])
+}
+
+/// Chave de API de um provedor de IA, cadastrada pelo admin sem deploy.
+///
+/// O segredo é CIFRADO (AES-256-GCM, `src/lib/crypto.ts`, chave em
+/// `ENCRYPTION_KEY`) — mesma decisão do `ClinicorpIntegration`: é credencial
+/// que precisa voltar em texto claro para montar o header da chamada, o
+/// oposto de senha de usuário (hash, nunca lida de volta). Nunca leia
+/// `secretEncrypted` direto do Prisma; passe por `src/modules/ai/credentials.ts`.
+///
+/// Permite mais de uma chave por provedor: esgotada a cota da primeira, a
+/// próxima assume — é o que faz "quantas chaves quiser" funcionar.
+model AiCredential {
+  id              String  @id @default(cuid())
+  /// "gemini" | "openai" | "grok" | "groq" para os embutidos, ou "custom" para
+  /// um provedor cadastrado pelo admin (ver `baseUrl`/`modelId`).
+  provider        String
+  /// URL base da API — só para `provider: "custom"`. Qualquer serviço que
+  /// exponha /chat/completions no formato da OpenAI serve (DeepSeek, Together,
+  /// OpenRouter, Mistral, Ollama, vLLM…): esse formato virou padrão de fato,
+  /// e por isso um adapter só cobre todos eles sem precisar de deploy.
+  baseUrl         String?
+  /// Nome do modelo nesse provedor ("deepseek-chat"). Digitado, não escolhido
+  /// de uma lista: só o próprio serviço sabe o que oferece.
+  modelId         String?
+  /// Nome que o admin reconhece na lista ("Groq conta 2").
+  label           String
+  /// Chave cifrada. Nunca sai daqui em texto claro para o cliente.
+  secretEncrypted String
+  /// Últimos 4 caracteres, em claro, só para o admin identificar qual é qual
+  /// sem revelar a chave.
+  lastFour        String
+
+  /// Até quando esta credencial está em quarentena por ter estourado cota.
+  /// Nulo = disponível. Ver `cooldownMinutes` em `AiSetting`.
+  cooldownUntil DateTime?
+  /// Motivo da última falha — ajuda o admin a distinguir "cota" de "chave
+  /// inválida", que pedem reações diferentes.
+  lastError     String?
+  lastUsedAt    DateTime?
+
+  steps AiFallbackStep[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String? // e-mail do superadmin que cadastrou
+
+  @@index([provider])
 }
 
 /// Uso de tokens por provedor de IA da PLATAFORMA, agregado por dia. Um
@@ -535,18 +616,18 @@ model AiSetting {
 /// mensagens geradas antes disso não têm como ser atribuídas a um provedor
 /// (ver src/modules/ai/usage.ts para a estimativa retroativa aproximada).
 model AiUsageDaily {
-  id                String   @id @default(cuid())
+  id               String   @id @default(cuid())
   /// "gemini" | "openai" | "grok" | "groq" — chave do provedor (não do modelo:
   /// vários modelos do catálogo dividem a mesma chave de API/provedor).
-  provider          String
+  provider         String
   /// Meia-noite UTC do dia — chave de agrupamento, não instante de evento.
-  day               DateTime
-  promptTokens      Int      @default(0)
-  completionTokens  Int      @default(0)
-  totalTokens       Int      @default(0)
+  day              DateTime
+  promptTokens     Int      @default(0)
+  completionTokens Int      @default(0)
+  totalTokens      Int      @default(0)
   /// Quantas chamadas bem-sucedidas compõem este total — não é o mesmo que
   /// turnos do agente (uma iteração de tool-calling pode chamar o LLM 2+ vezes).
-  requests          Int      @default(0)
+  requests         Int      @default(0)
 
   @@unique([provider, day])
 }
@@ -657,7 +738,7 @@ model Affiliate {
 
   /// Código público que vive na URL (?ref=CODIGO). Curto, legível e único —
   /// é o que o afiliado divulga, então precisa caber num story e num print.
-  code   String          @default(cuid()) @unique
+  code   String          @unique @default(cuid())
   status AffiliateStatus @default(ACTIVE)
 
   /// Percentual de comissão em BASIS POINTS (2000 = 20%). Inteiro de propósito:
@@ -683,9 +764,9 @@ model Affiliate {
 /// `tenantId` é único porque um tenant só pode ser creditado a um afiliado —
 /// o primeiro que trouxe (first-touch), para não haver disputa de crédito.
 model Referral {
-  id          String     @id @default(cuid())
+  id          String         @id @default(cuid())
   affiliateId String
-  affiliate   Affiliate  @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  affiliate   Affiliate      @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
   status      ReferralStatus @default(CLICK)
 
   /// Conta criada a partir do link. Null enquanto for só clique.
@@ -700,10 +781,10 @@ model Referral {
   landingPath String?
   utmSource   String?
 
-  clickedAt    DateTime  @default(now())
-  signedUpAt   DateTime?
-  convertedAt  DateTime?
-  churnedAt    DateTime?
+  clickedAt   DateTime  @default(now())
+  signedUpAt  DateTime?
+  convertedAt DateTime?
+  churnedAt   DateTime?
 
   commissions AffiliateCommission[]
 

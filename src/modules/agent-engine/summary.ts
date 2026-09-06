@@ -1,6 +1,11 @@
 import { prisma } from "@/lib/prisma";
-import { getLLMProvider, isAiError, createProvider, type LlmMessage } from "@/modules/ai";
-import { findModel, getGeminiFallbackChain } from "@/modules/ai/catalog";
+import {
+  isAiError,
+  createProvider,
+  getUsableChain,
+  resolveSecret,
+  type LlmMessage,
+} from "@/modules/ai";
 import { recordUsage } from "@/modules/ai/usage";
 
 /**
@@ -128,34 +133,32 @@ export async function summarizeConversation(
 }
 
 /**
- * Mesma ideia da chain do orquestrador (Gemini → Grok → Groq), sem tools e sem
- * loop: um resumo é uma única chamada de texto. Duplicar aqui em vez de
- * exportar a do orquestrador mantém aquele caminho — o quente, do atendimento
- * — livre de parâmetros que só este uso precisa.
+ * Mesma cadeia do orquestrador, sem tools e sem loop: um resumo é uma única
+ * chamada de texto. Percorre `getUsableChain()` — a ordem e as credenciais que
+ * o admin montou em /admin/ia — para o resumo não ficar numa cadeia própria,
+ * ignorando a configuração do painel.
+ *
+ * Diferença deliberada do caminho do atendimento: aqui NÃO se marca quarentena
+ * na credencial. Resumo é trabalho de segundo plano; deixar uma chave de molho
+ * por causa dele penalizaria o atendimento, que é o que importa.
  */
 async function completeWithFallback(messages: LlmMessage[]): Promise<string> {
-  const llm = await getLLMProvider();
-  try {
-    const result = await llm.complete(messages, []);
-    recordUsage(llm.provider, result.usage).catch(() => {});
-    return result.content;
-  } catch (err) {
-    if (!isAiError(err)) throw err;
-    let lastErr = err;
-    for (const fallbackId of getGeminiFallbackChain(llm.model)) {
-      const model = findModel(fallbackId);
-      if (!model) continue;
-      const next = createProvider(model);
-      if (!next.isConfigured()) continue;
-      try {
-        const result = await next.complete(messages, []);
-        recordUsage(next.provider, result.usage).catch(() => {});
-        return result.content;
-      } catch (e) {
-        if (!isAiError(e)) throw e;
-        lastErr = e;
-      }
+  const chain = await getUsableChain();
+  let lastErr: unknown = null;
+
+  for (const step of chain) {
+    const apiKey = await resolveSecret(step.model.provider, step.credentialId);
+    const provider = createProvider(step.model, apiKey);
+    if (!provider.isConfigured()) continue;
+    try {
+      const result = await provider.complete(messages, []);
+      recordUsage(provider.provider, result.usage).catch(() => {});
+      return result.content;
+    } catch (e) {
+      if (!isAiError(e)) throw e;
+      lastErr = e;
     }
-    throw lastErr;
   }
+
+  throw lastErr ?? new Error("Nenhum provedor de IA disponível para o resumo.");
 }

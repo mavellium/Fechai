@@ -1,13 +1,13 @@
 "use client";
 
 import { useActionState } from "react";
-import { CalendarClock } from "lucide-react";
 import type { ScheduleConfig } from "@/modules/scheduling/config";
 import { weekdayLabel } from "@/modules/scheduling/config";
 import { TIMEZONES } from "@/modules/scheduling/time";
 import { FormFeedback } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field, fieldProps } from "@/components/ui/field";
+import { InfoHint } from "@/components/ui/info-hint";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { saveScheduleConfigAction } from "./actions";
@@ -35,16 +35,14 @@ export function ScheduleSettings({
     <form action={formAction} className="space-y-5 border-t border-white/10 pt-5">
       <input type="hidden" name="agentId" value={agentId} />
 
-      <div className="flex items-start gap-2 text-sm text-white/65">
-        <CalendarClock size={16} aria-hidden className="mt-0.5 shrink-0 text-white/40" />
-        <p className="max-w-prose">
-          O agente só marca horários dentro do que estiver aqui. Fora disso, ele oferece
-          outra data em vez de aceitar.
-        </p>
-      </div>
-
       <fieldset className="min-w-0">
-        <legend className="text-sm font-medium text-white/85">Dias de atendimento</legend>
+        <legend className="flex items-center gap-1.5 text-sm font-medium text-white/85">
+          Dias de atendimento
+          <InfoHint label="dias de atendimento">
+            O agente só marca horários dentro do que estiver aqui. Fora disso, ele oferece outra
+            data em vez de aceitar.
+          </InfoHint>
+        </legend>
         <div className="mt-2 flex flex-wrap gap-2">
           {WEEKDAYS.map((day) => {
             const id = `workday-${day}`;

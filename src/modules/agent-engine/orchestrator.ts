@@ -2,8 +2,21 @@ import { prisma } from "@/lib/prisma";
 import { getUsageSummary } from "@/modules/billing/usage";
 import { embedQuery } from "@/modules/knowledge-base/embeddings";
 import { searchSimilarChunks } from "@/modules/knowledge-base/repository";
-import { getLLMProvider, isAiError, createProvider, type AiError, type LLMProvider, type LlmMessage, type LlmResult, type LlmToolSchema } from "@/modules/ai";
-import { findModel, getGeminiFallbackChain } from "@/modules/ai/catalog";
+import {
+  isAiError,
+  createProvider,
+  getUsableChain,
+  getCooldownMinutes,
+  resolveSecret,
+  markCredentialOk,
+  markCredentialCooldown,
+  type AiError,
+  type ChainStep,
+  type LLMProvider,
+  type LlmMessage,
+  type LlmResult,
+  type LlmToolSchema,
+} from "@/modules/ai";
 import { recordUsage } from "@/modules/ai/usage";
 import { parseScheduleConfig, scheduleSystemContext } from "@/modules/scheduling/config";
 import { getToolSchemas, runToolHandler, type ToolContext } from "./tools";
@@ -165,24 +178,25 @@ export async function runAgentTurn(input: {
 
   const toolSchemas = getToolSchemas(actions.map((a) => a.key));
   const ctx: ToolContext = { tenantId, conversationId, leadId, agentId: agent?.id ?? null };
-  let llm = await getLLMProvider();
-  // Chain de fallback resolvida UMA vez a partir do modelo ativo. Para um
-  // Gemini do free tier: Grok → Groq (só os com chave configurada).
-  const fallbackChain = getGeminiFallbackChain(llm.model);
+  // A cadeia de fallback vem do painel (/admin/ia): o admin monta a ordem e
+  // aponta cada degrau para uma credencial. Sem nada cadastrado, cai no padrão
+  // do código (modelo ativo → Grok → Groq). Resolvida UMA vez por turno, já
+  // sem os degraus em quarentena.
+  const chain = await getUsableChain();
+  let llm: LLMProvider | null = null;
   const toolsUsed: string[] = [];
 
   let finalReply = "";
-  const attemptedModels = new Set<string>();
+  const attemptedSteps = new Set<string>();
   try {
     for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
       // Chama o LLM e, se falhar, caminha pela chain de fallback (ex.: Gemini
       // → Grok → Groq). `attemptedModels` evita repetir quem já deu erro.
       const { llm: nextLlm, result } = await completeWithFallback(
-        llm,
         messages,
         toolSchemas,
-        fallbackChain,
-        attemptedModels,
+        chain,
+        attemptedSteps,
       );
       llm = nextLlm;
 
@@ -209,7 +223,10 @@ export async function runAgentTurn(input: {
     }
   } catch (err) {
     if (!isAiError(err)) throw err;
-    console.error(`[orchestrator] IA indisponível (${err.code}) em ${llm.provider}/${llm.model}`, err);
+    // `llm` fica null quando NENHUM degrau da cadeia respondeu — o erro é da
+    // cadeia inteira, não de um provedor específico.
+    const where = llm ? `${llm.provider}/${llm.model}` : "toda a cadeia";
+    console.error(`[orchestrator] IA indisponível (${err.code}) em ${where}`, err);
 
     // Cota do provedor esgotada (ex.: limite diário de tokens): o cliente não
     // recebe NENHUMA mensagem sobre o limite — só a conversa sobe como
@@ -245,42 +262,52 @@ export async function runAgentTurn(input: {
  * Se todos falharem, propaga o último erro.
  */
 async function completeWithFallback(
-  llm: LLMProvider,
   messages: LlmMessage[],
   toolSchemas: LlmToolSchema[],
-  fallbackChain: string[],
-  attemptedModels: Set<string>,
+  chain: ChainStep[],
+  attempted: Set<string>,
 ): Promise<{ llm: LLMProvider; result: LlmResult }> {
-  try {
-    const result = await llm.complete(messages, toolSchemas);
-    recordUsage(llm.provider, result.usage).catch(() => {});
-    return { llm, result };
-  } catch (err) {
-    if (!isAiError(err)) throw err;
-    let lastErr: AiError = err;
-    for (const fallbackId of fallbackChain) {
-      if (attemptedModels.has(fallbackId)) continue;
-      const model = findModel(fallbackId);
-      if (!model) continue;
-      attemptedModels.add(fallbackId);
-      const next = createProvider(model);
-      console.warn(
-        `[orchestrator] Fallback: ${llm.provider} ${llm.model} indisponível (${lastErr.code}), usando ${model.provider} ${model.id}`,
-      );
-      try {
-        // Registrado no provider que RESPONDEU (`next`), não no que falhou
-        // (`llm`) — é exatamente o ponto que resolve a atribuição de uso que o
-        // histórico anterior nunca teve: aqui sabemos com certeza quem gerou.
-        const result = await next.complete(messages, toolSchemas);
-        recordUsage(next.provider, result.usage).catch(() => {});
-        return { llm: next, result };
-      } catch (e) {
-        if (!isAiError(e)) throw e;
-        lastErr = e;
+  let lastErr: AiError | null = null;
+
+  for (const step of chain) {
+    // Um degrau é "modelo + credencial": duas chaves do mesmo modelo são dois
+    // degraus distintos, e é isso que permite esgotar a primeira e seguir
+    // para a segunda.
+    const stepKey = `${step.model.id}:${step.credentialId ?? "env"}`;
+    if (attempted.has(stepKey)) continue;
+    attempted.add(stepKey);
+
+    const apiKey = await resolveSecret(step.model.provider, step.credentialId);
+    const provider = createProvider(step.model, apiKey);
+
+    try {
+      const result = await provider.complete(messages, toolSchemas);
+      // Registrado no provider que RESPONDEU — é o que dá atribuição de uso
+      // confiável, e o que o painel usa para dizer quem está atendendo.
+      recordUsage(provider.provider, result.usage).catch(() => {});
+      if (step.credentialId) markCredentialOk(step.credentialId).catch(() => {});
+      return { llm: provider, result };
+    } catch (err) {
+      if (!isAiError(err)) throw err;
+      lastErr = err;
+
+      // Cota estourada põe a credencial de molho: sem isso, cada turno
+      // seguinte gastaria a latência do mesmo erro antes de cair para a
+      // próxima chave. Só para falha de cota/limite — chave inválida não
+      // melhora com o tempo, e o admin precisa ver o erro para corrigir.
+      if (step.credentialId && (err.code === "quota_exceeded" || err.code === "rate_limit")) {
+        const minutes = await getCooldownMinutes().catch(() => 5);
+        markCredentialCooldown(step.credentialId, minutes, err.code).catch(() => {});
       }
+
+      console.warn(
+        `[orchestrator] Fallback: ${step.model.provider} ${step.model.id}` +
+          `${step.credentialLabel ? ` (${step.credentialLabel})` : ""} indisponível (${err.code})`,
+      );
     }
-    throw lastErr;
   }
+
+  throw lastErr ?? new Error("Nenhum provedor de IA disponível na cadeia.");
 }
 
 /**

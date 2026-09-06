@@ -72,14 +72,9 @@ export function ActionsToggles({
 
   return (
     <div className="space-y-3">
-      {/* O que é uma "ação", em uma frase: sem isto os cinco toggles ficavam
-          sem contexto — dava para achar que eram ajustes de aparência. */}
-      <Alert tone="info">
-        Ações são o que o agente pode fazer <strong className="font-medium">além de responder</strong>:
-        marcar na sua agenda, sinalizar um lead quente, chamar você. Ele decide sozinho a hora
-        de usar cada uma que estiver ligada.
-      </Alert>
-
+      {/* A definição de "ação" está na bolinha do título do passo ("O que ele
+          pode fazer") — aqui era a segunda vez seguida, com mais palavras. O
+          Alert de limite atingido abaixo continua: aquele é acionável. */}
       <p className="font-mono text-micro uppercase tracking-[0.15em] text-white/60">
         {enabled.size}/{planLimit} ações ativas no seu plano
       </p>

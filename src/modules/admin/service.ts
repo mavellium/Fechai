@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import bcrypt from "bcryptjs";
-import type { PlanKey, UserRole } from "@prisma/client";
+import type { PlanKey, Prisma, UserRole } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { generateStrongPassword, BCRYPT_COST } from "@/lib/password";
 import { createTenantWithOwner } from "@/modules/tenants/provision";
@@ -11,11 +11,101 @@ import { deleteVoice } from "@/modules/voice/fish";
 // Funções cross-tenant do painel admin. Autorização (SUPERADMIN) é garantida
 // na rota (admin)/ via requireSuperadmin — nunca chamar fora dela.
 
-export async function listTenants(search?: string) {
+export type TenantFilters = {
+  search?: string;
+  /**
+   * Listas, não valores únicos: dentro do mesmo campo os valores são OU
+   * ("Free OU Starter"), e entre campos, E. Lista vazia = campo não filtra.
+   */
+  status?: string[];
+  plan?: PlanKey[];
+  /** "connected" | "pending_qr" | "disconnected" | "none" */
+  whatsapp?: string[];
+  /** "ativo" (em teste agora) | "expirado" (teste terminou) | "sem" */
+  trial?: string[];
+  /** "recentes" (padrão) | "antigas" | "nome" | "leads" | "conversas" */
+  sort?: string;
+  /** Quantas linhas trazer. Fora da lista aceita, cai no padrão. */
+  take?: number;
+};
+
+/**
+ * Tamanhos de página oferecidos no painel.
+ *
+ * Lista fechada de propósito: o número vem da URL, e um `take` livre deixaria
+ * qualquer visitante pedir `?limite=100000` — um SELECT que varre a tabela
+ * inteira por conta de um parâmetro digitado à mão.
+ */
+export const TENANT_PAGE_SIZES = [20, 50, 100, 200] as const;
+export const DEFAULT_TENANT_PAGE_SIZE = 100;
+
+/** Devolve um tamanho de página confiável a partir do que veio na URL. */
+export function normalizePageSize(raw: string | undefined): number {
+  const n = Number(raw);
+  return (TENANT_PAGE_SIZES as readonly number[]).includes(n)
+    ? n
+    : DEFAULT_TENANT_PAGE_SIZE;
+}
+
+/**
+ * Contas da plataforma, com os filtros do painel.
+ *
+ * Filtrar no banco, e não no cliente: a lista é cortada por `take` e um filtro
+ * aplicado depois do corte mentiria — mostraria "nenhuma suspensa" quando há
+ * uma na posição 300.
+ */
+export async function listTenants(filters: TenantFilters = {}) {
+  const { search, status, plan, whatsapp, trial, sort, take } = filters;
+  const now = new Date();
+
+  const where: Prisma.TenantWhereInput = {};
+  if (search) where.name = { contains: search, mode: "insensitive" };
+  if (status?.length) where.status = { in: status };
+  if (plan?.length) where.planKey = { in: plan };
+
+  if (whatsapp?.length) {
+    // "Nunca conectou" é ausência de linha, não um status — não cabe no mesmo
+    // `in` dos outros, daí o OR quando os dois tipos aparecem juntos.
+    const statuses = whatsapp.filter((w) => w !== "none");
+    const wantsNone = whatsapp.includes("none");
+    const clauses: Prisma.TenantWhereInput[] = [];
+    if (statuses.length) clauses.push({ whatsappInstance: { status: { in: statuses } } });
+    if (wantsNone) clauses.push({ whatsappInstance: { is: null } });
+    if (clauses.length === 1) Object.assign(where, clauses[0]);
+    else where.OR = clauses;
+  }
+
+  // "em teste" é ter data futura; "expirado" é ter data no passado. Conta sem
+  // data nunca esteve em teste — são três estados, não dois, e como eles se
+  // sobrepõem no mesmo campo, várias escolhas viram um OR.
+  if (trial?.length) {
+    const clauses: Prisma.TenantWhereInput[] = [];
+    if (trial.includes("ativo")) clauses.push({ trialEndsAt: { gt: now } });
+    if (trial.includes("expirado")) clauses.push({ trialEndsAt: { lt: now } });
+    if (trial.includes("sem")) clauses.push({ trialEndsAt: null });
+    // `AND` para não colidir com o `OR` do WhatsApp, que é outro campo: dois
+    // `OR` no mesmo objeto, um sobrescreveria o outro.
+    if (clauses.length === 1) Object.assign(where, clauses[0]);
+    else if (clauses.length > 1) where.AND = [{ OR: clauses }];
+  }
+
+  const orderBy: Prisma.TenantOrderByWithRelationInput =
+    sort === "antigas"
+      ? { createdAt: "asc" }
+      : sort === "nome"
+        ? { name: "asc" }
+        : sort === "leads"
+          ? { leads: { _count: "desc" } }
+          : sort === "conversas"
+            ? { conversations: { _count: "desc" } }
+            : { createdAt: "desc" };
+
   return prisma.tenant.findMany({
-    where: search ? { name: { contains: search, mode: "insensitive" } } : undefined,
-    orderBy: { createdAt: "desc" },
-    take: 200,
+    where,
+    orderBy,
+    take: (TENANT_PAGE_SIZES as readonly number[]).includes(take ?? NaN)
+      ? take
+      : DEFAULT_TENANT_PAGE_SIZE,
     include: {
       whatsappInstance: { select: { status: true } },
       users: { select: { id: true, email: true, role: true } },

@@ -1,7 +1,6 @@
 "use client";
 
 import { useActionState } from "react";
-import { Clock3 } from "lucide-react";
 import type { FollowUpConfig } from "@/modules/follow-up/config";
 import { FormFeedback } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -24,18 +23,11 @@ export function FollowUpSettings({ agentId, config }: { agentId: string; config:
     <form action={formAction} className="space-y-5 border-t border-white/10 pt-5">
       <input type="hidden" name="agentId" value={agentId} />
 
-      <div className="flex items-start gap-2 text-sm text-white/65">
-        <Clock3 size={16} aria-hidden className="mt-0.5 shrink-0 text-white/40" />
-        <p className="max-w-prose">
-          Se o lead ficar em silêncio por esse tempo depois da última mensagem do agente, ele manda
-          uma mensagem de reengajamento sozinho — só uma vez por conversa.
-        </p>
-      </div>
-
       <Field
         label="Reengajar depois de"
         htmlFor="followup-delay"
         hint="Em horas. Ex.: 24 = um dia inteiro de silêncio."
+        about="Passado esse tempo de silêncio desde a última mensagem do agente, ele manda uma mensagem de reengajamento sozinho — só uma vez por conversa."
       >
         <Input
           {...fieldProps("followup-delay", { hint: true })}

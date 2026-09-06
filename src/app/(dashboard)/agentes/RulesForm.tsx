@@ -2,7 +2,7 @@
 
 import { useId, useState, useTransition } from "react";
 import { Ban, Plus, X } from "lucide-react";
-import { Alert, FormFeedback } from "@/components/ui/alert";
+import { FormFeedback } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Field, fieldProps } from "@/components/ui/field";
@@ -51,12 +51,8 @@ export function RulesForm({ agentId, initial }: { agentId: string; initial: stri
 
   return (
     <div className="space-y-6">
-      <Alert tone="info">
-        Cada regra é um limite direto: algo que o agente nunca deve fazer, prometer ou dizer. Fatos
-        que mudam (preço, horário, cardápio) vão na{" "}
-        <strong className="font-medium">Base de conhecimento</strong>, não aqui.
-      </Alert>
-
+      {/* Sem Alert de abertura: o título do passo ("O que ele nunca faz") e a
+          bolinha ao lado dele já dão a mesma definição. */}
       <Field
         label="Nova regra"
         htmlFor={inputId}

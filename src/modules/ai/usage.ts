@@ -138,6 +138,9 @@ const NO_QUOTA_REASON: Record<ProviderKey, "not_supported" | "no_admin_key"> = {
   openai: "no_admin_key",
   grok: "no_admin_key",
   groq: "no_admin_key", // sobrescrito abaixo quando há snapshot de header
+  // Provedor cadastrado pelo admin: não há como saber a cota de um serviço
+  // arbitrário, e chutar seria pior que dizer que não sabemos.
+  custom: "no_admin_key",
 };
 
 /**
@@ -150,6 +153,8 @@ export const PROVIDER_ENV_KEY: Record<ProviderKey, string> = {
   openai: "OPENAI_API_KEY",
   grok: "XAI_API_KEY",
   groq: "GROQ_API_KEY",
+  // Provedor customizado não tem env var — a chave vem sempre do banco.
+  custom: "",
 };
 
 /** Uso dos 4 provedores, pra montar o painel de `/admin/ia`. */

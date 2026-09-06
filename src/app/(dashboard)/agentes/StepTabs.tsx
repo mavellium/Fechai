@@ -2,10 +2,13 @@
 
 import { useId, useState } from "react";
 import { cn } from "@/lib/utils";
+import { InfoHint } from "@/components/ui/info-hint";
 
 export type StepTab = {
   key: string;
   label: string;
+  /** Explicação do que se responde nesta seção — vira bolinha na aba ativa. */
+  hint?: string;
   content: React.ReactNode;
 };
 
@@ -31,23 +34,35 @@ export function StepTabs({ tabs }: { tabs: StepTab[] }) {
           const tabId = `${groupId}-tab-${t.key}`;
           const panelId = `${groupId}-panel-${t.key}`;
           return (
-            <button
-              key={t.key}
-              type="button"
-              role="tab"
-              id={tabId}
-              aria-selected={on}
-              aria-controls={panelId}
-              tabIndex={on ? 0 : -1}
-              onClick={() => setActive(i)}
-              className={cn(
-                "-mb-px rounded-t-control border-b-2 px-3 py-2 font-mono text-micro uppercase tracking-[0.15em] transition-colors",
-                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris",
-                on ? "border-iris text-white" : "border-transparent text-white/50 hover:text-white/80",
+            // `contents`: o span some da caixa de layout, então o tablist
+            // continua tendo os `role="tab"` como filhos diretos (a relação
+            // ARIA quebra se houver um elemento renderizado no meio).
+            <span key={t.key} role="presentation" className="contents">
+              <button
+                type="button"
+                role="tab"
+                id={tabId}
+                aria-selected={on}
+                aria-controls={panelId}
+                tabIndex={on ? 0 : -1}
+                onClick={() => setActive(i)}
+                className={cn(
+                  "-mb-px rounded-t-control border-b-2 px-3 py-2 font-mono text-micro uppercase tracking-[0.15em] transition-colors",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris",
+                  on ? "border-iris text-white" : "border-transparent text-white/50 hover:text-white/80",
+                )}
+              >
+                {t.label}
+              </button>
+              {/* Só na aba aberta: uma fileira de bolinhas viraria o ruído que
+                  esta mudança veio tirar. Fora do <button> de propósito —
+                  botão dentro de botão é HTML inválido. */}
+              {on && t.hint && (
+                <InfoHint label={t.label} className="-ml-1 self-center">
+                  {t.hint}
+                </InfoHint>
               )}
-            >
-              {t.label}
-            </button>
+            </span>
           );
         })}
       </div>

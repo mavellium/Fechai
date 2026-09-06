@@ -56,7 +56,7 @@ export default async function AgentePage({ params }: { params: Promise<{ id: str
   };
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="mx-auto w-full max-w-6xl space-y-6">
       <Link
         href="/agentes"
         className="inline-flex items-center gap-1.5 rounded-sm font-mono text-micro uppercase tracking-[0.15em] text-white/55 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris focus-visible:ring-offset-2 focus-visible:ring-offset-ink"

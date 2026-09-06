@@ -6,12 +6,12 @@ import { OpenAICompatProvider } from "./openai";
  * apontamos o baseURL e a env var da chave.
  */
 export class GrokProvider extends OpenAICompatProvider {
-  constructor(model: string) {
+  constructor(model: string, apiKeyOverride?: string) {
     super(model, {
       provider: "grok",
       envKey: "XAI_API_KEY",
       baseURL: "https://api.x.ai/v1",
       displayName: "xAI",
-    });
+    }, apiKeyOverride);
   }
 }

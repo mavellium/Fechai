@@ -1,17 +1,28 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
+import { InfoHint } from "./info-hint";
 
 /** Número grande de relatório. Mesma casca do `Card`, sem título de seção. */
 export function Stat({
   label,
   value,
   hint,
+  about,
   delta,
   compact,
 }: {
   label: string;
   value: string;
+  /**
+   * Qualificador curto do número, sob o valor ("agora", "no total"). Duas ou
+   * três palavras — é parte da leitura do dado, não explicação.
+   */
   hint?: string;
+  /**
+   * Explicação de o que o número mede. Vai para a bolinha de dúvida ao lado do
+   * rótulo: quem já sabe não precisa reler a cada visita.
+   */
+  about?: React.ReactNode;
   /**
    * Variação contra o período anterior. Um número sozinho ("34 conversas") não
    * diz se a semana foi boa; comparado, diz. Seta **e** texto — cor nunca é o
@@ -28,8 +39,9 @@ export function Stat({
         compact ? "p-4" : "p-6",
       )}
     >
-      <p className="font-mono text-micro uppercase tracking-[0.2em] text-neutral panel:text-white/55">
+      <p className="flex items-center gap-1.5 font-mono text-micro uppercase tracking-[0.2em] text-neutral panel:text-white/55">
         {label}
+        {about && <InfoHint label={label}>{about}</InfoHint>}
       </p>
       {/* tabular-nums: os números não "pulam" de largura quando o valor muda */}
       <p

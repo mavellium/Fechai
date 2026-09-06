@@ -380,8 +380,12 @@ export function ChartPanel({
 
   return (
     <Card>
+      {/*
+        Sem `hint` no título de propósito: o gráfico já tem o botão ⓘ ao lado,
+        e duas fontes de explicação no mesmo canto competem entre si. O resumo
+        (`hint`) virou a primeira linha do painel do ⓘ, acima do detalhe.
+      */}
       <CardTitle
-        hint={hint}
         action={
           <ChartActions
             label={title}

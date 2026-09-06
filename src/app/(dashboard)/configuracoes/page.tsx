@@ -178,7 +178,7 @@ export default async function ConfiguracoesPage() {
   const pending = checks ? checks.filter((c) => !c.ok).length : 0;
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-6">
+    <div className="mx-auto w-full max-w-[1600px] space-y-6">
       <PageHeader
         eyebrow="configurações"
         title="Configurações"
@@ -196,7 +196,7 @@ export default async function ConfiguracoesPage() {
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
           <Card>
-            <CardTitle hint="Nome e e-mail usados na sua conta.">Perfil</CardTitle>
+            <CardTitle>Perfil</CardTitle>
             <ProfileForm name={user.name ?? ""} email={user.email} />
           </Card>
 
@@ -206,7 +206,7 @@ export default async function ConfiguracoesPage() {
           </Card>
 
           <Card>
-            <CardTitle hint="Define o que aparece no menu. Você pode marcar as duas.">
+            <CardTitle hintInline hint="Define o que aparece no menu. Você pode marcar as duas.">
               Como você usa o fechai
             </CardTitle>
             <RolesForm usesProduct={roles.usesProduct} isAffiliate={roles.isAffiliate} />
@@ -235,7 +235,7 @@ export default async function ConfiguracoesPage() {
           )}
 
           <Card>
-            <CardTitle hint="Sua opinião ajuda a melhorar o produto.">Enviar feedback</CardTitle>
+            <CardTitle>Enviar feedback</CardTitle>
             <FeedbackForm />
           </Card>
         </div>

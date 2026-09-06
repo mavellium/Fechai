@@ -40,7 +40,7 @@ export interface LLMProvider {
   complete(messages: LlmMessage[], tools: LlmToolSchema[]): Promise<LlmResult>;
 }
 
-export type ProviderKey = "gemini" | "openai" | "grok" | "groq";
+export type ProviderKey = "gemini" | "openai" | "grok" | "groq" | "custom";
 
 /* ------------------------------------------------------------------ *
  * Erros — o orquestrador distingue "acabou a cota" de "deu ruim".

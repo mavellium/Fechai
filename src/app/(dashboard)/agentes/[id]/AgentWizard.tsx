@@ -8,6 +8,7 @@ import type { ScheduleConfig } from "@/modules/scheduling/config";
 import type { FollowUpConfig } from "@/modules/follow-up/config";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { InfoHint } from "@/components/ui/info-hint";
 import { Sandbox } from "@/app/(dashboard)/conversas/Sandbox";
 import { PersonaForm } from "../PersonaForm";
 import { RulesForm } from "../RulesForm";
@@ -31,14 +32,14 @@ const STEPS = [
     label: "Personalidade",
     icon: MessageSquareText,
     title: "Quem é o seu agente",
-    help: "Responda como se estivesse treinando um funcionário novo: o nome, o tom de voz e o que ele deve oferecer.",
+    help: "Responda como se estivesse treinando um funcionário novo: o nome, o tom de voz e o que ele deve oferecer. Vira a instrução que ele recebe em toda conversa — fatos que mudam (preço, horário, cardápio) vão na Base de conhecimento, no passo Cérebro.",
   },
   {
     key: "regras",
     label: "Regras",
     icon: Ban,
     title: "O que ele nunca faz",
-    help: "Limites diretos: algo que o agente nunca deve fazer, prometer ou dizer. Opcional, mas evita surpresa.",
+    help: "Limites diretos: algo que o agente nunca deve fazer, prometer ou dizer. Opcional, mas evita surpresa. Fatos que mudam (preço, horário, cardápio) vão na Base de conhecimento, não aqui.",
   },
   {
     key: "cerebro",
@@ -52,14 +53,14 @@ const STEPS = [
     label: "Habilidades",
     icon: Sparkles,
     title: "O que ele pode fazer",
-    help: "Além de responder, o agente pode marcar horário na sua agenda, avisar quando um contato está quente e chamar você. Ligue só o que você quer que ele faça sozinho.",
+    help: "Além de responder, o agente pode marcar horário na sua agenda, avisar quando um contato está quente e chamar você. Ligue só o que você quer que ele faça sozinho — ele decide a hora de usar cada ação que estiver ligada.",
   },
   {
     key: "comportamento",
     label: "Comportamento",
     icon: Mic,
     title: "Como ele conversa",
-    help: "Como ele se comporta na conversa: ouvir mensagens de voz, responder falando na sua voz e encerrar quando a pessoa manda só um emoji.",
+    help: "Como ele se comporta na conversa: ouvir mensagens de voz, responder falando na sua voz e encerrar quando a pessoa manda só um emoji. Ouvir e encerrar vêm ligados; responder com áudio você liga depois de escolher uma voz.",
   },
   {
     key: "testar",
@@ -187,8 +188,13 @@ export function AgentWizard({
             <current.icon size={18} />
           </span>
           <div>
-            <h2 className="font-display text-xl font-bold text-white">{current.title}</h2>
-            <p className="mt-1 max-w-prose text-sm text-white/65">{current.help}</p>
+            {/* O `help` do passo virou bolinha: ele repetia, em outras palavras,
+                o que o Alert azul de cada formulário já dizia. Um título e uma
+                explicação sob demanda bastam para abrir o passo. */}
+            <h2 className="font-display flex items-center gap-1.5 text-xl font-bold text-white">
+              {current.title}
+              <InfoHint label={current.title}>{current.help}</InfoHint>
+            </h2>
           </div>
         </div>
 

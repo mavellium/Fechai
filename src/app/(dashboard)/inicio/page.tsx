@@ -168,7 +168,7 @@ export default async function InicioPage({
   const periodLabel = days === 30 ? "nos últimos 30 dias" : "nos últimos 7 dias";
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-6">
+    <div className="mx-auto w-full max-w-[1600px] space-y-6">
       {checkoutAlert}
 
       <PageHeader
@@ -268,7 +268,10 @@ export default async function InicioPage({
 
         <div className="space-y-6">
           <Card>
+            {/* Visível de propósito: este texto muda com o estado (tem ou não
+                conversa parada) — é status do card, não descrição fixa. */}
             <CardTitle
+              hintInline
               hint={
                 needsHuman.length === 0
                   ? "Nada parado esperando por você."
