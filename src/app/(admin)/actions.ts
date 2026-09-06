@@ -31,13 +31,38 @@ import {
 import { addCredential, clearCooldown, deleteCredential } from "@/modules/ai/credentials";
 import { saveChain } from "@/modules/ai/chain";
 import { isEncryptionConfigured } from "@/lib/crypto";
+import { recordAudit, recordChange } from "@/modules/audit/log";
+import { revertAuditLog } from "@/modules/audit/revert";
+import { requestContext } from "@/modules/auth/attempts";
+import { blockIp, unblockIp, ipActivity } from "@/modules/auth/ip-block";
 
 import { recordUsage } from "@/modules/ai/usage";
 
 export async function suspendTenant(tenantId: string, suspend: boolean) {
   await requireSuperadmin();
-  await setTenantStatus(tenantId, suspend ? "suspended" : "active");
+
+  // Lê antes de escrever: o log guarda o estado anterior, e é ele que o botão
+  // "desfazer" da trilha regrava. Sem esta leitura o evento saberia dizer o
+  // que aconteceu, mas não teria como voltar atrás.
+  const before = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { name: true, status: true },
+  });
+  if (!before) return;
+
+  const status = suspend ? "suspended" : "active";
+  await setTenantStatus(tenantId, status);
+
+  await recordChange({
+    event: suspend ? "admin.tenant_suspended" : "admin.tenant_reactivated",
+    target: { type: "Tenant", id: tenantId, label: before.name },
+    before: { status: before.status },
+    after: { status },
+    tenantId,
+  });
+
   revalidatePath("/admin/contas");
+  revalidatePath("/admin/logs");
 }
 
 export type DeleteTenantResult = { ok: boolean; error?: string };
@@ -51,6 +76,14 @@ export type DeleteTenantResult = { ok: boolean; error?: string };
  * parecidos e a linha de cima já é destrutiva. Quem confirma a exclusão já viu
  * a conta parada e sabe qual é.
  *
+ * **Conta de admin também pode ser excluída**, desde que suspensa e desde que
+ * não seja a última. Antes eram todas recusadas em bloco, o que resolvia o
+ * risco real (trancar todo mundo para fora do /admin) do jeito mais grosso
+ * possível: um admin desligado ficava para sempre na lista, suspenso e
+ * inapagável, e limpá-lo exigia ir ao banco à mão — justamente a saída que
+ * não deixa rastro nenhum. A checagem certa não é "é admin?", é "sobra algum
+ * admin depois?", e é essa que ficou.
+ *
  * As checagens moram aqui, no servidor, e não só no botão: esconder a ação da
  * tela não é autorização, e a action é chamável direto.
  */
@@ -59,7 +92,15 @@ export async function deleteTenantAccount(tenantId: string): Promise<DeleteTenan
 
   const tenant = await prisma.tenant.findUnique({
     where: { id: tenantId },
-    select: { status: true, users: { select: { role: true } } },
+    select: {
+      id: true,
+      name: true,
+      status: true,
+      planKey: true,
+      createdAt: true,
+      users: { select: { id: true, email: true, role: true } },
+      _count: { select: { users: true, leads: true, conversations: true } },
+    },
   });
   if (!tenant) return { ok: false, error: "Conta não encontrada." };
 
@@ -67,31 +108,102 @@ export async function deleteTenantAccount(tenantId: string): Promise<DeleteTenan
   if (tenantId === session.user.tenantId) {
     return { ok: false, error: "Não é possível excluir a sua própria conta." };
   }
-  // Conta de plataforma. Apagar a última SUPERADMIN tranca todo mundo para fora
-  // do /admin, sem caminho de volta pela interface.
-  if (tenant.users.some((u) => u.role === "SUPERADMIN")) {
-    return { ok: false, error: "Contas de admin não podem ser excluídas pelo painel." };
-  }
   if (tenant.status !== "suspended") {
     return { ok: false, error: "Suspenda a conta antes de excluí-la." };
   }
 
+  const admins = tenant.users.filter((u) => u.role === "SUPERADMIN");
+  if (admins.length > 0) {
+    // Sobrar zero admin tranca todo mundo para fora do /admin, sem caminho de
+    // volta pela interface — só rodando `npm run db:admin` no servidor. A
+    // contagem é feita agora, não confiada à tela: entre carregar a lista e
+    // clicar em excluir, outro admin pode ter sido removido.
+    const remaining = await prisma.user.count({
+      where: { role: "SUPERADMIN", tenantId: { not: tenantId } },
+    });
+    if (remaining === 0) {
+      return {
+        ok: false,
+        error: "Esta é a última conta de admin — excluí-la deixaria a plataforma sem acesso.",
+      };
+    }
+  }
+
+  // O log da exclusão é gravado ANTES do delete, com a conta ainda em mãos: é
+  // a última chance de ler quem ela era. `tenantId` na linha vira null pelo
+  // `SetNull` do schema, mas `tenantName` e o snapshot permanecem — o evento
+  // mais grave da trilha não pode sumir junto com o que ele registra.
+  await recordAudit({
+    event: "admin.tenant_deleted",
+    target: { type: "Tenant", id: tenantId, label: tenant.name },
+    before: {
+      name: tenant.name,
+      planKey: tenant.planKey,
+      status: tenant.status,
+      createdAt: tenant.createdAt,
+      usuarios: tenant.users.map((u) => ({ email: u.email, role: u.role })),
+    },
+    after: null,
+    meta: {
+      eraContaAdmin: admins.length > 0,
+      usuarios: tenant._count.users,
+      leads: tenant._count.leads,
+      conversas: tenant._count.conversations,
+    },
+    tenantId,
+  });
+
   await deleteTenant(tenantId);
   revalidatePath("/admin/contas");
+  revalidatePath("/admin/logs");
   return { ok: true };
 }
 
 export async function changePlan(tenantId: string, planKey: PlanKey) {
   await requireSuperadmin();
+
+  const before = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { name: true, planKey: true },
+  });
+  if (!before) return;
+
   await adminSetPlan(tenantId, planKey);
+
+  await recordChange({
+    event: "admin.plan_changed",
+    target: { type: "Tenant", id: tenantId, label: before.name },
+    before: { planKey: before.planKey },
+    after: { planKey },
+    tenantId,
+  });
+
   revalidatePath("/admin/contas");
+  revalidatePath("/admin/logs");
 }
 
 /** Altera a cota de mensagens/mês da conta (null = volta ao padrão do plano). */
 export async function setTenantUsageLimit(tenantId: string, limit: number | null) {
   await requireSuperadmin();
+
+  const before = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { name: true, messageLimitOverride: true },
+  });
+  if (!before) return;
+
   await adminSetUsageLimit(tenantId, limit);
+
+  await recordChange({
+    event: "admin.usage_limit_changed",
+    target: { type: "Tenant", id: tenantId, label: before.name },
+    before: { messageLimitOverride: before.messageLimitOverride },
+    after: { messageLimitOverride: limit },
+    tenantId,
+  });
+
   revalidatePath("/admin/contas");
+  revalidatePath("/admin/logs");
 }
 
 /**
@@ -100,14 +212,47 @@ export async function setTenantUsageLimit(tenantId: string, limit: number | null
  */
 export async function setTenantTrial(tenantId: string, days: number | null) {
   await requireSuperadmin();
+
+  const before = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { name: true, trialEndsAt: true },
+  });
+  if (!before) return;
+
   const endsAt = days == null ? null : new Date(Date.now() + days * 24 * 60 * 60 * 1000);
   await adminSetTrialEndsAt(tenantId, endsAt);
+
+  await recordChange({
+    event: "admin.trial_changed",
+    target: { type: "Tenant", id: tenantId, label: before.name },
+    before: { trialEndsAt: before.trialEndsAt },
+    after: { trialEndsAt: endsAt },
+    meta: { dias: days },
+    tenantId,
+  });
+
   revalidatePath("/admin/contas");
+  revalidatePath("/admin/logs");
 }
 
 export async function markFeedback(feedbackId: string, status: FeedbackStatus) {
   await requireSuperadmin();
+
+  const before = await prisma.feedback.findUnique({
+    where: { id: feedbackId },
+    select: { status: true, tenantId: true, tenant: { select: { name: true } } },
+  });
+
   await setFeedbackStatus(feedbackId, status);
+
+  await recordChange({
+    event: "admin.feedback_status",
+    target: { type: "Feedback", id: feedbackId, label: before?.tenant.name ?? null },
+    before: { status: before?.status },
+    after: { status },
+    tenantId: before?.tenantId ?? null,
+  });
+
   revalidatePath("/admin/feedbacks");
 }
 
@@ -147,15 +292,52 @@ export async function createAccount(
   const result = await adminCreateAccount(parsed.data);
   if (!result.ok) return { ok: false, error: result.error };
 
+  // A senha provisória fica FORA do log, mesmo tendo sido gerada aqui: o
+  // redator já a removeria, e registrar que ela existiu é o suficiente para a
+  // trilha. Criar uma conta com papel de admin é o que realmente interessa.
+  const created = await prisma.tenant.findFirst({
+    where: { users: { some: { email: parsed.data.email } } },
+    select: { id: true, name: true },
+    orderBy: { createdAt: "desc" },
+  });
+
+  await recordAudit({
+    event: "admin.account_created",
+    target: { type: "Tenant", id: created?.id ?? parsed.data.email, label: parsed.data.tenantName },
+    after: {
+      tenantName: parsed.data.tenantName,
+      email: parsed.data.email,
+      role: parsed.data.role,
+      planKey: parsed.data.planKey,
+    },
+    meta: { senhaGerada: Boolean(result.tempPassword) },
+    tenantId: created?.id ?? null,
+  });
+
   revalidatePath("/admin/contas");
+  revalidatePath("/admin/logs");
   return { ok: true, email: parsed.data.email, tempPassword: result.tempPassword };
 }
 
 /** Troca o modelo de IA da plataforma. Vale para o próximo turno do agente. */
 export async function changeAiModel(modelId: string) {
   const session = await requireSuperadmin();
+  const previous = await getActiveModelId().catch(() => null);
+
   await setActiveModelId(modelId, session.user.email ?? undefined);
+
+  await recordChange({
+    event: "admin.ai_model_changed",
+    target: { type: "AiSetting", id: "platform", label: modelId },
+    before: { modelId: previous },
+    after: { modelId },
+    // Configuração da plataforma, não de uma conta: sem tenant, senão o
+    // evento apareceria como se pertencesse à conta do admin.
+    tenantId: null,
+  });
+
   revalidatePath("/admin/ia");
+  revalidatePath("/admin/logs");
 }
 
 /**
@@ -327,19 +509,49 @@ export async function addAiCredential(
     return { ok: false, error: err instanceof Error ? err.message : "Não foi possível salvar." };
   }
 
+  // `secret` fica de fora do snapshot de propósito, e não por acaso: o redator
+  // o removeria de qualquer jeito, mas nem chega a ser passado. O que a trilha
+  // precisa é saber que uma chave daquele provedor entrou, e por quem.
+  await recordAudit({
+    event: "admin.ai_credential_added",
+    target: { type: "AiCredential", id: parsed.data.label || parsed.data.provider, label: parsed.data.label },
+    after: {
+      provider: parsed.data.provider,
+      label: parsed.data.label,
+      modelId: parsed.data.modelId,
+      baseUrl: parsed.data.baseUrl,
+    },
+    tenantId: null,
+  });
+
   revalidatePath("/admin/ia");
+  revalidatePath("/admin/logs");
   return { ok: true };
 }
 
 export async function removeAiCredential(id: string): Promise<SaveResult> {
   await requireSuperadmin();
+
+  const credential = await prisma.aiCredential
+    .findUnique({ where: { id }, select: { label: true, provider: true } })
+    .catch(() => null);
+
   try {
     await deleteCredential(id);
   } catch {
     return { ok: false, error: "Não foi possível remover a chave." };
   }
+
+  await recordAudit({
+    event: "admin.ai_credential_removed",
+    target: { type: "AiCredential", id, label: credential?.label ?? null },
+    before: { provider: credential?.provider, label: credential?.label },
+    tenantId: null,
+  });
+
   invalidateChainCache();
   revalidatePath("/admin/ia");
+  revalidatePath("/admin/logs");
   return { ok: true };
 }
 
@@ -419,6 +631,16 @@ export async function impersonateUser(userId: string): Promise<ImpersonateResult
     return { ok: false, error: "Conta suspensa — reative-a antes de personificar." };
   }
 
+  // Registrado ANTES de o cookie existir: com a personificação já ativa,
+  // `resolveActor` marcaria o evento como feito dentro da conta do cliente, e
+  // o log de "entrei como fulano" apareceria como se fosse do próprio fulano.
+  await recordAudit({
+    event: "admin.impersonated",
+    target: { type: "User", id: user.id, label: user.email },
+    meta: { email: user.email },
+    tenantId: user.tenantId,
+  });
+
   await setImpersonation({
     userId: user.id,
     email: user.email,
@@ -432,7 +654,155 @@ export async function impersonateUser(userId: string): Promise<ImpersonateResult
 /** Encerra a personificação e volta ao painel do admin. */
 export async function stopImpersonation() {
   await requireSuperadmin();
+
+  await recordAudit({
+    event: "admin.impersonation_ended",
+    meta: { encerradoEm: new Date().toISOString() },
+  });
+
   await clearImpersonation();
   revalidatePath("/admin/contas");
   redirect("/admin/contas");
+}
+
+/* ------------------------------------------------------------------ *
+ * Trilha de auditoria.
+ * ------------------------------------------------------------------ */
+
+export type RevertResultAction = { ok: boolean; error?: string; info?: string };
+
+/**
+ * Desfaz um evento da trilha (`/admin/logs`).
+ *
+ * A regra de quem pode e o que aceita undo mora em `modules/audit/revert.ts`,
+ * não aqui: esta action só garante o papel e revalida as telas. Reverter é uma
+ * escrita no banco a partir de um snapshot, e as checagens que a tornam segura
+ * (whitelist de modelo e campo, evento já revertido, alvo inexistente) são as
+ * mesmas quer venham da tela, quer venham de uma chamada direta.
+ */
+export async function revertAuditEvent(logId: string): Promise<RevertResultAction> {
+  const session = await requireSuperadmin();
+
+  const result = await revertAuditLog(logId, {
+    id: session.user.id,
+    email: session.user.email ?? null,
+  });
+
+  if (!result.ok) return { ok: false, error: result.error };
+
+  // A reversão pode ter mexido em qualquer tela do produto — plano, agente,
+  // documento, contato. Revalidar só /admin/logs deixaria o admin olhando um
+  // painel de contas que ainda mostra o valor antigo.
+  revalidatePath("/admin/logs");
+  revalidatePath("/admin/contas");
+  revalidatePath("/inicio");
+  revalidatePath("/agentes");
+  return { ok: true, info: result.info };
+}
+
+/* ------------------------------------------------------------------ *
+ * Bloqueio de IP.
+ * ------------------------------------------------------------------ */
+
+export type IpBlockResult = { ok: boolean; error?: string; info?: string };
+
+const blockIpSchema = z.object({
+  // Sem validar formato de IP: o valor não é digitado, vem do próprio log, e
+  // uma regex de IPv4 recusaria os IPv6 que o `x-forwarded-for` entrega de
+  // verdade. O que importa é não ser vazio nem gigante.
+  ip: z.string().trim().min(3, "IP inválido").max(64, "IP inválido"),
+  reason: z
+    .string()
+    .trim()
+    .min(3, "Diga por que está bloqueando")
+    .max(280, "Motivo muito longo"),
+  duration: z.string().trim().default("permanente"),
+});
+
+/**
+ * Bloqueia um IP do login.
+ *
+ * O motivo é obrigatório de propósito: um bloqueio sem motivo é impossível de
+ * revisar depois — quem encontra a linha meses adiante não tem como decidir se
+ * ela ainda faz sentido, e acaba mantendo por medo ou removendo às cegas.
+ */
+export async function blockIpAddress(formData: FormData): Promise<IpBlockResult> {
+  const tooLarge = payloadTooLarge(formData);
+  if (tooLarge) return { ok: false, error: tooLarge };
+
+  const session = await requireSuperadmin();
+
+  const parsed = blockIpSchema.safeParse({
+    ip: formData.get("ip"),
+    reason: formData.get("reason"),
+    duration: formData.get("duration") ?? "permanente",
+  });
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Dados inválidos" };
+  }
+
+  const { ip, reason, duration } = parsed.data;
+
+  // O IP de quem está bloqueando. Trancar a si mesmo para fora do painel é um
+  // erro sem caminho de volta pela interface: o próximo login já viria barrado,
+  // e desbloquear exige justamente estar logado.
+  const context = await requestContext();
+  if (context.ip === ip) {
+    return { ok: false, error: "Este é o seu próprio IP — você ficaria sem acesso ao painel." };
+  }
+
+  const activity = await ipActivity(ip);
+  const block = await blockIp({
+    ip,
+    reason,
+    duration,
+    actor: { id: session.user.id, email: session.user.email ?? null },
+    lastEmail: activity.lastEmail,
+    attempts: activity.total,
+  });
+
+  await recordAudit({
+    event: "admin.ip_blocked",
+    target: { type: "BlockedIp", id: ip, label: ip },
+    after: {
+      ip,
+      reason,
+      expiresAt: block.expiresAt,
+    },
+    meta: {
+      tentativas: activity.total,
+      falhas: activity.failures,
+      contasTentadas: activity.distinctEmails,
+      ultimoEmail: activity.lastEmail,
+    },
+    // Bloqueio é da plataforma, não de uma conta: sem tenant, senão o evento
+    // apareceria como se pertencesse à conta do admin que bloqueou.
+    tenantId: null,
+  });
+
+  revalidatePath("/admin/logs");
+  return {
+    ok: true,
+    info: block.expiresAt
+      ? `IP bloqueado até ${block.expiresAt.toLocaleString("pt-BR")}.`
+      : "IP bloqueado até você desbloquear.",
+  };
+}
+
+/** Solta o IP. O evento fica na trilha — desbloquear não apaga o histórico. */
+export async function unblockIpAddress(ip: string): Promise<IpBlockResult> {
+  await requireSuperadmin();
+
+  const removed = await unblockIp(ip);
+  if (!removed) return { ok: false, error: "Este IP não está bloqueado." };
+
+  await recordAudit({
+    event: "admin.ip_unblocked",
+    target: { type: "BlockedIp", id: ip, label: ip },
+    before: { ip, reason: removed.reason },
+    tenantId: null,
+  });
+
+  revalidatePath("/admin/logs");
+  return { ok: true, info: "IP desbloqueado — o acesso volta a funcionar." };
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState, useTransition } from "react";
-import { Eye, Settings2, Trash2 } from "lucide-react";
+import { Eye, Settings2, ShieldAlert, Trash2 } from "lucide-react";
 import type { PlanKey } from "@prisma/client";
 import { PLANS, planOf } from "@/modules/billing/plans";
 import { Badge } from "@/components/ui/badge";
@@ -300,9 +300,10 @@ export function TenantRow(t: Props) {
                   {suspended ? "Reativar" : "Suspender"}
                 </ConfirmButton>
 
-                {/* Só depois de suspensa — e nunca para conta de admin. A action
-                    revalida as duas coisas no servidor; isto é só a tela. */}
-                {suspended && !t.isAdminAccount && (
+                {/* Só depois de suspensa — conta de admin inclusive. A action
+                    revalida no servidor (e recusa se for a última conta de
+                    admin da plataforma); isto é só a tela. */}
+                {suspended && (
                   <Button
                     size="sm"
                     variant="destructive"
@@ -515,6 +516,23 @@ export function TenantRow(t: Props) {
           <h2 id={`${t.id}-excluir-titulo`} className="font-display text-lg font-semibold">
             Excluir {t.name} definitivamente?
           </h2>
+
+          {/* Conta de admin é outra conversa: quem apaga uma conta de cliente
+              perde os dados de um cliente; quem apaga uma de admin tira o
+              acesso ao painel de outra pessoa da equipe. O aviso é separado
+              porque o parágrafo abaixo (leads, conversas) não descreve o que
+              realmente está em jogo aqui. */}
+          {t.isAdminAccount && (
+            <p className="mt-3 flex gap-2 rounded-surface border border-warn/30 bg-warn/10 px-3 py-2 text-sm leading-relaxed text-white/80">
+              <ShieldAlert size={16} aria-hidden className="mt-0.5 shrink-0 text-warn" />
+              <span>
+                Esta é uma <strong className="text-white">conta de admin</strong>. Excluí-la remove
+                o acesso dessa pessoa ao painel da plataforma. Se for a última conta de admin, a
+                exclusão é recusada — ninguém ficaria com acesso ao /admin.
+              </span>
+            </p>
+          )}
+
           <p className="mt-2 text-sm leading-relaxed text-white/65">
             Apaga a conta e tudo que pertence a ela: {t.counts.users} usuário
             {t.counts.users === 1 ? "" : "s"}, {t.counts.leads} lead

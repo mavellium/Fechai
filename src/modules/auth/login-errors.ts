@@ -9,6 +9,13 @@
  * presa na tela de login.
  */
 const MESSAGES: Record<string, string> = {
+  // Bloqueio do admin. A mensagem NÃO diz "tente mais tarde" como a do freio
+  // automático: esperar não resolve, e mandar a pessoa esperar por algo que
+  // não passa sozinho é a pior saída possível. Também não explica o motivo —
+  // quem foi bloqueado por atacar não precisa de um relatório do que
+  // detectamos, e quem foi bloqueado por engano resolve falando com o suporte.
+  ip_blocked:
+    "Este acesso está bloqueado. Se você acha que é um engano, fale com o suporte.",
   google_no_account:
     "Nenhuma conta do fechai usa esse e-mail do Google. Crie sua conta primeiro — leva menos de um minuto.",
   google_unverified:

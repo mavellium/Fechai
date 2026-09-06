@@ -3,6 +3,7 @@
 import { signIn } from "@/auth";
 import { formatRetryAfter, peekLoginBlock } from "@/lib/login-throttle";
 import { requestContext } from "@/modules/auth/attempts";
+import { isIpBlocked } from "@/modules/auth/ip-block";
 
 /**
  * Manda para o consentimento do Google. É Server Action (e não `signIn` do
@@ -35,6 +36,18 @@ export async function loginBlockStatus(email: string): Promise<LoginBlockStatus>
   if (!email.includes("@")) return { blocked: false, message: null };
 
   const { ip } = await requestContext();
+
+  // O bloqueio do admin é checado primeiro e responde diferente: ele não passa
+  // com o tempo. Mostrar "espere 5 minutos" a quem está bloqueado de verdade
+  // manda a pessoa esperar por algo que nunca vai acontecer — e faz o suporte
+  // receber a ligação cinco minutos depois em vez de agora.
+  if (await isIpBlocked(ip)) {
+    return {
+      blocked: true,
+      message: "Este acesso está bloqueado. Se você acha que é um engano, fale com o suporte.",
+    };
+  }
+
   const block = await peekLoginBlock(email, ip);
 
   if (block.blocked) {

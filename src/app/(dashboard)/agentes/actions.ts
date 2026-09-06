@@ -29,6 +29,7 @@ import {
   synthesize,
 } from "@/modules/voice/fish";
 import { SAMPLE_TEXT, findCatalogVoice } from "@/modules/voice/catalog";
+import { recordAudit, recordChange, recordDeletion } from "@/modules/audit/log";
 
 export type Result = { ok: boolean; error?: string; info?: string };
 
@@ -74,6 +75,13 @@ export async function createAgentAction(_prev: Result | null, formData: FormData
   }
 
   const agent = await createAgent(tenantId, parsed.data);
+
+  await recordAudit({
+    event: "agent.created",
+    target: { type: "Agent", id: agent.id, label: agent.name },
+    after: { name: agent.name },
+  });
+
   revalidatePath("/agentes");
   redirect(`/agentes/${agent.id}`);
 }
@@ -86,6 +94,14 @@ export async function renameAgent(agentId: string, name: string): Promise<Result
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message };
 
   await prisma.agent.update({ where: { id: agent.id }, data: { name: parsed.data } });
+
+  await recordChange({
+    event: "agent.updated",
+    target: { type: "Agent", id: agent.id, label: agent.name },
+    before: { name: agent.name },
+    after: { name: parsed.data },
+  });
+
   revalidateAgent(agent.id);
   return { ok: true, info: "Nome atualizado." };
 }
@@ -103,6 +119,14 @@ export async function setPrimaryAgent(agentId: string): Promise<Result> {
     prisma.agent.updateMany({ where: { tenantId }, data: { isPrimary: false } }),
     prisma.agent.update({ where: { id: agent.id }, data: { isPrimary: true } }),
   ]);
+
+  await recordChange({
+    event: "agent.updated",
+    target: { type: "Agent", id: agent.id, label: agent.name },
+    before: { isPrimary: agent.isPrimary },
+    after: { isPrimary: true },
+  });
+
   revalidateAgent(agent.id);
   return { ok: true, info: `${agent.name} agora atende o WhatsApp.` };
 }
@@ -118,6 +142,14 @@ export async function setAgentEnabled(agentId: string, enabled: boolean): Promis
   if (!agent) return { ok: false, error: "Agente não encontrado" };
 
   await prisma.agent.update({ where: { id: agent.id }, data: { enabled } });
+
+  await recordChange({
+    event: "agent.updated",
+    target: { type: "Agent", id: agent.id, label: agent.name },
+    before: { enabled: agent.enabled },
+    after: { enabled },
+  });
+
   revalidateAgent(agent.id);
   revalidatePath("/conversas");
   return {
@@ -167,6 +199,14 @@ export async function setAgentBehavior(
   }
 
   await prisma.agent.update({ where: { id: agent.id }, data: { [field]: enabled } });
+
+  await recordChange({
+    event: "agent.behavior_updated",
+    target: { type: "Agent", id: agent.id, label: agent.name },
+    before: { [field]: agent[field] },
+    after: { [field]: enabled },
+  });
+
   revalidateAgent(agent.id);
   return { ok: true, info: "Comportamento atualizado." };
 }
@@ -397,6 +437,29 @@ export async function deleteAgent(agentId: string): Promise<Result> {
     return { ok: false, error: "Sua conta precisa de pelo menos um agente." };
   }
 
+  // Snapshot ANTES do delete: depois não há mais o que ler, e é este JSON que
+  // o admin usa para restaurar o agente com o mesmo id em /admin/logs. O que
+  // não volta junto são os filhos apagados em cascade (documentos, ações) —
+  // a tela do log avisa isso antes de confirmar.
+  await recordDeletion({
+    event: "agent.deleted",
+    target: { type: "Agent", id: agent.id, label: agent.name },
+    snapshot: {
+      id: agent.id,
+      tenantId,
+      name: agent.name,
+      systemPrompt: agent.systemPrompt,
+      objective: agent.objective,
+      personaDraft: agent.personaDraft,
+      enabled: agent.enabled,
+      listenAudio: agent.listenAudio,
+      stopOnEmoji: agent.stopOnEmoji,
+      speakReplies: agent.speakReplies,
+      isPrimary: agent.isPrimary,
+      archived: agent.archived,
+    },
+  });
+
   await prisma.agent.delete({ where: { id: agent.id } });
 
   // Se o excluído era o principal, promove outro — a conta não pode ficar sem
@@ -446,16 +509,28 @@ export async function savePersona(_prev: Result | null, formData: FormData): Pro
   const existingAvoid = (agent.personaDraft as Partial<PersonaAnswers> | null)?.avoid ?? "";
   const answers: PersonaAnswers = { ...parsed.data, avoid: existingAvoid };
 
-  await prisma.agent.update({
-    where: { id: agent.id },
-    data: {
-      // O nome do agente na lista acompanha o que a pessoa respondeu no wizard.
-      name: answers.agentName || agent.name,
-      systemPrompt: composeSystemPrompt(answers),
-      objective: answers.objective,
-      personaDraft: answers,
+  const next = {
+    // O nome do agente na lista acompanha o que a pessoa respondeu no wizard.
+    name: answers.agentName || agent.name,
+    systemPrompt: composeSystemPrompt(answers),
+    objective: answers.objective,
+    personaDraft: answers,
+  };
+
+  await prisma.agent.update({ where: { id: agent.id }, data: next });
+
+  await recordChange({
+    event: "agent.persona_updated",
+    target: { type: "Agent", id: agent.id, label: agent.name },
+    before: {
+      name: agent.name,
+      systemPrompt: agent.systemPrompt,
+      objective: agent.objective,
+      personaDraft: agent.personaDraft,
     },
+    after: next,
   });
+
   revalidateAgent(agent.id);
   return { ok: true, info: "Persona salva." };
 }
@@ -493,10 +568,16 @@ export async function saveRules(_prev: Result | null, formData: FormData): Promi
     avoid: parsed.data.rules,
   };
 
-  await prisma.agent.update({
-    where: { id: agent.id },
-    data: { systemPrompt: composeSystemPrompt(answers), personaDraft: answers },
+  const next = { systemPrompt: composeSystemPrompt(answers), personaDraft: answers };
+  await prisma.agent.update({ where: { id: agent.id }, data: next });
+
+  await recordChange({
+    event: "agent.rules_updated",
+    target: { type: "Agent", id: agent.id, label: agent.name },
+    before: { systemPrompt: agent.systemPrompt, personaDraft: agent.personaDraft },
+    after: next,
   });
+
   revalidateAgent(agent.id);
   return { ok: true, info: "Regras salvas." };
 }
@@ -526,11 +607,28 @@ export async function setActionEnabled(
     }
   }
 
-  await prisma.tenantAction.upsert({
+  const previous = await prisma.tenantAction.findUnique({
+    where: { agentId_key: { agentId: agent.id, key } },
+    select: { id: true, enabled: true },
+  });
+
+  const saved = await prisma.tenantAction.upsert({
     where: { agentId_key: { agentId: agent.id, key } },
     create: { tenantId, agentId: agent.id, key, enabled },
     update: { enabled },
   });
+
+  await recordChange({
+    event: "agent.action_toggled",
+    // O alvo é a linha de TenantAction, não o agente: é ela que um undo
+    // regrava. `targetLabel` fica com o nome legível da ação para o log não
+    // virar "TenantAction ckx…" na tela.
+    target: { type: "TenantAction", id: saved.id, label: `${def.label} · ${agent.name}` },
+    before: { enabled: previous?.enabled ?? false },
+    after: { enabled },
+    meta: { acao: key, agente: agent.name },
+  });
+
   revalidateAgent(agent.id);
   return { ok: true };
 }
@@ -673,6 +771,17 @@ export async function addDocument(_prev: Result | null, formData: FormData): Pro
   if (!content) return { ok: false, error: "Cole um texto ou envie um arquivo" };
 
   const doc = await ingestDocument({ tenantId, agentId: agent.id, title, content, fileUrl, fileName });
+
+  await recordAudit({
+    event: "knowledge.added",
+    target: { type: "KnowledgeDocument", id: doc.id, label: title },
+    // Sem o `content`: um documento pode ter dezenas de milhares de
+    // caracteres, e o log guarda o que aconteceu, não uma segunda cópia da
+    // base de conhecimento. Tamanho é o bastante para auditar.
+    after: { title, status: doc.status, fileName, caracteres: content.length },
+    meta: { agente: agent.name },
+  });
+
   revalidateAgent(agent.id);
   const info =
     doc.status === "no_embeddings"
@@ -687,7 +796,34 @@ export async function removeDocument(agentId: string, documentId: string): Promi
   const { tenantId, agent } = await requireAgent(agentId);
   if (!agent) return { ok: false, error: "Agente não encontrado" };
 
+  // Lido antes de apagar: é este snapshot que permite restaurar o documento
+  // com o mesmo id em /admin/logs. O `content` entra inteiro (é o que faz a
+  // restauração valer a pena) e o redator corta se passar do teto — nesse
+  // caso o revert recusa em vez de recriar um documento truncado.
+  const doc = await getDocument(tenantId, agent.id, documentId);
+
   await deleteDocument(tenantId, documentId);
+
+  if (doc) {
+    await recordDeletion({
+      event: "knowledge.deleted",
+      target: { type: "KnowledgeDocument", id: documentId, label: doc.title },
+      snapshot: {
+        id: documentId,
+        tenantId,
+        agentId: agent.id,
+        title: doc.title,
+        content: doc.content,
+        status: doc.status,
+        // A URL volta, mas o arquivo em si já saiu da CDN — restaurar o
+        // documento devolve o texto extraído, não o anexo original.
+        fileUrl: doc.fileUrl,
+        fileName: doc.fileName,
+      },
+      meta: { agente: agent.name, arquivoNaCdn: Boolean(doc.fileUrl) },
+    });
+  }
+
   revalidateAgent(agent.id);
   return { ok: true };
 }
@@ -724,8 +860,18 @@ export async function updateDocumentAction(_prev: Result | null, formData: FormD
   if (!title) return { ok: false, error: "Dê um título ao documento" };
   if (!content) return { ok: false, error: "O texto não pode ficar vazio" };
 
+  const previous = await getDocument(tenantId, agent.id, documentId);
+
   const doc = await updateDocument(tenantId, agent.id, documentId, { title, content });
   if (!doc) return { ok: false, error: "Documento não encontrado" };
+
+  await recordChange({
+    event: "knowledge.updated",
+    target: { type: "KnowledgeDocument", id: documentId, label: title },
+    before: { title: previous?.title, content: previous?.content },
+    after: { title, content },
+    meta: { agente: agent.name },
+  });
 
   revalidateAgent(agent.id);
   const info =

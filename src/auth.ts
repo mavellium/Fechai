@@ -10,6 +10,7 @@ import {
   registerLoginFailure,
 } from "@/lib/login-throttle";
 import { recordLoginAttempt, requestContext } from "@/modules/auth/attempts";
+import { isIpBlocked } from "@/modules/auth/ip-block";
 
 /**
  * Sanidade de entrada do login — de propósito NÃO usa a política de senha
@@ -106,6 +107,21 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
         const { email, password } = parsed.data;
 
+        // Bloqueio do admin antes de tudo: é uma decisão humana e não depende
+        // de contagem nenhuma. Vem antes até do freio automático porque não há
+        // o que medir — esse IP não entra, ponto.
+        const adminBlock = await isIpBlocked(context.ip);
+        if (adminBlock) {
+          await recordLoginAttempt({
+            context,
+            email,
+            success: false,
+            provider: "credentials",
+            reason: "ip_blocked",
+          });
+          return null;
+        }
+
         // O freio vem ANTES do bcrypt: quem está bloqueado não deve nem custar
         // CPU, que é justamente o recurso que um ataque quer consumir.
         const block = await peekLoginBlock(email, context.ip);
@@ -174,6 +190,20 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
       const context = await requestContext();
       const email = user.email?.toLowerCase() ?? "";
+
+      // O bloqueio do admin vale para as DUAS portas. Barrar só as credenciais
+      // deixaria a porta do Google aberta para o mesmo IP — o bloqueio seria
+      // um inconveniente, não uma barreira.
+      if (await isIpBlocked(context.ip)) {
+        await recordLoginAttempt({
+          context,
+          email: email || null,
+          success: false,
+          provider: "google",
+          reason: "ip_blocked",
+        });
+        return "/login?error=ip_blocked";
+      }
 
       // Sem e-mail verificado pelo Google, quem controla um domínio qualquer
       // poderia reivindicar o endereço de um cliente.

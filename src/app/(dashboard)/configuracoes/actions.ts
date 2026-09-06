@@ -11,6 +11,7 @@ import { strongPassword } from "@/lib/password-schema";
 import { createFeedback } from "@/modules/feedback/service";
 import { ensureAffiliate } from "@/modules/affiliates/service";
 import { getAccountRoles } from "@/modules/affiliates/roles";
+import { recordAudit, recordChange } from "@/modules/audit/log";
 
 const schema = z.object({
   message: z.string().trim().min(3, "Escreva um pouco mais"),
@@ -50,10 +51,23 @@ export async function updateProfile(_prev: Result | null, formData: FormData): P
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Dados inválidos" };
   }
 
+  const before = await prisma.user.findUnique({
+    where: { id: session.user.id },
+    select: { name: true },
+  });
+
   await prisma.user.update({
     where: { id: session.user.id },
     data: { name: parsed.data.name },
   });
+
+  await recordChange({
+    event: "account.profile_updated",
+    target: { type: "User", id: session.user.id, label: session.user.email },
+    before: { name: before?.name },
+    after: { name: parsed.data.name },
+  });
+
   // O nome exibido na sessão (JWT) só atualiza no próximo login — a página
   // relê do banco, então isso mantém o Server Component em dia.
   revalidatePath("/configuracoes");
@@ -97,6 +111,16 @@ export async function changePassword(_prev: Result | null, formData: FormData): 
 
   const passwordHash = await bcrypt.hash(parsed.data.newPassword, BCRYPT_COST);
   await prisma.user.update({ where: { id: user.id }, data: { passwordHash } });
+
+  // Sem `before`/`after`: a troca de senha é registrada como FATO, nunca como
+  // estado. Guardar o hash antigo no log daria a quem lesse a trilha um alvo
+  // de força bruta e, pior, um caminho para restaurar a senha anterior — o
+  // oposto do que trocar a senha significa.
+  await recordAudit({
+    event: "auth.password_changed",
+    target: { type: "User", id: user.id, label: user.email },
+  });
+
   return { ok: true, info: "Senha alterada com sucesso." };
 }
 
@@ -164,6 +188,17 @@ export async function updateAccountRoles(
       data: { status: "ACTIVE" },
     });
   }
+
+  await recordChange({
+    event: "account.roles_updated",
+    target: { type: "User", id: session.user.id, label: session.user.email },
+    // Só `usesProduct` é revertível pela trilha (está na whitelist): o papel de
+    // afiliado mora na existência de um `Affiliate`, e desfazê-lo por regravar
+    // um campo mexeria num cadastro com histórico de comissão. Quem precisa
+    // volta pela própria tela, que já preserva o código.
+    before: { usesProduct: current.usesProduct, afiliado: current.isAffiliate },
+    after: { usesProduct: wantsProduct, afiliado: wantsAffiliate },
+  });
 
   // O menu vive no layout do painel: revalidar só /configuracoes deixaria a
   // navegação desatualizada até a próxima navegação cheia.

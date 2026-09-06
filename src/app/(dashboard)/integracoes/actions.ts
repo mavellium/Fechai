@@ -17,6 +17,7 @@ import {
   verifyClinicorpCredentials,
 } from "@/modules/scheduling/clinicorp";
 import { isEncryptionConfigured } from "@/lib/crypto";
+import { recordAudit, recordChange } from "@/modules/audit/log";
 
 type ConnectResult = {
   ok: boolean;
@@ -63,6 +64,19 @@ export async function refreshWhatsappStatus(): Promise<ConnectResult> {
   try {
     const res = await provider.getQrCode(instance.externalId);
     await prisma.whatsappInstance.update({ where: { tenantId }, data: { status: res.status } });
+
+    // Só a TRANSIÇÃO para conectado vira evento. Esta função é chamada em
+    // laço enquanto a tela espera o QR ser lido; registrar cada passagem
+    // encheria a trilha de "ainda aguardando" a cada poucos segundos.
+    if (res.status === "connected" && instance.status !== "connected") {
+      await recordAudit({
+        event: "whatsapp.connected",
+        target: { type: "WhatsappInstance", id: instance.id, label: "WhatsApp" },
+        before: { status: instance.status },
+        after: { status: res.status },
+      });
+    }
+
     revalidatePath("/integracoes");
     revalidatePath("/inicio");
     return { ok: true, status: res.status, qrCode: res.qrCode };
@@ -97,6 +111,17 @@ export async function disconnectWhatsapp(): Promise<WhatsappControlResult> {
     where: { tenantId },
     data: { status: "disconnected" },
   });
+
+  // Não revertível: religar o WhatsApp exige ler um QR code novo no aparelho,
+  // e nenhum campo do banco faz isso. O evento registra o fato — a tela do
+  // log não oferece desfazer para o que só o cliente consegue refazer.
+  await recordAudit({
+    event: "whatsapp.disconnected",
+    target: { type: "WhatsappInstance", id: instance.id, label: "WhatsApp" },
+    before: { status: instance.status },
+    after: { status: "disconnected" },
+  });
+
   revalidatePath("/integracoes");
   revalidatePath("/inicio");
   return { ok: true, info: "WhatsApp desconectado. Para voltar, gere um novo código." };
@@ -299,7 +324,28 @@ export async function setCalendarFeatureAction(
   enabled: boolean,
 ): Promise<WhatsappControlResult> {
   const { tenantId } = await requireTenant();
+
+  const before = await prisma.calendarFeatures.findUnique({
+    where: { tenantId },
+    select: { id: true, googleEnabled: true, clinicorpEnabled: true },
+  });
+
   await setCalendarFeature(tenantId, key, enabled);
+
+  const field = key === "google" ? "googleEnabled" : "clinicorpEnabled";
+  const saved = await prisma.calendarFeatures.findUnique({
+    where: { tenantId },
+    select: { id: true },
+  });
+
+  await recordChange({
+    event: "integration.toggled",
+    target: { type: "CalendarFeatures", id: saved?.id ?? tenantId, label: `Calendário · ${key}` },
+    before: { [field]: before?.[field] ?? false },
+    after: { [field]: enabled },
+    meta: { calendario: key },
+  });
+
   revalidatePath("/integracoes");
   revalidatePath("/agenda");
   return {
@@ -326,6 +372,14 @@ export async function setGoogleSyncEnabled(enabled: boolean): Promise<WhatsappCo
 export async function disconnectGoogleAction(): Promise<WhatsappControlResult> {
   const { tenantId } = await requireTenant();
   await disconnectGoogleCalendar(tenantId);
+
+  // Desconectar apaga os tokens do OAuth: reconectar exige o consentimento do
+  // cliente de novo, e nenhum campo guardado desfaz isso. Fato, não estado.
+  await recordAudit({
+    event: "integration.removed",
+    target: { type: "CalendarIntegration", id: tenantId, label: "Google Agenda" },
+  });
+
   revalidatePath("/integracoes");
   revalidatePath("/agenda");
   return { ok: true, info: "Google Agenda desconectado." };
@@ -378,6 +432,15 @@ export async function connectClinicorpAction(
   const onlyBusiness = check.businesses.length === 1 ? check.businesses[0].id : null;
 
   await saveClinicorpCredentials(tenantId, parsed.data, { businessId: onlyBusiness });
+
+  // A credencial em si NUNCA entra no log — nem cifrada. O que a trilha
+  // registra é que a conta passou a ter uma integração ativa e para qual
+  // clínica, que é o que responde "por que os agendamentos foram para lá?".
+  await recordAudit({
+    event: "integration.saved",
+    target: { type: "ClinicorpIntegration", id: tenantId, label: "Clinicorp" },
+    after: { businessId: onlyBusiness, clinicas: check.businesses.length },
+  });
 
   revalidatePath("/integracoes");
   revalidatePath("/agenda");
@@ -437,6 +500,12 @@ export async function setClinicorpToggle(
 export async function disconnectClinicorpAction(): Promise<WhatsappControlResult> {
   const { tenantId } = await requireTenant();
   await disconnectClinicorp(tenantId);
+
+  await recordAudit({
+    event: "integration.removed",
+    target: { type: "ClinicorpIntegration", id: tenantId, label: "Clinicorp" },
+  });
+
   revalidatePath("/integracoes");
   revalidatePath("/agenda");
   return { ok: true, info: "Clinicorp desconectado." };

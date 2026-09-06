@@ -95,6 +95,7 @@ model Tenant {
   calendarFeatures CalendarFeatures?
   leadValues       TenantLeadValue[]
   referral         Referral?
+  auditLogs        AuditLog[]
 }
 
 model User {
@@ -693,6 +694,157 @@ model LoginAttempt {
   @@index([email, createdAt])
   @@index([ip, createdAt])
   @@index([createdAt])
+}
+
+/// IP barrado do login **por decisão do admin**.
+///
+/// Não confundir com o freio de força bruta (`lib/login-throttle`): aquele é
+/// automático, mora no Redis, conta e-mail+IP e expira sozinho em minutos. Este
+/// é deliberado, dura o que o admin quiser e precisa sobreviver a um `FLUSHALL`
+/// e a um restart do Redis — por isso Postgres, e não cache. São mecanismos
+/// distintos de propósito: um contém ataque em curso sozinho, o outro é uma
+/// decisão humana com autor e motivo registrados.
+///
+/// Barra só a **autenticação** (credenciais e Google), não o site inteiro. O
+/// alcance é estreito de propósito: bloquear no middleware custaria uma checagem
+/// em toda requisição e arriscaria derrubar webhook de terceiro que
+/// compartilhasse o IP — o problema real é sempre alguém tentando ENTRAR.
+model BlockedIp {
+  id String @id @default(cuid())
+
+  /// O endereço, exatamente como `requestContext()` o resolve (primeiro item
+  /// do `x-forwarded-for`). `@unique` porque bloquear duas vezes o mesmo IP não
+  /// é dois bloqueios — a segunda vez atualiza a primeira.
+  ip String @unique
+
+  /// Por que foi bloqueado. Obrigatório: um bloqueio sem motivo é impossível de
+  /// revisar depois, e quem encontra a linha meses adiante não tem como decidir
+  /// se ainda faz sentido.
+  reason String
+
+  /// Quem bloqueou. Guardado por cópia (não por relação) para sobreviver à
+  /// exclusão da conta do admin — o mesmo motivo do `actorEmail` no AuditLog.
+  blockedById    String?
+  blockedByEmail String?
+
+  /// Quando deixa de valer. `null` = até alguém desbloquear à mão.
+  /// A expiração é verificada na LEITURA, não por um job: um bloqueio vencido
+  /// que continua na tabela não barra ninguém, e varrer a tabela de tempos em
+  /// tempos só para apagar linhas seria trabalho sem ganho.
+  expiresAt DateTime?
+
+  /// Contexto do momento do bloqueio, para a lista não virar uma coluna de
+  /// números soltos: último e-mail tentado desse IP e quantas tentativas ele
+  /// tinha. Congelados — descrevem o que o admin viu ao decidir.
+  lastEmail     String?
+  attemptsAtBlock Int    @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+  @@index([createdAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trilha de auditoria (o que aconteceu na plataforma)
+//
+// `LoginAttempt` (acima) responde "quem tentou entrar"; `AuditLog` responde
+// "quem mudou o quê". São tabelas separadas de propósito: a de login é escrita
+// no caminho anônimo (quem falha o login não tem sessão, nem tenant) e tem
+// volume e retenção próprios — juntar as duas obrigaria metade das colunas a
+// ser nula em metade das linhas.
+//
+// A ideia central: o log guarda o **estado**, não só o nome do evento. Cada
+// linha carrega `before` e `after` — os campos que mudaram, antes e depois.
+// Isso é o que torna "reverter" possível sem uma função de undo escrita à mão
+// para cada ação: desfazer é regravar `before` na linha que `targetId` aponta.
+// Um log que só dissesse "fulano alterou o agente" registraria a ocorrência e
+// perderia justamente a informação que permite desfazê-la.
+//
+// Exclusão usa o mesmo mecanismo, ao contrário: `before` é a linha inteira e
+// `after` é null; restaurar recria o registro com o MESMO id (ver
+// `modules/audit/revert.ts`), para que o que apontava para ele volte a apontar.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Um evento registrado da plataforma. Escrita best-effort, como a de login:
+/// falhar ao auditar nunca pode derrubar a ação que estava sendo auditada.
+model AuditLog {
+  id String @id @default(cuid())
+
+  /// Conta afetada. Null em evento sem tenant (login que falhou, por exemplo)
+  /// e nas linhas cuja conta já foi excluída — `SetNull`, não `Cascade`: o
+  /// registro de uma exclusão não pode sumir junto com o que foi excluído,
+  /// senão a trilha apaga justamente o evento mais grave que ela guarda.
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  /// Nome da conta no momento do evento. Redundante de propósito: sobrevive à
+  /// exclusão do tenant, quando `tenantId` vira null e o join não devolve nada.
+  tenantName String?
+
+  /// Quem fez. Também `SetNull` + cópia do e-mail, pela mesma razão.
+  actorId    String?
+  actorEmail String?
+  /// OWNER | SUPERADMIN | SYSTEM — papel de quem agiu, congelado na linha.
+  /// "SYSTEM" é o que a plataforma faz sozinha (webhook, worker, cron).
+  actorRole String @default("OWNER")
+  /// O admin agiu personificando o cliente (ver lib/impersonation). Sem isto a
+  /// trilha mostraria o dono da conta fazendo o que o suporte fez por ele.
+  impersonated Boolean @default(false)
+
+  /// Evento em `dominio.acao` (ver AUDIT_EVENTS em modules/audit/events.ts).
+  /// String, não enum do banco: evento novo não deve exigir migração, e a
+  /// tabela guarda histórico — um enum antigo travaria linhas já gravadas.
+  event String
+  /// create | update | delete | auth | access — para filtrar e para decidir
+  /// como reverter (update regrava `before`; delete recria a linha).
+  kind String
+
+  /// O que foi afetado: modelo do Prisma (`Agent`, `Tenant`, `Lead`…) e id.
+  /// Sem `@relation` — a linha aponta para tabelas diferentes conforme o
+  /// evento, e o alvo pode nem existir mais.
+  targetType String?
+  targetId   String?
+  /// Rótulo legível do alvo no momento do evento ("Agente de vendas"). A tela
+  /// mostra isto; sem ele, um log de exclusão viraria um cuid sem sentido.
+  targetLabel String?
+
+  /// Estado ANTES e DEPOIS, só com os campos que a ação toca (ver
+  /// `diffFields`). Objetos JSON planos: `{ "enabled": true }`.
+  /// - update: os dois preenchidos.
+  /// - create: `before` null.
+  /// - delete: `after` null e `before` com a linha inteira, para restaurar.
+  before Json?
+  after  Json?
+
+  /// Contexto extra que não é estado do registro (motivo, quantidades, ip de
+  /// origem de um webhook). Nunca usado para reverter.
+  meta Json?
+
+  ip        String?
+  userAgent String?
+
+  /// Este evento pode ser desfeito pelo admin. Falso para o que é irreversível
+  /// por natureza (login, acesso, exclusão de conta) — a tela não oferece o
+  /// botão e `revertAuditLog` recusa de novo no servidor.
+  revertible Boolean @default(false)
+
+  /// Quando alguém desfez este evento. Preenchido = já revertido, e a trilha
+  /// não deixa reverter duas vezes (a segunda regravaria um `before` que já
+  /// não corresponde ao estado atual).
+  revertedAt      DateTime?
+  revertedById    String?
+  revertedByEmail String?
+  /// Log gerado PELA reversão. Desfazer é uma ação como outra qualquer e vira
+  /// linha nova — a trilha nunca é editada para esconder o que aconteceu.
+  revertLogId String?
+
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([tenantId, createdAt])
+  @@index([event, createdAt])
+  @@index([actorId, createdAt])
+  @@index([targetType, targetId])
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

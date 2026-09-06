@@ -6,6 +6,7 @@ import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { payloadTooLarge } from "@/lib/rate-limit";
 import { getOrCreateConversation, sendManualReply } from "@/modules/agent-engine/conversation";
+import { recordAudit } from "@/modules/audit/log";
 
 type Result = { ok: boolean; error?: string; info?: string };
 
@@ -88,6 +89,18 @@ export async function addContact(_prev: Result | null, formData: FormData): Prom
 
   const existed = await prisma.lead.findFirst({ where: { tenantId, phone } });
   const { lead } = await getOrCreateConversation(tenantId, phone, name.data || undefined);
+
+  // Só o cadastro novo vira evento: reabrir a conversa de um contato que já
+  // existia não é uma alteração, e registrá-la encheria a trilha de linhas
+  // que não dizem nada.
+  if (!existed) {
+    await recordAudit({
+      event: "lead.created",
+      target: { type: "Lead", id: lead.id, label: lead.name ?? phone },
+      after: { name: lead.name, phone, status: lead.status },
+    });
+  }
+
   revalidateContatos();
   return { ok: true, info: existed ? "Este número já está na sua lista." : `Contato ${lead.name ?? ""} adicionado.` };
 }

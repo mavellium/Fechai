@@ -2,7 +2,11 @@
 
 ## O que faz
 
-Gestão da plataforma pelo SUPERADMIN: **criar contas**, listar/inspecionar tenants, suspender/reativar e trocar plano manualmente (suporte). Feedbacks ficam no módulo `feedback/`.
+Gestão da plataforma pelo SUPERADMIN: **criar contas**, listar/inspecionar tenants, suspender/reativar e trocar plano manualmente (suporte). Feedbacks ficam no módulo `feedback/`; a trilha de auditoria (`/admin/logs`, incluindo desfazer alterações e exclusões) fica em `modules/audit/`.
+
+## Excluir conta: quem pode ser excluído
+
+`deleteTenantAccount` (server action em `(admin)/actions.ts`) exige a conta **suspensa** e recusa a conta do próprio admin logado. Conta de **admin também pode ser excluída** — antes eram todas recusadas em bloco, o que deixava admin desligado preso na lista para sempre e empurrava a limpeza para o banco à mão, sem rastro. A regra que importa não é "é admin?", é "sobra algum admin depois?": a action conta os `SUPERADMIN` fora do tenant alvo no momento do clique e recusa se o resultado for zero, porque sem nenhum o `/admin` fica inacessível pela interface (só `npm run db:admin` no servidor devolve). Toda exclusão é registrada em `AuditLog` **antes** do delete, com snapshot da conta — é irreversível, e o log é o que resta dela.
 
 ## Arquivos
 
