@@ -9,6 +9,7 @@ import {
   getOrCreateConversation,
 } from "@/modules/agent-engine/conversation";
 import { runAgentTurn, resolveAgent } from "@/modules/agent-engine/orchestrator";
+import { addLeadToHandoffGroup } from "@/modules/agent-engine/handoff";
 import { transcribeAudio } from "@/modules/ai/transcribe";
 import { speakReply } from "@/modules/voice/reply";
 
@@ -183,6 +184,12 @@ export async function POST(req: Request) {
       await prisma.conversation
         .update({ where: { id: conversation.id }, data: { agentPaused: true, needsHuman: true } })
         .catch(() => {});
+      // "Transferir para humano" pode estar configurada para também colocar o
+      // contato num grupo do WhatsApp — mesmo caminho da tool `handoff_human`,
+      // porque para o cliente isso É uma transferência para atendimento.
+      await addLeadToHandoffGroup(tenantId, agent.id, incoming.fromPhone, {
+        isTest: lead.isTest,
+      });
     }
     return NextResponse.json({ ok: true, silent: "reaction" });
   }
@@ -195,6 +202,9 @@ export async function POST(req: Request) {
     await prisma.conversation
       .update({ where: { id: conversation.id }, data: { agentPaused: true, needsHuman: true } })
       .catch(() => {});
+    await addLeadToHandoffGroup(tenantId, agent.id, incoming.fromPhone, {
+      isTest: lead.isTest,
+    });
   }
 
   try {

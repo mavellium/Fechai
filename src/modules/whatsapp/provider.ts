@@ -50,6 +50,14 @@ export interface WhatsAppProvider {
     externalId: string,
     messageKeyId: string,
   ): Promise<{ base64: string; mime: string }>;
+  /**
+   * Adiciona um número a um grupo já existente do WhatsApp — usado pela ação
+   * "Transferir para humano" quando a conta cadastrou um grupo fixo de
+   * atendimento. Nunca lança por conta própria: o chamador decide como tratar
+   * a falha (registrar e seguir com o handoff normal, nunca travar o
+   * atendimento por causa de um grupo).
+   */
+  addParticipantToGroup(externalId: string, groupId: string, phone: string): Promise<void>;
   // onMessageReceived é implementado via webhook (ver api/webhooks/whatsapp).
   // O provider expõe apenas o parser do payload recebido.
   parseWebhook(payload: unknown): IncomingMessage | null;

@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import type { PersonaAnswers } from "@/modules/agent-engine/persona";
 import type { ScheduleConfig } from "@/modules/scheduling/config";
 import type { FollowUpConfig } from "@/modules/follow-up/config";
+import type { HandoffConfig } from "@/modules/agent-engine/handoff";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { InfoHint } from "@/components/ui/info-hint";
@@ -92,6 +93,7 @@ export function AgentWizard({
   planLimit,
   scheduleConfig,
   followUpConfig,
+  handoffConfig,
   enabled,
   listenAudio,
   speakReplies,
@@ -110,6 +112,7 @@ export function AgentWizard({
   planLimit: number;
   scheduleConfig: ScheduleConfig;
   followUpConfig: FollowUpConfig;
+  handoffConfig: HandoffConfig;
   /** Agente ligado? Desligado, o teste não responde — a tela avisa antes. */
   enabled: boolean;
   /** Comportamentos de conversa (ver BehaviorSettings). */
@@ -222,6 +225,7 @@ export function AgentWizard({
                     planLimit={planLimit}
                     scheduleConfig={scheduleConfig}
                     followUpConfig={followUpConfig}
+                    handoffConfig={handoffConfig}
                   />
                 ),
               },

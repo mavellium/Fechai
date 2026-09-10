@@ -8,6 +8,7 @@ import { getAgentOwned } from "@/modules/agent-engine/agents";
 import { isActionAvailable } from "@/modules/agent-engine/actions";
 import { getScheduleConfig } from "@/modules/scheduling/repository";
 import { getFollowUpConfig } from "@/modules/follow-up/config";
+import { getHandoffConfig } from "@/modules/agent-engine/handoff";
 import { isFishAudioConfigured } from "@/modules/voice/fish";
 import { catalogVoiceByReferenceId } from "@/modules/voice/catalog";
 import type { PersonaAnswers } from "@/modules/agent-engine/persona";
@@ -22,7 +23,7 @@ export default async function AgentePage({ params }: { params: Promise<{ id: str
   // 404 e não "acesso negado": para quem não é dono, o agente não existe.
   if (!agent) notFound();
 
-  const [tenant, documents, tenantActions, agentCount, scheduleConfig, followUpConfig] =
+  const [tenant, documents, tenantActions, agentCount, scheduleConfig, followUpConfig, handoffConfig] =
     await Promise.all([
       prisma.tenant.findUnique({ where: { id: tenantId }, select: { planKey: true } }),
       prisma.knowledgeDocument.findMany({
@@ -37,6 +38,7 @@ export default async function AgentePage({ params }: { params: Promise<{ id: str
       prisma.agent.count({ where: { tenantId, archived: false } }),
       getScheduleConfig(agent.id),
       getFollowUpConfig(agent.id),
+      getHandoffConfig(agent.id),
     ]);
 
   // Desativadas temporariamente não contam como "ação ativa" no checklist.
@@ -84,6 +86,7 @@ export default async function AgentePage({ params }: { params: Promise<{ id: str
         planLimit={planOf(tenant?.planKey).maxActiveActions}
         scheduleConfig={scheduleConfig}
         followUpConfig={followUpConfig}
+        handoffConfig={handoffConfig}
         enabled={agent.enabled}
         listenAudio={agent.listenAudio}
         speakReplies={agent.speakReplies}

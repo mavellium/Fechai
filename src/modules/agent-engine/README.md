@@ -13,6 +13,7 @@ Cérebro do produto: recebe uma mensagem, monta o contexto (persona + RAG + hist
 - `conversation.ts` — `getOrCreateConversation`, `appendMessage`, `getRecentMessages`, `startFreshTestConversation`, `sendManualReply`.
 - `orchestrator.ts` — `runAgentTurn({tenantId, conversationId, leadId, userMessage})`: loop de tools (máx 3), RAG via `searchSimilarChunks`, persiste mensagens.
 - `summary.ts` — `summarizeConversation(tenantId, conversationId)`: resumo em texto da conversa, sob demanda, com cache no banco. Ver seção abaixo.
+- `handoff.ts` — config da ação "Transferir para humano" e `addLeadToHandoffGroup`: põe o contato num grupo do WhatsApp ao passar para atendimento. Ver seção abaixo.
 
 ## Contratos expostos
 
@@ -23,6 +24,9 @@ startFreshTestConversation(tenantId, phone) -> void
 sendManualReply(tenantId, conversationId, text) -> { ok: true } | { ok: false, error }
 summarizeConversation(tenantId, conversationId) -> { ok: true, summary, summaryAt, messageCount } | { ok: false, error }
 composeSystemPrompt(answers): string; ACTION_CATALOG: ActionDef[]
+getHandoffConfig(agentId) -> HandoffConfig            // para a tela preencher o formulário
+saveHandoffConfig(tenantId, agentId, config) -> void
+addLeadToHandoffGroup(tenantId, agentId, phone, { isTest? }) -> void  // nunca lança
 ```
 
 Consumidores: `api/webhooks/whatsapp` (WhatsApp real) e `api/sandbox` (chat de teste).
@@ -151,6 +155,69 @@ pronto, nas linhas e cards de `/contatos` — lá o resumo substitui a prévia d
 última mensagem quando existe, porque "ok, obrigado" não diz nada sobre o que
 o cliente queria. A action é `generateConversationSummary` em
 `conversas/actions.ts`.
+
+### Transferir para humano e o grupo do WhatsApp (`handoff.ts`)
+
+Uma conversa vira "precisa de você" por **três caminhos**, e os três são a
+mesma coisa para quem está do outro lado:
+
+| caminho | onde | o que marca |
+| --- | --- | --- |
+| tool `handoff_human` | `tools.ts` (o LLM decide) | `needsHuman` |
+| reação com emoji | webhook do WhatsApp | `needsHuman` + `agentPaused` |
+| mensagem só de emoji | webhook do WhatsApp | `needsHuman` + `agentPaused` |
+
+Os dois últimos dependem de `Agent.stopOnEmoji`, que **nasce ligado**
+(`@default(true)` no schema): reagir com emoji é o gesto mais barato que existe
+no WhatsApp para "quero falar com gente".
+
+**A config da ação vive em `TenantAction.config`** (chave `handoff_human`),
+mesmo padrão de `follow-up/config.ts` e `scheduling/config.ts` — por agente,
+sem coluna nova. Hoje ela guarda só o grupo:
+
+```ts
+type HandoffConfig = { addToGroup: boolean; groupId: string | null }
+```
+
+Ligado, `addLeadToHandoffGroup` adiciona o telefone do contato a um **grupo
+fixo** do WhatsApp — normalmente o grupo onde a equipe de atendimento já está.
+É um grupo por agente, não um grupo novo por atendimento: criar e limpar um
+grupo por lead exigiria cadastro de atendentes e uma política de descarte que
+ninguém pediu.
+
+Regras que não são óbvias:
+
+- **`addToGroup` nunca fica ligado sem `groupId`.** `parseHandoffConfig` força
+  isso na leitura e o formulário recusa no envio (`superRefine` **antes** do
+  `transform` — depois, o ID inválido já teria virado `addToGroup: false` e a
+  tela diria "salvo" com a opção silenciosamente desligada). Um toggle ligado
+  que não faz nada faz a tela mentir, igual à regra de `speakReplies` sem voz.
+- **Desligar a opção não apaga o `groupId`.** O campo fica escondido, não
+  desmontado, e continua no envio — desligar é pausar, não descadastrar (mesma
+  distinção de desabilitar × desconectar em `/integracoes`). Desmontando, um
+  desligar/ligar obrigava a ir buscar o ID no WhatsApp de novo.
+- **A ação desligada não adiciona ninguém.** Quem age lê por
+  `getActiveHandoffConfig`, que checa `TenantAction.enabled`; `getHandoffConfig`
+  (sem a checagem) é só para a tela preencher o formulário, porque desligar a
+  ação não pode apagar o que foi configurado.
+- **Conversa de teste fica de fora** (`isTest`). O sandbox usa telefone
+  sintético, e ele no grupo real polui o grupo da equipe com um número que não
+  existe — mesma regra do worker de follow-up e do envio de resposta.
+- **Nunca lança, e o `try` cobre o banco também**, não só a chamada de rede.
+  No webhook, uma exceção escapando viraria 500 e a Evolution reentregaria a
+  mesma mensagem em laço. A transferência já aconteceu; o grupo é o extra.
+- **O ID do grupo aceita as duas formas** que a pessoa consegue copiar:
+  `120363...@g.us` ou só os dígitos (`normalizeGroupId` completa o sufixo).
+  Um telefone de pessoa (`@s.whatsapp.net`) é recusado.
+
+Envio: `WhatsAppProvider.addParticipantToGroup` →
+`POST /group/updateParticipant?groupJid=...` com `action: "add"` na Evolution.
+Regressões em `tests/handoff-grupo.test.ts` (banco e provider simulados).
+
+O número precisa estar **conectado** (`WhatsappInstance.status`): sem sessão
+ativa não há de onde convidar. O WhatsApp também recusa o convite direto quando
+a pessoa restringe quem pode adicioná-la a grupos — nesse caso a Evolution
+devolve erro, ele fica no log e a transferência segue normal.
 
 ## O que NÃO faz
 

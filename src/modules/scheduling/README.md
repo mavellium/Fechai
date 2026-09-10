@@ -141,6 +141,24 @@ Base: `https://api.clinicorp.com/rest/v1`. Quase todo endpoint pede
   seu reset nativo altera até um select controlado sem disparar `onChange`.
   Uma lista que falhou ao
   carregar não apaga a opção salva, e o erro permite tentar carregar novamente.
+- Os três são `SelectMenu` (`components/ui/select-menu.tsx`), **não o `<select>`
+  nativo**: o menu nativo é pintado pelo sistema operacional e abre uma lista
+  clara sobre este painel escuro, ignorando os tokens da marca — não há CSS que
+  alcance aquele popup. Três consequências de trocar, todas já tratadas aqui:
+  - **A opção vazia precisa existir na lista.** `SelectMenu` cai na primeira
+    opção quando o valor atual não está entre elas (`Math.max(findIndex, 0)`),
+    então sem um `{ value: "" }` explícito o botão mostraria a primeira clínica
+    como se estivesse escolhida, e o envio falharia contradizendo a tela.
+  - **A carga preguiçosa mudou de gatilho.** Profissionais e categorias são
+    chamadas de rede feitas só quando a pessoa abre o menu; o `<select>` usava
+    `onFocus`/`onMouseDown`, que o `SelectMenu` não expõe (o controle é um
+    `<button>`). O disparo vive num `onPointerDownCapture` no wrapper, que
+    acontece antes do clique que abre o menu.
+  - **Não há validação nativa.** O `required` do `<select>` sumiu junto; quem
+    recusa clínica vazia é `clinicorpSettingsSchema` no servidor, com mensagem
+    exibida no `Alert` do formulário.
+  - O rótulo é um `<p id>` + `labelledBy`, não o `<label>` do `Field`: aquele
+    associa por `htmlFor` a um controle nativo, que o `SelectMenu` não é.
 - Categorias vêm de `GET /appointment/list_categories`. Mantemos o nome na coluna
   existente e resolvemos o `CategoryId` antes de enviar, exigindo nome único.
   Categoria ausente ou duplicada gera aviso para corrigir no Clinicorp. Não há

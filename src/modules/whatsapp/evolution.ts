@@ -93,6 +93,25 @@ export class EvolutionProvider implements WhatsAppProvider {
     return data.key?.id ?? null;
   }
 
+  async addParticipantToGroup(externalId: string, groupId: string, phone: string): Promise<void> {
+    // `/group/updateParticipant` com action "add" — mesma família de
+    // endpoints de grupo da Evolution v2. O número vai sem sufixo de JID (a
+    // API monta o `@s.whatsapp.net` internamente, igual sendText).
+    const res = await fetch(
+      `${this.baseUrl}/group/updateParticipant/${externalId}?groupJid=${encodeURIComponent(groupId)}`,
+      {
+        method: "POST",
+        headers: this.headers(),
+        body: JSON.stringify({ action: "add", participants: [phone] }),
+      },
+    );
+    if (!res.ok) {
+      throw new Error(
+        `Evolution updateParticipant falhou (${res.status}): ${(await res.text().catch(() => "")).slice(0, 200)}`,
+      );
+    }
+  }
+
   async disconnect(externalId: string): Promise<void> {
     const res = await fetch(`${this.baseUrl}/instance/logout/${externalId}`, {
       method: "POST",

@@ -54,7 +54,7 @@ export async function scanAndSendFollowUps(now: Date = new Date()) {
     const config = c.agentId ? configByAgent.get(c.agentId) : undefined;
     if (!config) continue;
 
-    const cutoff = new Date(now.getTime() - config.delayHours * 60 * 60_000);
+    const cutoff = new Date(now.getTime() - config.delayMinutes * 60_000);
     if (!isEligible({ ...c, lastRole: c.messages[0]?.role }, cutoff)) continue;
 
     let keyId: string | null = null;

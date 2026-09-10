@@ -8,6 +8,7 @@ import {
   hasConflictAnywhere,
 } from "@/modules/scheduling/repository";
 import { formatInZone, parseLocalDateTime } from "@/modules/scheduling/time";
+import { addLeadToHandoffGroup } from "./handoff";
 import { ACTION_BY_KEY, type ActionKey } from "./actions";
 
 export type ToolContext = {
@@ -218,6 +219,19 @@ const TOOLS: Record<ActionKey, ToolDef> = {
         where: { id: ctx.conversationId },
         data: { needsHuman: true },
       });
+
+      // `isTest` vem junto do telefone: no sandbox o número é sintético, e
+      // adicioná-lo ao grupo real da equipe é efeito colateral de um teste.
+      const lead = await prisma.lead.findUnique({
+        where: { id: ctx.leadId },
+        select: { phone: true, isTest: true },
+      });
+      if (lead) {
+        await addLeadToHandoffGroup(ctx.tenantId, ctx.agentId, lead.phone, {
+          isTest: lead.isTest,
+        });
+      }
+
       return "Conversa marcada como 'precisa atenção' de um humano.";
     },
   },

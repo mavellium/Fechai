@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmButton } from "@/components/ui/confirm-dialog";
 import { Field, fieldProps } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Select } from "@/components/ui/select";
+import { SelectMenu } from "@/components/ui/select-menu";
 import { Switch } from "@/components/ui/switch";
 import {
   connectClinicorpAction,
@@ -207,87 +207,121 @@ function ClinicorpConnected({ state }: { state: Extract<ClinicorpState, { connec
         const data = new FormData(event.currentTarget);
         startTransition(() => saveSettings(data));
       }} className="space-y-3">
-        <Field
-            label="Clínica"
-            htmlFor={`${id}-business`}
-            hint="Onde os horários marcados aqui vão entrar."
-          >
-            <Select
-              {...fieldProps(`${id}-business`, { hint: true })}
+        {/*
+          `SelectMenu` no lugar do `<select>` nativo: o menu do sistema abre
+          claro sobre este painel escuro e ignora os tokens da marca (mesmo
+          motivo do formulário de conta em admin/contas). O rótulo é o `<p>`
+          abaixo, referenciado via `labelledBy` — não o `<label>` do `Field`,
+          que não tem `id` próprio (ele associa pelo `htmlFor` de um controle
+          nativo, que o `SelectMenu` não é).
+        */}
+        <div>
+          <p id={`${id}-business-label`} className="text-sm font-medium text-ink panel:text-white/85">
+            Clínica
+          </p>
+          <p className="mt-1 text-sm text-neutral panel:text-white/55">
+            Onde os horários marcados aqui vão entrar.
+          </p>
+          <div className="mt-2">
+            <SelectMenu
+              labelledBy={`${id}-business-label`}
+              label="Clínica"
               name="businessId"
               size="sm"
               value={businessId}
-              onChange={(event) => setBusinessId(event.target.value)}
-              required
-            >
-              <option value="">Escolha a clínica</option>
-              {businessId && !state.businesses.some((b) => b.id === businessId) && (
-                <option value={businessId}>Clínica selecionada · {businessId}</option>
-              )}
-              {state.businesses.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.name}
-                </option>
-              ))}
-            </Select>
-        </Field>
+              onChange={setBusinessId}
+              options={[
+                // A opção vazia É o placeholder aqui: `SelectMenu` cai na
+                // primeira opção quando o valor atual não está na lista
+                // (`Math.max(findIndex, 0)`), então sem ela o botão mostraria a
+                // primeira clínica como se já estivesse escolhida — e o envio
+                // falharia no servidor contradizendo o que a tela mostra.
+                { value: "", label: "Escolha a clínica" },
+                ...(businessId && !state.businesses.some((b) => b.id === businessId)
+                  ? [{ value: businessId, label: `Clínica selecionada · ${businessId}` }]
+                  : []),
+                ...state.businesses.map((b) => ({ value: b.id, label: b.name })),
+              ]}
+            />
+          </div>
+        </div>
 
-        <Field
-          label="Profissional padrão"
-          htmlFor={`${id}-dentist`}
-          hint="Escolha quem vai atender para o horário aparecer na agenda desse profissional."
-          optional
-        >
-          <Select
-            {...fieldProps(`${id}-dentist`, { hint: true })}
-            name="dentistId"
-            size="sm"
-            value={dentistId}
-            onChange={(event) => setDentistId(event.target.value)}
-            onFocus={loadProfessionals}
-            onMouseDown={loadProfessionals}
-          >
-            <option value="">Nenhum</option>
-            {/* Antes de carregar a lista, o valor já salvo precisa existir como
-                opção — senão o select "esquece" a escolha ao renderizar. */}
-            {dentistId && !professionals?.some((p) => p.id === dentistId) && (
-              <option value={dentistId}>Profissional selecionado · {dentistId}</option>
-            )}
-            {professionals?.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </Select>
-          {loadingPros && <p className="text-xs text-white/50" role="status">Carregando profissionais…</p>}
-        </Field>
+        <div>
+          <p id={`${id}-dentist-label`} className="flex items-center gap-1.5 text-sm font-medium text-ink panel:text-white/85">
+            Profissional padrão
+            <span className="font-normal text-neutral panel:text-white/50">(opcional)</span>
+          </p>
+          <p className="mt-1 text-sm text-neutral panel:text-white/55">
+            Escolha quem vai atender para o horário aparecer na agenda desse profissional.
+          </p>
+          {/* `onPointerDown` em captura: dispara ANTES do clique que abre o
+              menu, para a lista já estar a caminho quando as opções aparecem.
+              `SelectMenu` não expõe onFocus/onMouseDown (o gatilho de carga do
+              `<select>` nativo) — seu controle é um `<button>` só com onClick. */}
+          <div className="mt-2" onPointerDownCapture={loadProfessionals}>
+            <SelectMenu
+              labelledBy={`${id}-dentist-label`}
+              label="Profissional padrão"
+              name="dentistId"
+              size="sm"
+              value={dentistId}
+              onChange={setDentistId}
+              placeholder="Nenhum"
+              options={[
+                { value: "", label: "Nenhum" },
+                // Antes de carregar a lista, o valor já salvo precisa existir
+                // como opção — senão o menu "esquece" a escolha ao renderizar.
+                ...(dentistId && !professionals?.some((p) => p.id === dentistId)
+                  ? [{ value: dentistId, label: `Profissional selecionado · ${dentistId}` }]
+                  : []),
+                ...(professionals ?? []).map((p) => ({ value: p.id, label: p.name })),
+              ]}
+            />
+          </div>
+          {loadingPros && <p className="mt-1 text-xs text-white/50" role="status">Carregando profissionais…</p>}
+        </div>
 
-        <Field
-          label="Categoria do agendamento"
-          htmlFor={`${id}-category`}
-          hint="Selecione Avaliação para usar essa categoria e cor na agenda. O procedimento é um campo separado no Clinicorp."
-          optional
-        >
-          <Select
-            {...fieldProps(`${id}-category`, { hint: true })}
-            name="categoryDescription"
-            value={category}
-            onChange={(event) => setCategory(event.target.value)}
-            onFocus={loadCategories}
-            onMouseDown={loadCategories}
-          >
-            <option value="">Sem categoria</option>
-            {category && !categories?.some((c) => c.name === category) && (
-              <option value={category}>{category} (salva)</option>
-            )}
-            {categories?.map((c) => (
-              <option key={c.id} value={c.name} disabled={categories.filter((other) => other.name === c.name).length > 1}>
-                {c.name}{categories.filter((other) => other.name === c.name).length > 1 ? " (nome duplicado no Clinicorp)" : ""}
-              </option>
-            ))}
-          </Select>
-          {loadingCategories && <p className="text-xs text-white/50" role="status">Carregando categorias…</p>}
-        </Field>
+        <div>
+          <p id={`${id}-category-label`} className="flex items-center gap-1.5 text-sm font-medium text-ink panel:text-white/85">
+            Categoria do agendamento
+            <span className="font-normal text-neutral panel:text-white/50">(opcional)</span>
+          </p>
+          <p className="mt-1 text-sm text-neutral panel:text-white/55">
+            Selecione Avaliação para usar essa categoria e cor na agenda. O procedimento é um campo separado no Clinicorp.
+          </p>
+          <div className="mt-2" onPointerDownCapture={loadCategories}>
+            <SelectMenu
+              labelledBy={`${id}-category-label`}
+              label="Categoria do agendamento"
+              name="categoryDescription"
+              value={category}
+              onChange={setCategory}
+              placeholder="Sem categoria"
+              options={[
+                { value: "", label: "Sem categoria" },
+                ...(category && !categories?.some((c) => c.name === category)
+                  ? [{ value: category, label: `${category} (salva)` }]
+                  : []),
+                // Uma opção por NOME, não por categoria: o que gravamos é o
+                // nome (o `CategoryId` é resolvido na hora de enviar), então
+                // duas categorias homônimas dariam duas opções com o mesmo
+                // `value` — chave repetida no React e as duas aparecendo
+                // marcadas ao escolher qualquer uma. Colapsadas numa linha só,
+                // desabilitada, que diz o que corrigir no Clinicorp.
+                ...[...new Set((categories ?? []).map((c) => c.name))].map((name) => {
+                  const duplicate =
+                    (categories ?? []).filter((other) => other.name === name).length > 1;
+                  return {
+                    value: name,
+                    label: duplicate ? `${name} (nome duplicado no Clinicorp)` : name,
+                    disabled: duplicate,
+                  };
+                }),
+              ]}
+            />
+          </div>
+          {loadingCategories && <p className="mt-1 text-xs text-white/50" role="status">Carregando categorias…</p>}
+        </div>
 
         <Button type="submit" size="sm" variant="outline" loading={savingSettings}>
           Salvar preferências

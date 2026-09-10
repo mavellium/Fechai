@@ -57,6 +57,7 @@ export const ACTION_CATALOG: ActionDef[] = [
     description: "Marca a conversa como 'precisa atenção' para um humano assumir.",
     outcome: "A conversa aparece em Conversas › “Precisa de você”.",
     status: "ready",
+    configurable: true,
   },
 ];
 

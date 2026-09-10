@@ -11,7 +11,8 @@ import { composeSystemPrompt, type PersonaAnswers } from "@/modules/agent-engine
 import { ACTION_BY_KEY, type ActionKey } from "@/modules/agent-engine/actions";
 import { createAgent, getAgentOwned, getAgentUsage } from "@/modules/agent-engine/agents";
 import { saveScheduleConfig } from "@/modules/scheduling/repository";
-import { saveFollowUpConfig } from "@/modules/follow-up/config";
+import { MAX_FOLLOWUP_DELAY_MINUTES, saveFollowUpConfig } from "@/modules/follow-up/config";
+import { normalizeGroupId, saveHandoffConfig } from "@/modules/agent-engine/handoff";
 import {
   ingestDocument,
   deleteDocument,
@@ -689,7 +690,7 @@ export async function saveScheduleConfigAction(
 // --------------------------------------------------- configuração do follow-up
 
 const followUpConfigSchema = z.object({
-  delayHours: z.coerce.number().int().min(1).max(720),
+  delayMinutes: z.coerce.number().int().min(1).max(MAX_FOLLOWUP_DELAY_MINUTES),
   message: z.string().trim().min(1, "Escreva a mensagem de follow-up").max(500),
 });
 
@@ -717,6 +718,64 @@ export async function saveFollowUpConfigAction(
   await saveFollowUpConfig(tenantId, agent.id, parsed.data);
   revalidateAgent(agent.id);
   return { ok: true, info: "Follow-up salvo." };
+}
+
+// ----------------------------------------------------- config da transferência
+
+const handoffConfigSchema = z
+  .object({
+    // O input oculto em `HandoffSettings` manda "on" ou "". Comparação
+    // explícita em vez de `z.coerce.boolean()`, que considera verdadeira
+    // QUALQUER string não vazia — inclusive "false" e "off", o que inverteria
+    // o desligado em silêncio se a tela um dia passasse a mandar esses valores.
+    addToGroup: z
+      .string()
+      .optional()
+      .transform((v) => v === "on" || v === "true"),
+    groupId: z.string().trim().optional().default(""),
+  })
+  // A recusa vem ANTES da normalização, não depois: se `transform` rodasse
+  // primeiro, um ID inválido já teria virado `addToGroup: false` e o `refine`
+  // olharia para um objeto coerente — a tela diria "salvo" com a opção
+  // silenciosamente desligada, que é justamente o que o campo obrigatório
+  // deveria impedir.
+  .superRefine((data, ctx) => {
+    if (data.addToGroup && !normalizeGroupId(data.groupId)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["groupId"],
+        message: "Cole o ID do grupo (ex.: 120363012345678901@g.us) ou desligue a opção.",
+      });
+    }
+  })
+  .transform((data) => {
+    const groupId = data.addToGroup ? normalizeGroupId(data.groupId) : null;
+    return { addToGroup: data.addToGroup && Boolean(groupId), groupId };
+  });
+
+/**
+ * Config da ação "Transferir para humano" (ver módulo `agent-engine/handoff`):
+ * hoje só o grupo do WhatsApp que recebe o contato transferido.
+ */
+export async function saveHandoffConfigAction(
+  _prev: Result | null,
+  formData: FormData,
+): Promise<Result> {
+  const tooLarge = payloadTooLarge(formData);
+  if (tooLarge) return { ok: false, error: tooLarge };
+
+  const agentId = String(formData.get("agentId") ?? "");
+  const { tenantId, agent } = await requireAgent(agentId);
+  if (!agent) return { ok: false, error: "Agente não encontrado" };
+
+  const parsed = handoffConfigSchema.safeParse(Object.fromEntries(formData));
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Dados inválidos" };
+  }
+
+  await saveHandoffConfig(tenantId, agent.id, parsed.data);
+  revalidateAgent(agent.id);
+  return { ok: true, info: "Transferência salva." };
 }
 
 // ----------------------------------------------------------- conhecimento

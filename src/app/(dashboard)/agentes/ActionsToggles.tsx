@@ -9,17 +9,21 @@ import type { ScheduleConfig } from "@/modules/scheduling/config";
 import { describeSchedule } from "@/modules/scheduling/config";
 import type { FollowUpConfig } from "@/modules/follow-up/config";
 import { describeFollowUp } from "@/modules/follow-up/config";
+import type { HandoffConfig } from "@/modules/agent-engine/handoff";
+import { describeHandoff } from "@/modules/agent-engine/handoff";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { ScheduleSettings } from "./ScheduleSettings";
 import { FollowUpSettings } from "./FollowUpSettings";
+import { HandoffSettings } from "./HandoffSettings";
 import { setActionEnabled } from "./actions";
 
 /** Rótulo do botão que abre a configuração — uma linha por ação configurável. */
 const CONFIG_LABEL: Partial<Record<ActionKey, string>> = {
   schedule_meeting: "Configurar horário de atendimento",
   follow_up: "Configurar intervalo do follow-up",
+  handoff_human: "Configurar transferência",
 };
 
 export function ActionsToggles({
@@ -28,12 +32,14 @@ export function ActionsToggles({
   planLimit,
   scheduleConfig,
   followUpConfig,
+  handoffConfig,
 }: {
   agentId: string;
   enabledKeys: string[];
   planLimit: number;
   scheduleConfig: ScheduleConfig;
   followUpConfig: FollowUpConfig;
+  handoffConfig: HandoffConfig;
 }) {
   const [enabled, setEnabled] = useState<Set<string>>(
     () => new Set(enabledKeys.filter((k) => AVAILABLE_ACTIONS.some((a) => a.key === k))),
@@ -145,6 +151,7 @@ export function ActionsToggles({
                     <p className="mt-1 text-sm text-white/45">
                       {a.key === "schedule_meeting" && describeSchedule(scheduleConfig)}
                       {a.key === "follow_up" && describeFollowUp(followUpConfig)}
+                      {a.key === "handoff_human" && describeHandoff(handoffConfig)}
                     </p>
                   )}
                 </div>
@@ -157,6 +164,9 @@ export function ActionsToggles({
                   )}
                   {a.key === "follow_up" && (
                     <FollowUpSettings agentId={agentId} config={followUpConfig} />
+                  )}
+                  {a.key === "handoff_human" && (
+                    <HandoffSettings agentId={agentId} config={handoffConfig} />
                   )}
                 </div>
               )}
