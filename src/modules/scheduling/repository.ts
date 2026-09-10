@@ -156,7 +156,7 @@ export async function createAppointment(input: CreateAppointmentInput) {
   // Os dois espelhos são independentes e nenhum lança: em paralelo, porque um
   // agendamento feito no meio de uma conversa não pode esperar duas APIs de
   // terceiro em sequência.
-  const [googleEventId, clinicorpAppointmentId] = await Promise.all([
+  const [googleEventId, clinicorpSync] = await Promise.all([
     pushEventToGoogle(input.tenantId, {
       title: input.title,
       description: input.notes ?? undefined,
@@ -173,6 +173,7 @@ export async function createAppointment(input: CreateAppointmentInput) {
       lead,
     }),
   ]);
+  const clinicorpAppointmentId = clinicorpSync.status === "synced" ? clinicorpSync.appointmentId : null;
 
   if (googleEventId || clinicorpAppointmentId) {
     await prisma.appointment.update({
@@ -184,7 +185,7 @@ export async function createAppointment(input: CreateAppointmentInput) {
     });
   }
 
-  return { ...appointment, googleEventId, clinicorpAppointmentId };
+  return { ...appointment, googleEventId, clinicorpAppointmentId, clinicorpSync };
 }
 
 export async function cancelAppointment(tenantId: string, id: string) {

@@ -164,7 +164,7 @@ const TOOLS: Record<ActionKey, ToolDef> = {
       });
       const who = lead?.name || lead?.phone || "contato";
 
-      await createAppointment({
+      const appointment = await createAppointment({
         tenantId: ctx.tenantId,
         agentId: ctx.agentId,
         leadId: ctx.leadId,
@@ -178,6 +178,9 @@ const TOOLS: Record<ActionKey, ToolDef> = {
       });
 
       const when = formatInZone(startsAt, cfg.timezone);
+      if (appointment.clinicorpSync.status === "failed") {
+        return `Agendado no fechai para ${when}${cfg.location ? ` (${cfg.location})` : ""}. O envio ao Clinicorp não foi confirmado. O horário continua reservado; não marque novamente nem afirme que já aparece no Clinicorp.`;
+      }
       return `Agendado para ${when}${cfg.location ? ` (${cfg.location})` : ""}. Confirme esse horário com o contato.`;
     },
   },

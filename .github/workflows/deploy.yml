@@ -3,7 +3,13 @@ name: Deploy Automatico Hostinger
 on:
   push:
     branches:
-      - main 
+      - main
+
+# Mantém um único envio à VPS por vez. O lock no servidor cobre também deploys
+# iniciados manualmente fora do GitHub Actions.
+concurrency:
+  group: fechai-production
+  cancel-in-progress: false
 
 jobs:
   # Portão antes do deploy: tipos, lint e os testes de autorização.
@@ -41,11 +47,10 @@ jobs:
           username: ${{ secrets.HOST_USERNAME }}
           key: ${{ secrets.HOST_SSH_KEY }}
           port: 22
+          command_timeout: 30m
           script: |
             cd /var/www/Fechai
-            
-            git pull origin main
-            
-            docker compose down
-            docker compose up -d --build
+            git pull --ff-only origin main
+            chmod +x deploy.sh
+            ./deploy.sh all
             

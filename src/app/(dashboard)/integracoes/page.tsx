@@ -16,7 +16,7 @@ import { dateLabel } from "@/lib/format";
 import { ensureTenantWidgetDeployed } from "@/lib/widget/deploy";
 import { isGoogleCalendarConfigured } from "@/modules/scheduling/google";
 import { getCalendarFeatures } from "@/modules/scheduling/features";
-import { listClinicorpBusinesses } from "@/modules/scheduling/clinicorp";
+import { getClinicorpStatus, listClinicorpBusinesses } from "@/modules/scheduling/clinicorp";
 import { isEncryptionConfigured } from "@/lib/crypto";
 import { CalendarFeatureToggles } from "./CalendarFeatureToggles";
 import { GoogleCalendarCard, type GoogleState } from "./GoogleCalendarCard";
@@ -84,7 +84,7 @@ export default async function IntegracoesPage({
       ? await Promise.all([
           getCalendarFeatures(tenantId),
           prisma.calendarIntegration.findUnique({ where: { tenantId } }),
-          prisma.clinicorpIntegration.findUnique({ where: { tenantId } }),
+          getClinicorpStatus(tenantId),
         ])
       : null;
 

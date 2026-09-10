@@ -10,6 +10,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { describeSchedule, parseScheduleConfig } from "@/modules/scheduling/config";
 import { isGoogleCalendarConfigured } from "@/modules/scheduling/google";
 import { getCalendarFeatures } from "@/modules/scheduling/features";
+import { getClinicorpStatus } from "@/modules/scheduling/clinicorp";
 import { listMonthAppointments } from "@/modules/scheduling/repository";
 import { timeInZone, todayInZone } from "@/modules/scheduling/time";
 import { leadStatusLabel } from "../conversas/leadStatus";
@@ -78,7 +79,7 @@ export default async function AgendaPage({
     listMonthAppointments(tenantId, year, month, config.timezone),
     getCalendarFeatures(tenantId),
     prisma.calendarIntegration.findUnique({ where: { tenantId } }),
-    prisma.clinicorpIntegration.findUnique({ where: { tenantId } }),
+    getClinicorpStatus(tenantId),
     prisma.lead.findMany({
       where: { tenantId, isTest: false },
       orderBy: { createdAt: "desc" },
@@ -127,7 +128,7 @@ export default async function AgendaPage({
           connected: Boolean(clinicorp),
           sending: Boolean(clinicorp?.syncEnabled),
           receiving: Boolean(clinicorp?.checkAvailability),
-          error: clinicorp?.lastError ?? null,
+          error: clinicorp?.lastError ?? (clinicorp && !clinicorp.businessId ? "Escolha a clínica em Integrações." : null),
         }
       : null,
   ] as (CalendarSyncItem | null)[]).filter((x) => x !== null);
@@ -157,6 +158,7 @@ export default async function AgendaPage({
             contacts={contactOptions}
             defaultDate={selectedKey ?? `${today.year}-${pad(today.month)}-${pad(today.day)}`}
             defaultDuration={config.durationMinutes}
+            requiresContact={Boolean(features.clinicorpEnabled && clinicorp?.syncEnabled)}
           />
         }
       />
@@ -260,6 +262,13 @@ export default async function AgendaPage({
                           {appointment.googleEventId && (
                             <p className="mt-2 font-mono text-micro uppercase tracking-wide text-white/35">
                               no google agenda
+                            </p>
+                          )}
+                          {appointment.status === "scheduled" && features.clinicorpEnabled && (
+                            <p className={`mt-2 text-xs ${appointment.clinicorpAppointmentId ? "text-success" : "text-warn"}`}>
+                              {appointment.clinicorpAppointmentId
+                                ? "Envio confirmado pelo Clinicorp"
+                                : "Sem confirmação de envio ao Clinicorp"}
                             </p>
                           )}
                         </div>

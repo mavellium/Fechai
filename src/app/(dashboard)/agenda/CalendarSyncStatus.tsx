@@ -54,7 +54,7 @@ export function CalendarSyncStatus({ items }: { items: CalendarSyncItem[] }) {
               <Icon
                 size={16}
                 aria-hidden
-                className={`mt-0.5 shrink-0 ${item.connected ? "text-success" : "text-white/40"}`}
+                className={`mt-0.5 shrink-0 ${item.error ? "text-warn" : item.connected ? "text-success" : "text-white/40"}`}
               />
               <div className="min-w-0 flex-1">
                 <p className="text-sm text-white">{item.name}</p>
@@ -73,14 +73,14 @@ export function CalendarSyncStatus({ items }: { items: CalendarSyncItem[] }) {
                   <p className="mt-0.5 text-xs text-white/55">
                     {/* Enviando/recebendo em vez de só "conectado": é o que a
                         pessoa quer saber ao marcar um horário. */}
-                    {describeFlow(item.sending, item.receiving)}
+                    {item.error ? "Sincronização precisa de atenção" : describeFlow(item.sending, item.receiving)}
                   </p>
                 )}
 
                 {item.error && (
                   <p className="mt-1 flex items-start gap-1.5 text-xs text-warn">
                     <TriangleAlert size={13} aria-hidden className="mt-0.5 shrink-0" />
-                    <span>Última tentativa falhou. Verifique em Integrações.</span>
+                    <span>{item.error} Verifique em Integrações.</span>
                   </p>
                 )}
               </div>
@@ -93,9 +93,9 @@ export function CalendarSyncStatus({ items }: { items: CalendarSyncItem[] }) {
 }
 
 function describeFlow(sending: boolean, receiving: boolean): string {
-  if (sending && receiving) return "Conectado · enviando e recebendo";
-  if (sending) return "Conectado · enviando horários";
-  if (receiving) return "Conectado · recebendo a agenda";
+  if (sending && receiving) return "Credenciais salvas · envio e consulta de disponibilidade ativados";
+  if (sending) return "Credenciais salvas · envio de horários ativado";
+  if (receiving) return "Credenciais salvas · consulta de disponibilidade ativada";
   // Conectado com os dois desligados: a sincronização está pausada nos toggles.
   return "Conectado · sincronização pausada";
 }

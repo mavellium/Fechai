@@ -13,9 +13,11 @@ import { Switch } from "@/components/ui/switch";
 import {
   connectClinicorpAction,
   disconnectClinicorpAction,
+  loadClinicorpCategoriesAction,
   loadClinicorpProfessionalsAction,
   saveClinicorpSettingsAction,
   setClinicorpToggle,
+  testClinicorpConnectionAction,
 } from "./actions";
 
 export type ClinicorpBusinessOption = { id: string; name: string };
@@ -125,18 +127,40 @@ function ClinicorpConnected({ state }: { state: Extract<ClinicorpState, { connec
     saveClinicorpSettingsAction,
     null,
   );
+  // Campos controlados preservam a seleção quando as opções chegam depois da
+  // montagem. O envio abaixo evita também o reset nativo após Server Actions.
+  const [businessId, setBusinessId] = useState(state.businessId ?? (state.businesses.length === 1 ? state.businesses[0].id : ""));
+  const [dentistId, setDentistId] = useState(state.dentistId ?? "");
+  const [category, setCategory] = useState(state.categoryDescription ?? "");
 
   // Os profissionais só são buscados quando a pessoa abre o seletor: são uma
   // chamada de rede ao Clinicorp, e a agenda carrega em toda navegação.
   const [professionals, setProfessionals] = useState<{ id: string; name: string }[] | null>(null);
   const [loadingPros, setLoadingPros] = useState(false);
+  const [categories, setCategories] = useState<{ id: string; name: string }[] | null>(null);
+  const [loadingCategories, setLoadingCategories] = useState(false);
+  const [testing, startTest] = useTransition();
+  const [testResult, setTestResult] = useState<{ ok: boolean; info?: string; error?: string } | null>(null);
 
   function loadProfessionals() {
     if (professionals || loadingPros) return;
     setLoadingPros(true);
     startTransition(async () => {
-      setProfessionals(await loadClinicorpProfessionalsAction().catch(() => []));
+      const result = await loadClinicorpProfessionalsAction().catch(() => ({ ok: false as const, error: "Não foi possível carregar os profissionais. Tente novamente." }));
+      if (result.ok) { setProfessionals(result.data); setError(null); }
+      else setError(result.error);
       setLoadingPros(false);
+    });
+  }
+
+  function loadCategories() {
+    if (categories || loadingCategories) return;
+    setLoadingCategories(true);
+    startTransition(async () => {
+      const result = await loadClinicorpCategoriesAction().catch(() => ({ ok: false as const, error: "Não foi possível carregar as categorias. Tente novamente." }));
+      if (result.ok) { setCategories(result.data); setError(null); }
+      else setError(result.error);
+      setLoadingCategories(false);
     });
   }
 
@@ -160,18 +184,30 @@ function ClinicorpConnected({ state }: { state: Extract<ClinicorpState, { connec
         </p>
       </div>
 
+      <Button type="button" size="sm" variant="outline" loading={testing} onClick={() => startTest(async () => {
+        setTestResult(await testClinicorpConnectionAction().catch(() => ({ ok: false, error: "Não foi possível testar a conexão. Tente novamente." })));
+      })}>
+        Testar conexão
+      </Button>
+      {testResult && <Alert tone={testResult.ok ? "success" : "danger"}>{testResult.info ?? testResult.error}</Alert>}
+
       {/* A credencial pode vencer sem ninguém perceber: o último erro fica à
           vista em vez de só no log do servidor. */}
       {state.lastError && (
         <Alert tone="warn">
-          Última tentativa falhou: {state.lastError} Reconecte com credenciais novas se isso
-          continuar.
+          Última tentativa falhou: {state.lastError}
         </Alert>
       )}
 
-      <form action={saveSettings} className="space-y-3">
-        {state.businesses.length > 1 && (
-          <Field
+      {/* Via onSubmit + transition, pois <form action> dispara um reset nativo
+          no commit do React (até selects controlados voltam à primeira opção).
+          Preferências devem continuar preenchidas após sucesso ou erro. */}
+      <form onSubmit={(event) => {
+        event.preventDefault();
+        const data = new FormData(event.currentTarget);
+        startTransition(() => saveSettings(data));
+      }} className="space-y-3">
+        <Field
             label="Clínica"
             htmlFor={`${id}-business`}
             hint="Onde os horários marcados aqui vão entrar."
@@ -180,41 +216,42 @@ function ClinicorpConnected({ state }: { state: Extract<ClinicorpState, { connec
               {...fieldProps(`${id}-business`, { hint: true })}
               name="businessId"
               size="sm"
-              defaultValue={state.businessId ?? ""}
+              value={businessId}
+              onChange={(event) => setBusinessId(event.target.value)}
+              required
             >
               <option value="">Escolha a clínica</option>
+              {businessId && !state.businesses.some((b) => b.id === businessId) && (
+                <option value={businessId}>Clínica selecionada · {businessId}</option>
+              )}
               {state.businesses.map((b) => (
                 <option key={b.id} value={b.id}>
                   {b.name}
                 </option>
               ))}
             </Select>
-          </Field>
-        )}
-        {/* Uma clínica só: nada a escolher, mas o valor precisa ir no envio. */}
-        {state.businesses.length <= 1 && (
-          <input type="hidden" name="businessId" value={state.businessId ?? ""} />
-        )}
+        </Field>
 
         <Field
           label="Profissional padrão"
           htmlFor={`${id}-dentist`}
-          hint="Sem escolher, o horário entra na agenda da clínica sem profissional."
+          hint="Escolha quem vai atender para o horário aparecer na agenda desse profissional."
           optional
         >
           <Select
             {...fieldProps(`${id}-dentist`, { hint: true })}
             name="dentistId"
             size="sm"
-            defaultValue={state.dentistId ?? ""}
+            value={dentistId}
+            onChange={(event) => setDentistId(event.target.value)}
             onFocus={loadProfessionals}
             onMouseDown={loadProfessionals}
           >
             <option value="">Nenhum</option>
             {/* Antes de carregar a lista, o valor já salvo precisa existir como
                 opção — senão o select "esquece" a escolha ao renderizar. */}
-            {!professionals && state.dentistId && (
-              <option value={state.dentistId}>Profissional selecionado</option>
+            {dentistId && !professionals?.some((p) => p.id === dentistId) && (
+              <option value={dentistId}>Profissional selecionado · {dentistId}</option>
             )}
             {professionals?.map((p) => (
               <option key={p.id} value={p.id}>
@@ -222,26 +259,41 @@ function ClinicorpConnected({ state }: { state: Extract<ClinicorpState, { connec
               </option>
             ))}
           </Select>
+          {loadingPros && <p className="text-xs text-white/50" role="status">Carregando profissionais…</p>}
         </Field>
 
         <Field
           label="Categoria do agendamento"
           htmlFor={`${id}-category`}
-          hint="Nome exato de uma categoria já cadastrada no Clinicorp — define a cor na agenda."
+          hint="Selecione Avaliação para usar essa categoria e cor na agenda. O procedimento é um campo separado no Clinicorp."
           optional
         >
-          <Input
+          <Select
             {...fieldProps(`${id}-category`, { hint: true })}
             name="categoryDescription"
-            defaultValue={state.categoryDescription ?? ""}
-            placeholder="Avaliação"
-          />
+            value={category}
+            onChange={(event) => setCategory(event.target.value)}
+            onFocus={loadCategories}
+            onMouseDown={loadCategories}
+          >
+            <option value="">Sem categoria</option>
+            {category && !categories?.some((c) => c.name === category) && (
+              <option value={category}>{category} (salva)</option>
+            )}
+            {categories?.map((c) => (
+              <option key={c.id} value={c.name} disabled={categories.filter((other) => other.name === c.name).length > 1}>
+                {c.name}{categories.filter((other) => other.name === c.name).length > 1 ? " (nome duplicado no Clinicorp)" : ""}
+              </option>
+            ))}
+          </Select>
+          {loadingCategories && <p className="text-xs text-white/50" role="status">Carregando categorias…</p>}
         </Field>
 
         <Button type="submit" size="sm" variant="outline" loading={savingSettings}>
           Salvar preferências
         </Button>
         {settings && !settings.ok && <Alert tone="danger">{settings.error}</Alert>}
+        {settings?.ok && <Alert tone="success">{settings.info}</Alert>}
       </form>
 
       <div className="space-y-3 border-t border-white/10 pt-3">

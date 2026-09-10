@@ -6,7 +6,7 @@ import { CalendarPlus, X } from "lucide-react";
 import posthog from "posthog-js";
 import { Button } from "@/components/ui/button";
 import { Field, fieldProps } from "@/components/ui/field";
-import { FormFeedback } from "@/components/ui/alert";
+import { Alert, FormFeedback } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -24,11 +24,13 @@ export function NewAppointmentDialog({
   contacts,
   defaultDate,
   defaultDuration,
+  requiresContact = false,
 }: {
   contacts: ContactOption[];
   /** Dia aberto no calendário — já vem preenchido para poupar dois cliques. */
   defaultDate: string;
   defaultDuration: number;
+  requiresContact?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const router = useRouter();
@@ -48,6 +50,7 @@ export function NewAppointmentDialog({
         <CalendarPlus size={14} aria-hidden />
         Marcar horário
       </Button>
+      {state?.warning && <Alert tone="warn">{state.warning}</Alert>}
 
       <dialog
         ref={ref}
@@ -114,9 +117,10 @@ export function NewAppointmentDialog({
                 required
               />
             </Field>
-            <Field label="Contato" htmlFor="ag-lead" optional>
-              <Select {...fieldProps("ag-lead")} name="leadId" defaultValue="">
-                <option value="">Sem contato vinculado</option>
+            <Field label="Contato" htmlFor="ag-lead" optional={!requiresContact}
+              hint={requiresContact ? "Obrigatório para identificar o paciente no Clinicorp." : undefined}>
+              <Select {...fieldProps("ag-lead", { hint: requiresContact })} name="leadId" defaultValue="" required={requiresContact}>
+                <option value="">{requiresContact ? "Selecione o contato" : "Sem contato vinculado"}</option>
                 {contacts.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.label}

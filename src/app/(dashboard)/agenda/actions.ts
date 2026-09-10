@@ -13,8 +13,10 @@ import {
   markAppointmentDone,
 } from "@/modules/scheduling/repository";
 import { parseLocalDateTime } from "@/modules/scheduling/time";
+import { getClinicorpStatus } from "@/modules/scheduling/clinicorp";
+import { getCalendarFeatures } from "@/modules/scheduling/features";
 
-type Result = { ok: boolean; error?: string; info?: string };
+type Result = { ok: boolean; error?: string; info?: string; warning?: string };
 
 function revalidateAgenda() {
   revalidatePath("/agenda");
@@ -77,16 +79,24 @@ export async function createManualAppointment(
   // Contato opcional — e sempre validado contra a conta, porque o id vem do
   // formulário. Contato de teste não pode ser agendado.
   let leadId: string | null = null;
+  const [features, clinicorp] = await Promise.all([getCalendarFeatures(tenantId), getClinicorpStatus(tenantId)]);
+  const requiresContact = features.clinicorpEnabled && clinicorp?.syncEnabled;
+  if (requiresContact && !parsed.data.leadId) {
+    return { ok: false, error: "Selecione um contato para enviar o horário ao Clinicorp." };
+  }
   if (parsed.data.leadId) {
     const lead = await prisma.lead.findFirst({
       where: { id: parsed.data.leadId, tenantId, isTest: false },
-      select: { id: true },
+      select: { id: true, phone: true },
     });
     if (!lead) return { ok: false, error: "Contato não encontrado." };
+    if (requiresContact && !lead.phone?.replace(/\D/g, "")) {
+      return { ok: false, error: "O contato precisa ter telefone para o agendamento no Clinicorp." };
+    }
     leadId = lead.id;
   }
 
-  await createAppointment({
+  const appointment = await createAppointment({
     tenantId,
     agentId,
     leadId,
@@ -99,6 +109,11 @@ export async function createManualAppointment(
   });
 
   revalidateAgenda();
+  revalidatePath("/integracoes");
+  if (appointment.clinicorpSync.status === "failed") {
+    return { ok: true, info: "Compromisso salvo no fechai.",
+      warning: `O envio ao Clinicorp não foi confirmado. ${appointment.clinicorpSync.error} Não crie outro compromisso: confira a agenda da clínica e a integração.` };
+  }
   return { ok: true, info: "Compromisso marcado." };
 }
 

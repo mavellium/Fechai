@@ -53,6 +53,7 @@ async function call<T>(
   init: { method?: "GET" | "POST"; query?: Record<string, string | number | undefined>; body?: unknown } = {},
 ): Promise<CallResult<T>> {
   const url = new URL(`${API_BASE}${path}`);
+  url.searchParams.set("subscriber_id", cred.subscriberId);
   for (const [k, v] of Object.entries(init.query ?? {})) {
     if (v !== undefined && v !== "") url.searchParams.set(k, String(v));
   }
@@ -83,7 +84,14 @@ async function call<T>(
     // Alguns endpoints respondem 200 com corpo vazio.
     const text = await res.text();
     if (!text.trim()) return { ok: true, data: null as T };
-    return { ok: true, data: JSON.parse(text) as T };
+    const data = JSON.parse(text) as T;
+    const row = (Array.isArray(data) ? data[0] : data) as Record<string, unknown> | null;
+    if (row && typeof row === "object" &&
+        (row.error || row.Error || row.success === false ||
+         /^(ERROR|FAILED|FAILURE)$/i.test(String(row.Status ?? row.status ?? "")))) {
+      return { ok: false, error: "O Clinicorp recusou a operação. Confira as credenciais e os dados do agendamento." };
+    }
+    return { ok: true, data };
   } catch (err) {
     const error =
       err instanceof Error && err.name === "TimeoutError"
@@ -149,6 +157,17 @@ async function getIntegration(
 
 export type ClinicorpBusiness = { id: string; name: string };
 export type ClinicorpProfessional = { id: string; name: string };
+export type ClinicorpCategory = { id: string; name: string };
+
+/** Metadados para a UI, sem levar credenciais à camada de apresentação. */
+export async function getClinicorpStatus(tenantId: string) {
+  const integration = await getIntegration(tenantId, { ignoreFeatureFlag: true });
+  if (!integration) return null;
+  const { subscriberId, businessId, dentistId, categoryDescription, syncEnabled,
+    checkAvailability, lastError, lastSyncAt } = integration;
+  return { subscriberId, businessId, dentistId, categoryDescription, syncEnabled,
+    checkAvailability, lastError, lastSyncAt };
+}
 
 /**
  * As credenciais funcionam? Usa `/business/list` como ping: é o endpoint mais
@@ -163,7 +182,8 @@ export async function verifyClinicorpCredentials(
   });
   if (!res.ok) return { ok: false, error: res.error };
 
-  const rows = Array.isArray(res.data) ? res.data : [];
+  if (!Array.isArray(res.data)) return { ok: false, error: "O Clinicorp não devolveu a lista de clínicas. Verifique o acesso da API." };
+  const rows = res.data.filter((row) => row && typeof row === "object");
   const businesses = rows.map((row) => {
     const r = row as Record<string, unknown>;
     return {
@@ -172,7 +192,9 @@ export async function verifyClinicorpCredentials(
       name: String(r.Name || r.BusinessName || "Clínica"),
     };
   });
-  return { ok: true, businesses: businesses.filter((b) => b.id) };
+  const valid = businesses.filter((b) => b.id);
+  if (!valid.length) return { ok: false, error: "Nenhuma clínica disponível para este assinante. Verifique as credenciais e as permissões da API." };
+  return { ok: true, businesses: valid };
 }
 
 /**
@@ -193,23 +215,62 @@ export async function listClinicorpBusinesses(tenantId: string): Promise<Clinico
 /** Profissionais da conta — a tela usa para escolher o dentista padrão. */
 export async function listClinicorpProfessionals(
   tenantId: string,
-): Promise<ClinicorpProfessional[]> {
+): Promise<CallResult<ClinicorpProfessional[]>> {
   const integration = await getIntegration(tenantId);
-  if (!integration) return [];
+  if (!integration) return { ok: false, error: "Clinicorp não está conectado." };
 
   const res = await call<unknown>(integration, "/professional/list_all_professionals", {
     query: { subscriber_id: integration.subscriberId },
   });
-  if (!res.ok) return [];
+  if (!res.ok) return res;
+  if (!Array.isArray(res.data)) return { ok: false, error: "O Clinicorp não devolveu a lista de profissionais." };
 
   const rows = Array.isArray(res.data) ? res.data : [];
-  return rows
+  const data = rows
+    .filter((row) => row && typeof row === "object")
     .map((row) => {
       const r = row as Record<string, unknown>;
       return { id: String(r.id ?? ""), name: String(r.name ?? "") };
     })
     .filter((p) => p.id && p.name);
+  return { ok: true, data };
 }
+
+async function fetchCategories(cred: ClinicorpCredentials): Promise<CallResult<ClinicorpCategory[]>> {
+  const res = await call<unknown>(cred, "/appointment/list_categories");
+  if (!res.ok) return res;
+  if (!Array.isArray(res.data)) return { ok: false, error: "O Clinicorp não devolveu a lista de categorias." };
+  const data = res.data.filter((row) => row && typeof row === "object")
+    .map((row) => ({ id: String(row.id ?? ""), name: String(row.Description ?? "") }))
+    .filter((row) => row.id && row.name);
+  return { ok: true, data };
+}
+
+export async function listClinicorpCategories(tenantId: string): Promise<CallResult<ClinicorpCategory[]>> {
+  const integration = await getIntegration(tenantId);
+  if (!integration) return { ok: false, error: "Clinicorp não está conectado." };
+  return fetchCategories(integration);
+}
+
+/** Testa acesso sem criar paciente/agendamento e sem apagar erros de envio. */
+export async function testClinicorpConnection(tenantId: string): Promise<CallResult<string>> {
+  const integration = await getIntegration(tenantId);
+  if (!integration) return { ok: false, error: "Clinicorp não está conectado. Revise as credenciais." };
+  const result = await verifyClinicorpCredentials(integration);
+  if (!result.ok) {
+    await recordOutcome(tenantId, result.error);
+    return result;
+  }
+  if (!result.businesses.some((b) => b.id === integration.businessId)) {
+    return { ok: false, error: "A API respondeu, mas falta escolher uma clínica disponível e salvar as preferências." };
+  }
+  return { ok: true, data: "Acesso à clínica confirmado agora. Este teste consulta a API; o envio é confirmado em cada agendamento." };
+}
+
+export type ClinicorpSyncResult =
+  | { status: "synced"; appointmentId: string }
+  | { status: "skipped" }
+  | { status: "failed"; error: string };
 
 // ---------------------------------------------------------------------------
 // Paciente
@@ -302,24 +363,52 @@ function localDate(date: Date, timeZone: string): string {
 }
 
 /**
- * Espelha o compromisso no Clinicorp. Devolve o id do agendamento de lá, ou
- * null quando a conta não está conectada / a sincronização falhou.
+ * Espelha o compromisso no Clinicorp. Distingue envio confirmado, falha e
+ * integração desligada para o chamador não prometer um envio que não ocorreu.
  *
  * Nunca lança — ver o comentário no topo do arquivo.
  */
 export async function pushAppointmentToClinicorp(
   tenantId: string,
   input: ClinicorpEventInput,
-): Promise<string | null> {
+): Promise<ClinicorpSyncResult> {
+  const failed = async (error: string): Promise<ClinicorpSyncResult> => {
+    await recordOutcome(tenantId, error);
+    return { status: "failed", error };
+  };
   try {
     const integration = await getIntegration(tenantId);
-    if (!integration || !integration.syncEnabled) return null;
+    if (!integration || !integration.syncEnabled) return { status: "skipped" };
     if (!integration.businessId) {
-      await recordOutcome(tenantId, "Nenhuma clínica escolhida para receber os agendamentos.");
-      return null;
+      return await failed("Nenhuma clínica escolhida para receber os agendamentos.");
+    }
+    if (!input.lead?.phone || !digits(input.lead.phone)) {
+      return await failed("Vincule um contato com telefone para enviar o agendamento ao Clinicorp.");
+    }
+
+    // O nome continua no banco por compatibilidade. Resolva o ID real antes de
+    // enviar: descrições duplicadas não podem escolher uma categoria ao acaso.
+    let categoryId: string | undefined;
+    if (integration.categoryDescription) {
+      const categories = await fetchCategories(integration);
+      if (!categories.ok) return await failed(categories.error);
+      const matches = categories.data.filter((c) => c.name === integration.categoryDescription);
+      if (matches.length !== 1) {
+        return await failed("A categoria escolhida não existe ou tem nome duplicado no Clinicorp. Revise a categoria em Integrações.");
+      }
+      categoryId = matches[0].id;
+    }
+
+    for (const id of [integration.businessId, integration.dentistId, categoryId]) {
+      if (id && (!/^\d+$/.test(id) || !Number.isSafeInteger(Number(id)) || Number(id) <= 0)) {
+        return await failed("O identificador da clínica, profissional ou categoria é inválido ou excede a precisão suportada.");
+      }
     }
 
     const patientId = input.lead ? await resolvePatientId(integration, input.lead) : null;
+    if (patientId && (!/^\d+$/.test(patientId) || !Number.isSafeInteger(Number(patientId)) || Number(patientId) <= 0)) {
+      return await failed("O identificador do paciente é inválido ou excede a precisão suportada.");
+    }
 
     const res = await call<unknown>(integration, "/appointment/create_appointment_by_api", {
       method: "POST",
@@ -335,28 +424,29 @@ export async function pushAppointmentToClinicorp(
         date: `${localDate(input.startsAt, input.timeZone)}T00:00:00.000Z`,
         fromTime: localTime(input.startsAt, input.timeZone),
         toTime: localTime(input.endsAt, input.timeZone),
-        ...(integration.categoryDescription
-          ? { CategoryDescription: integration.categoryDescription }
-          : {}),
+        ...(categoryId ? { CategoryId: Number(categoryId) } : {}),
         ...(input.notes ? { Notes: input.notes } : {}),
       },
     });
 
     if (!res.ok) {
       console.error("[clinicorp] criar agendamento falhou", res.error);
-      await recordOutcome(tenantId, res.error);
-      return null;
+      return await failed(res.error);
     }
 
     const row = (Array.isArray(res.data) ? res.data[0] : res.data) as
       | Record<string, unknown>
       | undefined;
     const id = row?.id ?? row?.Id;
+    if (!id || !/^\d+$/.test(String(id)) || !Number.isSafeInteger(Number(id)) || Number(id) <= 0 ||
+        (row?.Status && row.Status !== "CREATED")) {
+      return await failed("O Clinicorp não confirmou a criação com um identificador válido. O horário está salvo no fechai; confira a agenda da clínica antes de tentar novamente.");
+    }
     await recordOutcome(tenantId, null);
-    return id ? String(id) : null;
+    return { status: "synced", appointmentId: String(id) };
   } catch (err) {
     console.error("[clinicorp] criar agendamento falhou", err);
-    return null;
+    return failed("Não foi possível confirmar o envio do horário ao Clinicorp.");
   }
 }
 

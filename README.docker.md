@@ -1,7 +1,8 @@
 # fechai — Deploy com Docker (servidor Linux)
 
-Este documento cobre a stack de **produção**: `docker-compose.yml` orquestra 6 serviços — `web` e
-`worker` rodam a mesma imagem (`Dockerfile`, só o `command` muda), e `evolution` +
+Este documento cobre a stack de **produção**: `docker-compose.yml` orquestra o app em dois slots
+(`web-blue` e `web-green`) e um `worker`. Eles rodam a mesma imagem (`Dockerfile`, só o `command`
+muda), e `evolution` +
 `evolution-postgres` são o gateway de WhatsApp (Evolution API v2, self-hosted). O acesso HTTPS do
 subdomínio `fechai.januscms.com.br` é feito pelo **Traefik** do servidor (mesmo padrão do projeto
 janus). Para rodar só a Evolution na sua máquina local (sem a stack), existe o
@@ -22,9 +23,9 @@ janus). Para rodar só a Evolution na sua máquina local (sem a stack), existe o
                     └──────┬───────┘
                            │  rede traefik-public
                            ▼
-                    ┌─────────────┐
-                    │     web     │  (Next.js — next start, :3000)
-                    └──────┬──────┘
+              ┌────────────┴────────────┐
+              │ web-blue ou web-green  │  (Next.js — troca sem interrupção)
+              └────────────┬────────────┘
                            │
             ┌──────────────┼──────────────┐
             ▼                             ▼
@@ -44,8 +45,8 @@ janus). Para rodar só a Evolution na sua máquina local (sem a stack), existe o
     └──────────────────────┘        └──────────────────────┘
 ```
 
-Rede interna dedicada (`fechai_net`) + rede externa `traefik-public` (o `web` entra nela e o Traefik
-roteia `fechai.januscms.com.br` → `web:3000` por labels — sem porta mapeada no host pro app). O `web`
+Rede interna dedicada (`fechai_net`) + rede externa `traefik-public` (os slots web entram nela e o
+Traefik roteia o domínio para o slot saudável — sem porta mapeada no host). O app
 alcança `evolution`, `postgres` e `redis` pela rede interna. `evolution` publica a porta em
 `127.0.0.1` (`EVOLUTION_PORT`, admin/debug via túnel SSH no próprio servidor); `postgres`/`redis`
 idem — nenhum serviço fica alcançável da rede externa.
@@ -96,14 +97,14 @@ os sobrescreve automaticamente para apontar para os serviços `postgres`/`redis`
 ## Primeira subida
 
 Confira que a rede `traefik-public` existe (senão `docker network create traefik-public`) e que o
-Traefik já está rodando — o `web` só é alcançável através dele.
+Traefik já está rodando — os slots web só são alcançáveis através dele.
 
 ```bash
-docker compose build
-docker compose up -d --wait
+docker compose up -d --wait postgres redis evolution-postgres evolution
+./deploy.sh all
 ```
 
-O `depends_on` com `condition: service_healthy` garante que `web` e `worker` só sobem depois que
+O `depends_on` com `condition: service_healthy` garante que app e worker só sobem depois que
 `postgres` e `redis` responderem saudáveis. No fim, o app responde em
 https://fechai.januscms.com.br (assim que o Traefik emitir o certificado).
 
@@ -113,16 +114,18 @@ O projeto usa `prisma db push` (não há `prisma migrate` configurado ainda — 
 abaixo). Depois do primeiro `up -d`, rode uma vez:
 
 ```bash
-docker compose exec web npx prisma db push
+DEPLOY_DB_PUSH=1 ./deploy.sh web
 ```
 
 Se quiser popular dados iniciais (opcional, ver `prisma/seed.ts`):
 
 ```bash
-docker compose exec web npx prisma db seed
+docker compose --profile blue --profile green exec web-blue npx prisma db seed
 ```
 
-Repita o `db push` (não o seed) sempre que o `schema.prisma` mudar em um novo deploy.
+Repita o `db push` (não o seed) sempre que o `schema.prisma` mudar em um novo deploy. A mudança deve
+ser retrocompatível com a versão que ainda está atendendo durante a troca; mudanças destrutivas
+exigem implantação em etapas.
 
 ## Conectar o WhatsApp (Evolution API)
 
@@ -153,7 +156,7 @@ rodando via `npm run dev`.
 docker compose ps
 
 # logs (Ctrl+C para sair, os processos continuam rodando)
-docker compose logs -f web
+docker compose --profile blue --profile green logs -f web-blue web-green
 docker compose logs -f worker
 
 # parar tudo (mantém os volumes/dados)
@@ -166,18 +169,19 @@ docker compose down -v
 ## Atualizar para uma nova versão do código
 
 ```bash
-git pull
-./deploy.sh                                  # build + restart do web (padrão janus)
-docker compose exec web npx prisma db push   # se o schema mudou
+git pull --ff-only origin main
+./deploy.sh all
 ```
 
-Ou manualmente (equivalente):
+O deploy usa dois slots. Ele compila a nova imagem enquanto o slot atual atende, sobe o slot
+inativo, espera seu `/api/health`, aguarda o Traefik descobri-lo e só então para o anterior. Se o
+build, o boot ou o health check falhar, a versão atual continua no ar. Os comandos disponíveis são:
 
 ```bash
-git pull
-docker compose build
-docker compose up -d --wait
-docker compose exec web npx prisma db push   # se o schema mudou
+./deploy.sh web       # somente o site
+./deploy.sh worker    # somente o worker
+./deploy.sh all       # site e worker; padrão do GitHub Actions
+./deploy.sh rollback  # religa o slot web anterior preservado
 ```
 
 ## Validar que cada serviço está saudável
@@ -193,7 +197,7 @@ Cada linha deve mostrar `healthy` na coluna de status. Health checks configurado
 | `postgres` | `pg_isready` |
 | `redis` | `redis-cli ping` |
 | `evolution-postgres` | `pg_isready` |
-| `web` | `GET /api/health` (endpoint já existia no projeto, testa a conexão com o banco) |
+| `web-blue` / `web-green` | `GET /api/health` (também testa a conexão com o banco) |
 | `worker` | conexão de ping com o Redis via `ioredis` (script em `docker/healthcheck-worker.js`) |
 
 Teste manual do app depois de subir:

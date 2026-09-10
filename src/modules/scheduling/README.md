@@ -2,8 +2,8 @@
 
 A agenda do fechai é a **fonte da verdade**. Google Agenda e Clinicorp são
 espelhos opcionais, ligados por conta (tenant). Nenhum dos dois pode derrubar um
-atendimento: as funções de integração **nunca lançam** — falham em silêncio, com
-log, e o horário combinado com o lead continua de pé.
+atendimento: as funções de integração **nunca lançam** — a falha é registrada e
+mostrada no painel, e o horário combinado com o lead continua de pé.
 
 ## Arquivos
 
@@ -99,9 +99,10 @@ Base: `https://api.clinicorp.com/rest/v1`. Quase todo endpoint pede
 
 ### Regras que não são óbvias
 
-- **Ids são inteiros de 64 bits** (ex.: `4791226171916288`), fora do alcance
-  seguro do `Number` do JS. Guardados como `String` no banco e convertidos com
-  `Number()` só na hora de montar o corpo da requisição.
+- **Ids são inteiros e ficam como `String` no banco.** O exemplo
+  `4791226171916288` cabe no `Number` seguro do JS; nem todo inteiro de 64 bits
+  cabe. O envio valida a faixa segura antes de converter, recusando ids fora
+  dela em vez de arredondar e enviar para outra clínica/profissional/paciente.
 - **A data vai como dia local, não instante UTC.** `fromTime`/`toTime` são hora
   local (`HH:mm`) e `date` é o dia local em ISO com `T00:00:00.000Z`. Mandar o
   instante UTC cru jogaria horários da manhã no Brasil para o dia anterior.
@@ -123,10 +124,38 @@ Base: `https://api.clinicorp.com/rest/v1`. Quase todo endpoint pede
   venceu. Sem isso, um token expirado só apareceria quando a clínica reclamasse
   de um paciente que não chegou na agenda.
 
+### Confirmação de envio e preferências
+
+- `pushAppointmentToClinicorp` devolve `ClinicorpSyncResult`: `synced` com id,
+  `failed` com motivo ou `skipped` quando desligado/sem conexão. HTTP 200 vazio,
+  objeto de erro e resposta sem id válido **não são confirmação de criação**.
+  Só uma criação confirmada atualiza `lastSyncAt` e limpa o erro de envio.
+- `createAppointment` conserva o compromisso local e devolve esse resultado.
+  A criação manual mostra aviso de falha; a ferramenta do agente não afirma
+  que o horário já aparece no Clinicorp. A agenda indica o envio por compromisso
+  usando `clinicorpAppointmentId`, inclusive quando outro envio posterior deu certo.
+- O contato com telefone é obrigatório no formulário manual quando o envio ao
+  Clinicorp está ativado; sem espelho continua opcional. O servidor também valida.
+- Profissional, clínica e categoria são campos controlados no formulário. O
+  envio usa `onSubmit` + `startTransition` + `useActionState`, sem `<form action>`:
+  seu reset nativo altera até um select controlado sem disparar `onChange`.
+  Uma lista que falhou ao
+  carregar não apaga a opção salva, e o erro permite tentar carregar novamente.
+- Categorias vêm de `GET /appointment/list_categories`. Mantemos o nome na coluna
+  existente e resolvemos o `CategoryId` antes de enviar, exigindo nome único.
+  Categoria ausente ou duplicada gera aviso para corrigir no Clinicorp. Não há
+  alteração de schema. **Categoria “Avaliação” é diferente de `Procedures`**
+  (“Avaliação para aparelho”, por exemplo); este campo ainda não é configurado aqui.
+- `getClinicorpStatus` é a leitura de metadados para as telas, passando pela
+  decifragem sem expor as credenciais. “Credenciais salvas” não garante envio.
+  “Testar conexão” consulta a clínica pela API, sem criar dados, sem atualizar
+  `lastSyncAt` e sem apagar um erro anterior de criação.
+- Regressões: `tests/clinicorp.test.ts` e `tests/clinicorp-actions.test.ts`, com
+  API e banco simulados. Nenhum teste cria agendamentos na conta de um cliente.
+
 ### Estendendo
 
-Endpoints úteis ainda não usados: `/appointment/list_categories` (trocar o campo
-de texto da categoria por um seletor), `/appointment/change_status` +
+Endpoints úteis ainda não usados: `/appointment/change_status` +
 `/appointment/status_list` (marcar "realizado" aqui refletir lá),
 `/business/list_available_times` (oferecer os slots reais da clínica em vez de
 derivar do expediente configurado no fechai).

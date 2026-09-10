@@ -12,9 +12,11 @@ import { setCalendarFeature, type CalendarFeatureKey } from "@/modules/schedulin
 import { disconnectGoogleCalendar } from "@/modules/scheduling/google";
 import {
   disconnectClinicorp,
+  listClinicorpCategories,
   listClinicorpProfessionals,
   saveClinicorpCredentials,
   verifyClinicorpCredentials,
+  testClinicorpConnection,
 } from "@/modules/scheduling/clinicorp";
 import { isEncryptionConfigured } from "@/lib/crypto";
 import { recordAudit, recordChange } from "@/modules/audit/log";
@@ -448,9 +450,9 @@ export async function connectClinicorpAction(
 }
 
 const clinicorpSettingsSchema = z.object({
-  businessId: z.string().trim().optional(),
-  dentistId: z.string().trim().optional(),
-  categoryDescription: z.string().trim().max(120).optional(),
+  businessId: z.string().trim().regex(/^\d+$/, "Escolha a clínica que receberá os horários."),
+  dentistId: z.string().trim().regex(/^\d*$/, "Profissional inválido."),
+  categoryDescription: z.string().trim().max(120),
 });
 
 export async function saveClinicorpSettingsAction(
@@ -464,6 +466,14 @@ export async function saveClinicorpSettingsAction(
   const parsed = clinicorpSettingsSchema.safeParse(Object.fromEntries(formData));
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Dados inválidos" };
+  }
+
+  if (parsed.data.categoryDescription) {
+    const categories = await listClinicorpCategories(tenantId);
+    if (!categories.ok) return { ok: false, error: categories.error };
+    if (categories.data.filter((c) => c.name === parsed.data.categoryDescription).length !== 1) {
+      return { ok: false, error: "Escolha uma categoria existente com nome único no Clinicorp." };
+    }
   }
 
   const { count } = await prisma.clinicorpIntegration.updateMany({
@@ -515,4 +525,17 @@ export async function disconnectClinicorpAction(): Promise<WhatsappControlResult
 export async function loadClinicorpProfessionalsAction() {
   const { tenantId } = await requireTenant();
   return listClinicorpProfessionals(tenantId);
+}
+
+export async function loadClinicorpCategoriesAction() {
+  const { tenantId } = await requireTenant();
+  return listClinicorpCategories(tenantId);
+}
+
+export async function testClinicorpConnectionAction(): Promise<WhatsappControlResult> {
+  const { tenantId } = await requireTenant();
+  const result = await testClinicorpConnection(tenantId);
+  revalidatePath("/integracoes");
+  revalidatePath("/agenda");
+  return result.ok ? { ok: true, info: result.data } : { ok: false, error: result.error };
 }

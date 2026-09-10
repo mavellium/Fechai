@@ -98,7 +98,7 @@ export function CalendarFeatureToggles({
                   <p className="mt-2 text-xs text-white/70">
                     {item.connected ? (
                       <>
-                        Conectado.{" "}
+                        {item.key === "clinicorp" ? "Credenciais salvas." : "Conectado."}{" "}
                         <Link
                           href="/agenda"
                           className="rounded-control underline underline-offset-4 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris"

@@ -1,15 +1,14 @@
 # Stack de produção do fechai (servidor Linux) — único docker-compose do projeto.
 #
-# "web" e "worker" usam a MESMA imagem (um único Dockerfile) — só o `command`
-# muda. O `image:` igual nos dois faz o Compose reaproveitar o build em vez de
-# compilar duas vezes.
+# "web-blue", "web-green" e "worker" usam a MESMA imagem (um único Dockerfile).
+# Os dois webs permitem publicar sem interromper a versão que está atendendo.
 #
 # "evolution" + "evolution-postgres" são o gateway de WhatsApp (Evolution API v2,
 # self-hosted). Roda junto com a stack em produção; localmente use
 # `docker-compose.evolution.yml` para subir só ele sem o resto.
 #
 # HTTPS via Traefik (proxy reverso externo, mesmo padrão do projeto janus):
-# o "web" entra na rede externa `traefik-public` e expõe as rotas por labels —
+# os slots web entram na rede externa `traefik-public` e expõem as rotas por labels —
 # nada de porta mapeada no host para o app. O Traefik (rodando fora deste
 # compose) publica 80/443 e emite o certificado via `myresolver` para
 # `fechai.januscms.com.br`. Pré-requisito: a rede `traefik-public` já existe
@@ -17,14 +16,46 @@
 #
 # Uso (deploy completo, servidor):
 #   cp .env.example .env      # preencha os valores reais
-#   docker compose build
-#   docker compose up -d --wait
-#   ./deploy.sh               # deploys incrementais (build + restart do web)
+#   docker compose up -d --wait postgres redis evolution-postgres evolution
+#   ./deploy.sh all           # primeira subida e deploys blue/green
 #
 # Uso (dev local — só a infra, app roda via `next dev` fora do Docker):
 #   npm run db:up             # == docker compose up -d postgres redis
 #
 # Detalhes e passo a passo completo em README.docker.md.
+
+x-web-common: &web-common
+  image: fechai-app:prod
+  build:
+    context: .
+    dockerfile: Dockerfile
+    args:
+      NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY}
+      NEXT_PUBLIC_BUNNY_PULL_ZONE: ${NEXT_PUBLIC_BUNNY_PULL_ZONE}
+      NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL}
+  command: ["npm", "run", "start"]
+  restart: unless-stopped
+  env_file:
+    - .env
+  environment: &app-environment
+    DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-saas}?schema=public
+    REDIS_URL: redis://redis:6379
+    EVOLUTION_API_URL: http://evolution:8080
+    NODE_ENV: production
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  networks:
+    - fechai_net
+    - traefik-public
+  healthcheck: &web-healthcheck
+    test: ["CMD", "node", "docker/healthcheck-web.js"]
+    interval: 5s
+    timeout: 5s
+    retries: 6
+    start_period: 20s
 
 services:
   postgres:
@@ -67,49 +98,35 @@ services:
       retries: 5
       start_period: 5s
 
-  web:
-    image: fechai-app:prod
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY}
-        NEXT_PUBLIC_BUNNY_PULL_ZONE: ${NEXT_PUBLIC_BUNNY_PULL_ZONE}
-        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL}
-    command: ["npm", "run", "start"]
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      # Dentro da rede do compose os serviços são acessados pelo nome — sobrescreve
-      # o que estiver em .env (pensado pra rodar fora do Docker).
-      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-saas}?schema=public
-      REDIS_URL: redis://redis:6379
-      EVOLUTION_API_URL: http://evolution:8080
-      NODE_ENV: production
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - fechai_net
-      - traefik-public
+  # Só um deles fica ativo depois de cada deploy. Durante a troca os dois ficam
+  # saudáveis por alguns segundos; o Traefik pode servir qualquer um sem buraco.
+  web-blue:
+    <<: *web-common
+    profiles: ["blue"]
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=traefik-public"
-      - "traefik.http.routers.fechai-prod.rule=Host(`fechai.januscms.com.br`)"
-      - "traefik.http.routers.fechai-prod.entrypoints=websecure"
-      - "traefik.http.routers.fechai-prod.tls.certresolver=myresolver"
-      - "traefik.http.services.fechai-prod.loadbalancer.server.port=3000"
-      - "traefik.http.services.fechai-prod.loadbalancer.healthcheck.path=/api/health"
-      - "traefik.http.services.fechai-prod.loadbalancer.healthcheck.interval=30s"
-    healthcheck:
-      test: ["CMD", "node", "docker/healthcheck-web.js"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
+      - "traefik.http.routers.fechai-blue.rule=Host(`${APP_DOMAIN:-fechai.januscms.com.br}`)"
+      - "traefik.http.routers.fechai-blue.entrypoints=websecure"
+      - "traefik.http.routers.fechai-blue.tls.certresolver=myresolver"
+      - "traefik.http.routers.fechai-blue.service=fechai-blue"
+      - "traefik.http.services.fechai-blue.loadbalancer.server.port=3000"
+      - "traefik.http.services.fechai-blue.loadbalancer.healthcheck.path=/api/health"
+      - "traefik.http.services.fechai-blue.loadbalancer.healthcheck.interval=5s"
+
+  web-green:
+    <<: *web-common
+    profiles: ["green"]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-public"
+      - "traefik.http.routers.fechai-green.rule=Host(`${APP_DOMAIN:-fechai.januscms.com.br}`)"
+      - "traefik.http.routers.fechai-green.entrypoints=websecure"
+      - "traefik.http.routers.fechai-green.tls.certresolver=myresolver"
+      - "traefik.http.routers.fechai-green.service=fechai-green"
+      - "traefik.http.services.fechai-green.loadbalancer.server.port=3000"
+      - "traefik.http.services.fechai-green.loadbalancer.healthcheck.path=/api/health"
+      - "traefik.http.services.fechai-green.loadbalancer.healthcheck.interval=5s"
 
   worker:
     image: fechai-app:prod
@@ -124,11 +141,7 @@ services:
     restart: unless-stopped
     env_file:
       - .env
-    environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-saas}?schema=public
-      REDIS_URL: redis://redis:6379
-      EVOLUTION_API_URL: http://evolution:8080
-      NODE_ENV: production
+    environment: *app-environment
     depends_on:
       postgres:
         condition: service_healthy
@@ -215,8 +228,8 @@ networks:
     driver: bridge
   # Rede externa do Traefik (proxy reverso + HTTPS). Precisa já existir no host:
   #   docker network create traefik-public
-  # O container do Traefik e o "web" entram nela; o Traefik roteia
-  # fechai.januscms.com.br → web:3000 via os labels acima.
+  # O container do Traefik e o slot web ativo entram nela; o Traefik roteia
+  # o domínio ao container saudável pelas labels acima.
   traefik-public:
     external: true
 
