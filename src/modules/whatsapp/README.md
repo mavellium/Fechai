@@ -55,6 +55,25 @@ Precisa de `EVOLUTION_WEBHOOK_URL` (a URL pública do `/api/webhooks/whatsapp`) 
 produto funciona, só não recebe — em vez de entregar sem o header e tomar 401 em
 silêncio.
 
+## O QR gira — e a sessão tem contador
+
+Dois detalhes que, juntos, produzem "não foi possível conectar o dispositivo,
+tente novamente mais tarde" **no celular**, com a tela do painel mostrando um
+código de aparência perfeita:
+
+1. **O WhatsApp troca o QR a cada ~20s** e invalida o anterior na hora. A
+   Evolution não devolve a expiração, então `WhatsappConnect.tsx` conta sozinho
+   (`QR_TTL_S`) — e, a cada poll, **substitui a imagem** pelo código que veio na
+   resposta de `refreshWhatsappStatus()`. Ignorar esse `qrCode` (o que a tela
+   fazia) é reexibir um código morto com o contador ainda correndo.
+2. **A Evolution corta a sessão em `QRCODE_LIMIT` QRs gerados** (30 por padrão):
+   manda `state: "refused"` e passa a recusar toda leitura. O contador só zera
+   com um logout de verdade. Por isso `connectWhatsapp()` desloga antes de pedir
+   o código — **só quando a instância não está `connected`**, porque deslogar um
+   número que está atendendo derruba o atendimento para gerar um QR que ninguém
+   pediu. O logout falhando não impede o QR: sessão já limpa devolve erro, e é
+   exatamente o estado que queríamos.
+
 ## Verbos HTTP da Evolution v2
 
 Cada rota tem o seu, e errar o verbo devolve um **404 genérico do Express** que
