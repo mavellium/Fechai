@@ -201,14 +201,19 @@ services:
       CACHE_REDIS_PREFIX_KEY: evolution
       CACHE_REDIS_SAVE_INSTANCES: "false"
       CACHE_LOCAL_ENABLED: "false"
-      # Webhook para o app receber mensagens reais. Em produção aponte para o
-      # fechai (ex.: https://fechai.januscms.com.br/api/webhooks/whatsapp) e ligue.
-      WEBHOOK_GLOBAL_ENABLED: ${EVOLUTION_WEBHOOK_ENABLED:-false}
-      WEBHOOK_GLOBAL_URL: ${EVOLUTION_WEBHOOK_URL:-}
-      WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS: "false"
-      WEBHOOK_EVENTS_QRCODE_UPDATED: "true"
-      WEBHOOK_EVENTS_MESSAGES_UPSERT: "true"
-      WEBHOOK_EVENTS_CONNECTION_UPDATE: "true"
+      # Webhook global DESLIGADO de propósito — não troque para "true".
+      #
+      # O webhook do fechai exige o header `x-webhook-secret` e recusa (401) o
+      # que vier sem ele. O webhook GLOBAL da Evolution não sabe mandar header
+      # nenhum (o tipo dela só tem URL, ENABLED e WEBHOOK_BY_EVENTS; `headers`
+      # existe só na configuração POR INSTÂNCIA). Com o global ligado, toda
+      # mensagem recebida tomava 401 — e 401 está na lista de status que a
+      # Evolution NÃO reentrega, então a mensagem era descartada de vez.
+      #
+      # Quem configura o webhook agora é o app, por instância, ao criar ou
+      # reconectar o número (`EvolutionProvider.ensureWebhook`), usando o
+      # EVOLUTION_WEBHOOK_URL + WHATSAPP_WEBHOOK_SECRET do .env do "web".
+      WEBHOOK_GLOBAL_ENABLED: "false"
       LANGUAGE: pt-BR
     ports:
       # Só em loopback: a Evolution é alcançada pelo app pela rede interna

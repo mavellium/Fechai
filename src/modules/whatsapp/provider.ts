@@ -45,6 +45,15 @@ export interface WhatsAppProvider {
   ): Promise<string | null>;
   /** Desloga o número da instância (exige novo QR para voltar). */
   disconnect(externalId: string): Promise<void>;
+  /**
+   * (Re)aponta a instância para o webhook do fechai, com o header de segredo
+   * que a rota exige. É por instância de propósito: o webhook global do
+   * provedor não carrega header nenhum, e sem o segredo a rota devolve 401 —
+   * status que a Evolution trata como definitivo e não reentrega. Devolve
+   * false quando não há como configurar (URL ou segredo ausentes) para o
+   * chamador distinguir "não configurei" de "configurei".
+   */
+  ensureWebhook(externalId: string): Promise<boolean>;
   /** Baixa a mídia de uma mensagem recebida em base64 (ex.: mensagem de voz). */
   getMediaAsBase64(
     externalId: string,

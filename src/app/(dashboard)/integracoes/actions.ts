@@ -43,6 +43,19 @@ export async function connectWhatsapp(): Promise<ConnectResult> {
     const res = existing?.externalId
       ? { externalId: existing.externalId, ...(await provider.getQrCode(existing.externalId)) }
       : await provider.createInstance(tenantId);
+
+    // Reaponta o webhook a cada conexão, não só ao criar: instâncias criadas
+    // antes desta correção ficaram penduradas no webhook global (sem o header
+    // de segredo), e a URL pública do app pode ter mudado desde então. É barato
+    // e idempotente. NÃO derruba a conexão se falhar: o número conectado é o
+    // que o cliente veio buscar aqui; webhook quebrado é problema do próximo
+    // passo, e o script `whatsapp:webhooks` conserta em lote.
+    try {
+      await provider.ensureWebhook(res.externalId);
+    } catch (err) {
+      console.error("[whatsapp] falha ao configurar webhook da instância", err);
+    }
+
     await prisma.whatsappInstance.upsert({
       where: { tenantId },
       create: { tenantId, externalId: res.externalId, status: res.status },

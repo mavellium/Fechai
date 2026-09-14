@@ -24,12 +24,52 @@ export class EvolutionProvider implements WhatsAppProvider {
     return `tenant_${tenantId}`;
   }
 
+  /**
+   * Webhook DA INSTÂNCIA — e não o global (`WEBHOOK_GLOBAL_*` no compose).
+   *
+   * O webhook do fechai recusa (401) tudo que não trouxer o header
+   * `x-webhook-secret`, e o webhook GLOBAL da Evolution não sabe mandar header
+   * nenhum: o tipo dela só tem URL, ENABLED e WEBHOOK_BY_EVENTS — `headers`
+   * existe apenas na configuração por instância. Com o global ligado, portanto,
+   * TODA mensagem recebida voltava 401; e 401 está na lista de status não
+   * reentregáveis da Evolution (400, 401, 403, 404, 422), então a mensagem era
+   * descartada em vez de reenfileirada. O resultado era o pior possível: número
+   * "conectado" na tela e zero mensagem chegando, sem fila para recuperar.
+   *
+   * Devolve null quando falta URL ou segredo — aí a instância é criada sem
+   * webhook (o app funciona, só não recebe), em vez de nascer apontando para
+   * lugar nenhum ou entregando sem o header e tomando 401 em silêncio.
+   */
+  private webhookConfig() {
+    const url = process.env.EVOLUTION_WEBHOOK_URL ?? "";
+    const secret = process.env.WHATSAPP_WEBHOOK_SECRET ?? "";
+    if (!url || !secret) return null;
+    return {
+      enabled: true,
+      url,
+      headers: { "Content-Type": "application/json", "x-webhook-secret": secret },
+      byEvents: false,
+      base64: false,
+      // Só o que o app consome. A Evolution assume a lista INTEIRA de eventos
+      // quando recebe um array vazio — e aí cada presença/typing de cada
+      // contato vira uma request no nosso webhook.
+      events: ["MESSAGES_UPSERT", "CONNECTION_UPDATE", "QRCODE_UPDATED"],
+    };
+  }
+
   async createInstance(tenantId: string): Promise<CreateInstanceResult> {
     const instanceName = this.instanceName(tenantId);
+    const webhook = this.webhookConfig();
     const res = await fetch(`${this.baseUrl}/instance/create`, {
       method: "POST",
       headers: this.headers(),
-      body: JSON.stringify({ instanceName, qrcode: true, integration: "WHATSAPP-BAILEYS" }),
+      body: JSON.stringify({
+        instanceName,
+        qrcode: true,
+        integration: "WHATSAPP-BAILEYS",
+        // Webhook já no nascimento: instância criada é instância que entrega.
+        ...(webhook ? { webhook } : {}),
+      }),
     });
     // 403 = instância já existe; conectar nela em vez de tentar recriar.
     if (res.status === 403) {
@@ -113,11 +153,32 @@ export class EvolutionProvider implements WhatsAppProvider {
   }
 
   async disconnect(externalId: string): Promise<void> {
+    // DELETE, não POST: na Evolution v2 `logout` e `delete` são as duas únicas
+    // rotas de instância registradas como DELETE (create/restart/setPresence são
+    // POST, connect/connectionState/fetchInstances são GET). Com POST o Express
+    // não acha handler para o caminho e cai no 404 genérico — que a tela exibia
+    // como "Evolution logout falhou (404)", parecendo instância inexistente.
     const res = await fetch(`${this.baseUrl}/instance/logout/${externalId}`, {
-      method: "POST",
+      method: "DELETE",
       headers: this.headers(),
     });
     if (!res.ok) throw new Error(`Evolution logout falhou (${res.status})`);
+  }
+
+  async ensureWebhook(externalId: string): Promise<boolean> {
+    const webhook = this.webhookConfig();
+    if (!webhook) return false;
+    const res = await fetch(`${this.baseUrl}/webhook/set/${externalId}`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ webhook }),
+    });
+    if (!res.ok) {
+      throw new Error(
+        `Evolution webhook/set falhou (${res.status}): ${(await res.text().catch(() => "")).slice(0, 200)}`,
+      );
+    }
+    return true;
   }
 
   async getMediaAsBase64(
