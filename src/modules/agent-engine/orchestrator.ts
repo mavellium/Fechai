@@ -241,12 +241,12 @@ export async function runAgentTurn(input: {
       }
 
       if (i === MAX_TOOL_ITERATIONS - 1) {
-        // Última iteração: força uma resposta em texto sem mais tools. Fora
-        // de `completeWithFallback` (não faz sentido trocar de provider só
-        // pra fechar a resposta), então grava o uso aqui direto.
-        const closing = await llm.complete(messages, []);
-        recordUsage(llm.provider, closing.usage).catch(() => {});
-        finalReply = closing.content;
+        // Última iteração: força uma resposta em texto sem mais tools. Passa
+        // pela cadeia como as outras chamadas: um soluço do provedor aqui, com
+        // as ferramentas já executadas, não pode virar mensagem de erro.
+        const closing = await completeWithFallback(messages, [], chain, attemptedSteps);
+        llm = closing.llm;
+        finalReply = closing.result.content;
       }
     }
   } catch (err) {
@@ -268,7 +268,9 @@ export async function runAgentTurn(input: {
 
     // Erro de configuração (credencial) ou problema pontual: o lead recebe uma
     // resposta clara e a conversa é escalada em vez de morrer em silêncio.
-    const escalate = err.code === "auth";
+    // A mensagem genérica promete "já avisei a equipe": sem subir a conversa,
+    // ninguém ficava sabendo. Só o limite de requisições fica fora, que passa.
+    const escalate = err.code !== "rate_limit";
     if (escalate) {
       await prisma.conversation
         .update({ where: { id: conversationId }, data: { needsHuman: true } })
@@ -303,7 +305,6 @@ async function completeWithFallback(
     // para a segunda.
     const stepKey = `${step.model.id}:${step.credentialId ?? "env"}`;
     if (attempted.has(stepKey)) continue;
-    attempted.add(stepKey);
 
     const apiKey = await resolveSecret(step.model.provider, step.credentialId);
     const provider = createProvider(step.model, apiKey);
@@ -312,6 +313,7 @@ async function completeWithFallback(
     // não tem) não vira erro de rede: é só pular para o próximo. Se nenhum
     // sobrar, quem decide o que dizer ao lead é o `throw` lá embaixo.
     if (typeof provider.isConfigured === "function" && !provider.isConfigured()) {
+      attempted.add(stepKey);
       console.warn(
         `[orchestrator] Fallback: ${step.model.provider} ${step.model.id}` +
           `${step.credentialLabel ? ` (${step.credentialLabel})` : ""} sem credencial configurada`,
@@ -329,6 +331,12 @@ async function completeWithFallback(
     } catch (err) {
       if (!isAiError(err)) throw err;
       lastErr = err;
+      // Só quem FALHOU sai do turno. O Set vive o turno inteiro (uma chamada
+      // por rodada de ferramenta): marcar também quem respondeu fazia a rodada
+      // seguinte pular o modelo que estava funcionando e descer a cadeia até
+      // esgotá-la — o lead recebia "Tive um problema para responder" no meio
+      // de um agendamento (consultar livres → marcar → responder).
+      attempted.add(stepKey);
 
       // Cota estourada põe a credencial de molho: sem isso, cada turno
       // seguinte gastaria a latência do mesmo erro antes de cair para a

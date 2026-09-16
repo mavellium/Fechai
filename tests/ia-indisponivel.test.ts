@@ -30,7 +30,13 @@ const conversation = vi.hoisted(() => ({
   getRecentMessages: vi.fn(async () => []),
 }));
 /** A cadeia é montada por teste: vazia, ou com degraus sem credencial. */
-const chain = vi.hoisted(() => ({ steps: [] as unknown[], configured: false }));
+const chain = vi.hoisted(() => ({
+  steps: [] as unknown[],
+  configured: false,
+  /** Respostas do provedor, uma por chamada; vazio = "nunca chega aqui". */
+  replies: [] as unknown[],
+  calls: [] as string[],
+}));
 
 vi.mock("@/lib/prisma", () => ({ prisma: db }));
 vi.mock("@/modules/billing/usage", () => ({
@@ -50,11 +56,16 @@ vi.mock("@/modules/ai", async () => {
   return {
     AiError: real.AiError,
     isAiError: real.isAiError,
-    createProvider: () => ({
+    createProvider: (model: { id: string }) => ({
       provider: "fake",
-      model: "fake-1",
+      model: model.id,
       isConfigured: () => chain.configured,
-      complete: vi.fn(async () => ({ content: "nunca chega aqui", toolCalls: [], usage: {} })),
+      complete: vi.fn(async () => {
+        chain.calls.push(model.id);
+        const next = chain.replies.shift();
+        if (next instanceof Error) throw next;
+        return next ?? { content: "nunca chega aqui", toolCalls: [], usage: {} };
+      }),
     }),
     getUsableChain: async () => chain.steps,
     resolveSecret: async () => undefined,
@@ -77,6 +88,8 @@ function turno() {
 }
 
 beforeEach(() => {
+  chain.replies = [];
+  chain.calls = [];
   vi.clearAllMocks();
   vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -136,5 +149,52 @@ describe("nenhum provedor de IA disponível", () => {
 
     expect(r.status).toBe("ok");
     expect(r.reply).not.toBe("");
+  });
+});
+
+// Relato: "Tive um problema para responder agora" no meio de um agendamento.
+// Cada rodada de ferramenta é uma chamada nova, e o modelo que acabara de
+// responder era pulado na seguinte até a cadeia se esgotar.
+describe("turno com várias rodadas de ferramenta", () => {
+  const step = (id: string) => ({ model: { provider: "fake", id }, credentialId: null, credentialLabel: null });
+  const toolCall = (id: string) => ({ content: "", toolCalls: [{ id, name: "list_available_slots", arguments: {} }], usage: {} });
+
+  it("segue no mesmo modelo que está respondendo", async () => {
+    chain.steps = [step("principal")];
+    chain.configured = true;
+    chain.replies = [toolCall("t1"), toolCall("t2"), { content: "Tenho 10:30 livre amanhã.", toolCalls: [], usage: {} }];
+
+    const r = await turno();
+
+    expect(r.reply).toBe("Tenho 10:30 livre amanhã.");
+    expect(chain.calls).toEqual(["principal", "principal", "principal"]);
+  });
+
+  it("resposta final forçada também cai para o próximo degrau", async () => {
+    const { AiError } = await import("@/modules/ai/types");
+    chain.steps = [step("principal"), step("reserva")];
+    chain.configured = true;
+    chain.replies = [
+      toolCall("t1"), toolCall("t2"), toolCall("t3"),
+      new AiError("provider", "caiu", { provider: "openai", model: "principal" }),
+      { content: "Fechado!", toolCalls: [], usage: {} },
+    ];
+
+    const r = await turno();
+
+    expect(r.reply).toBe("Fechado!");
+    expect(chain.calls).toEqual(["principal", "principal", "principal", "principal", "reserva"]);
+  });
+
+  it("erro genérico sobe a conversa para humano, como a mensagem promete", async () => {
+    const { AiError } = await import("@/modules/ai/types");
+    chain.steps = [step("principal")];
+    chain.configured = true;
+    chain.replies = [new AiError("provider", "caiu", { provider: "openai", model: "principal" })];
+
+    const r = await turno();
+
+    expect(r.reply).toContain("Já avisei a equipe");
+    expect(db.conversation.update).toHaveBeenCalledWith(expect.objectContaining({ data: { needsHuman: true } }));
   });
 });
