@@ -173,11 +173,11 @@ export function AgentHeader({
               tela não abre balão. O detalhe longo foi para a bolinha.
             */}
             <p id="agente-power-desc" className="mt-0.5 flex items-center gap-1.5 text-sm text-white/65">
-              {enabled ? "Responde em todos os canais." : "Não responde em nenhum canal."}
+              {enabled ? "Responde aos clientes." : "Não responde aos clientes — só no teste."}
               <InfoHint label="chave do agente">
                 {enabled
-                  ? "Ele responde no WhatsApp, no chat do site e no teste. Desligue para calar o agente sem perder nada do que você configurou."
-                  : "As mensagens recebidas continuam chegando em Conversas, marcadas como “precisa de você”."}
+                  ? "Ele responde no WhatsApp e no chat do site. Desligue para calar o agente sem perder nada do que você configurou."
+                  : "Ele continua respondendo no chat de teste, para você ajustar antes de religar. As mensagens de clientes chegam em Conversas, marcadas como “precisa de você”."}
               </InfoHint>
             </p>
           </div>

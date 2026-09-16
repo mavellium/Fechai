@@ -35,8 +35,11 @@ async function action(_prev: Result | null, formData: FormData): Promise<Result>
 const SILENT_STATUS: Record<string, string> = {
   human_handling:
     "O agente está pausado nesta conversa — por isso ele não respondeu. Ative-o no botão acima para testar a resposta automática.",
+  // Não chega mais por aqui: escrever como cliente é teste, e teste responde
+  // com o agente desligado (`skipEnabledCheck`). Fica como rede de segurança
+  // para o dia em que este formulário alcançar uma conversa real.
   agent_off:
-    "O agente está desligado. Ligue a chave na página do agente para ele voltar a responder.",
+    "O agente está desligado. Ligue a chave na página do agente para ele voltar a responder aos clientes.",
   no_agent: "Esta conta ainda não tem um agente configurado para responder.",
   limit_reached: "A cota de mensagens do mês acabou.",
 };

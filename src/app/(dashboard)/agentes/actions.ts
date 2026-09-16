@@ -30,6 +30,8 @@ import {
   synthesize,
 } from "@/modules/voice/fish";
 import { SAMPLE_TEXT, findCatalogVoice } from "@/modules/voice/catalog";
+import { parseSpeechBlocklist } from "@/modules/voice/speech-text";
+import { VOICE_STYLES } from "@/modules/voice/style";
 import { recordAudit, recordChange, recordDeletion } from "@/modules/audit/log";
 
 export type Result = { ok: boolean; error?: string; info?: string };
@@ -133,10 +135,14 @@ export async function setPrimaryAgent(agentId: string): Promise<Result> {
 }
 
 /**
- * Liga/desliga o agente. Desligado ele para de responder em todos os canais
- * (WhatsApp, widget e chat de teste) sem perder nada do que foi configurado —
- * a alternativa que existia era excluir o agente ou desconectar o WhatsApp da
- * conta inteira.
+ * Liga/desliga o agente. Desligado ele para de responder aos CLIENTES (WhatsApp
+ * e widget do site) sem perder nada do que foi configurado — a alternativa que
+ * existia era excluir o agente ou desconectar o WhatsApp da conta inteira.
+ *
+ * O chat de teste é a exceção e segue respondendo (`skipEnabledCheck` em
+ * `runAgentTurn`): desligar é justamente o que se faz para mexer no agente, e
+ * um sandbox mudo obrigava a religar — voltando a atender cliente de verdade —
+ * só para conferir a mudança.
  */
 export async function setAgentEnabled(agentId: string, enabled: boolean): Promise<Result> {
   const { agent } = await requireAgent(agentId);
@@ -157,7 +163,7 @@ export async function setAgentEnabled(agentId: string, enabled: boolean): Promis
     ok: true,
     info: enabled
       ? `${agent.name} voltou a responder.`
-      : `${agent.name} está desligado e não responde mais até você ligar de novo.`,
+      : `${agent.name} parou de responder aos clientes. No chat de teste ele continua respondendo.`,
   };
 }
 
@@ -210,6 +216,94 @@ export async function setAgentBehavior(
 
   revalidateAgent(agent.id);
   return { ok: true, info: "Comportamento atualizado." };
+}
+
+/**
+ * Como a voz do agente se comporta (`Agent.voiceStyle`).
+ *
+ * A chave é validada contra o catálogo (`modules/voice/style.ts`) em vez de
+ * aceita como texto: a action é chamável direto por POST, e uma chave
+ * desconhecida no banco só apareceria como "voz neutra" na leitura — o dono
+ * escolheria "animada", a tela mostraria neutra e ninguém saberia por quê.
+ */
+export async function setAgentVoiceStyle(agentId: string, style: string): Promise<Result> {
+  const { agent } = await requireAgent(agentId);
+  if (!agent) return { ok: false, error: "Agente não encontrado" };
+
+  if (!VOICE_STYLES.some((s) => s.key === style)) {
+    return { ok: false, error: "Estilo de voz inválido" };
+  }
+
+  await prisma.agent.update({ where: { id: agent.id }, data: { voiceStyle: style } });
+
+  await recordChange({
+    event: "agent.voice_style_updated",
+    target: { type: "Agent", id: agent.id, label: agent.name },
+    before: { voiceStyle: agent.voiceStyle },
+    after: { voiceStyle: style },
+  });
+
+  revalidateAgent(agent.id);
+  return { ok: true, info: "Jeito de falar salvo." };
+}
+
+/**
+ * Termos que o agente não pronuncia, um por linha (ver
+ * `modules/voice/speech-text.ts`).
+ *
+ * Action própria, como `saveRules`: o campo vive no passo Comportamento, longe
+ * do formulário da persona, e reaproveitar `personaSchema` apagaria o resto da
+ * persona no `.default("")`.
+ *
+ * O teto não é o da lista (isso é `parseSpeechBlocklist`, que ignora o excesso
+ * em silêncio na LEITURA — linha antiga, editada à mão ou colada de planilha
+ * não pode derrubar o áudio). Aqui, na escrita, o excesso é recusado com
+ * explicação: tem alguém na tela para corrigir.
+ */
+const speechBlocklistSchema = z.object({
+  terms: z
+    .string()
+    .trim()
+    .max(2000, "Lista longa demais — use termos curtos, não frases")
+    .default(""),
+});
+
+export async function saveSpeechBlocklist(
+  _prev: Result | null,
+  formData: FormData,
+): Promise<Result> {
+  const tooLarge = payloadTooLarge(formData);
+  if (tooLarge) return { ok: false, error: tooLarge };
+
+  const agentId = String(formData.get("agentId") ?? "");
+  const { agent } = await requireAgent(agentId);
+  if (!agent) return { ok: false, error: "Agente não encontrado" };
+
+  const parsed = speechBlocklistSchema.safeParse({ terms: formData.get("terms") });
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Dados inválidos" };
+  }
+
+  // Normaliza na gravação para o banco guardar o mesmo formato que a leitura
+  // espera (um termo por linha, sem vazias) — a tela manda o que a pessoa
+  // digitou, e ela pode ter colado uma lista com linha em branco no meio.
+  const terms = parseSpeechBlocklist(parsed.data.terms);
+  const speechBlocklist = terms.join("\n");
+
+  await prisma.agent.update({ where: { id: agent.id }, data: { speechBlocklist } });
+
+  await recordChange({
+    event: "agent.speech_blocklist_updated",
+    target: { type: "Agent", id: agent.id, label: agent.name },
+    before: { speechBlocklist: agent.speechBlocklist },
+    after: { speechBlocklist },
+  });
+
+  revalidateAgent(agent.id);
+  return {
+    ok: true,
+    info: terms.length === 0 ? "Lista vazia — o agente volta a falar tudo." : "Lista salva.",
+  };
 }
 
 // ------------------------------------------------------------------ voz

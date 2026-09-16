@@ -235,7 +235,12 @@ export async function POST(req: Request) {
 
     const spoken = await speakReply({
       text: reply,
-      settings: { speakReplies: agent?.speakReplies ?? false, voiceId: agent?.voiceId ?? null },
+      settings: {
+        speakReplies: agent?.speakReplies ?? false,
+        voiceId: agent?.voiceId ?? null,
+        speechBlocklist: agent?.speechBlocklist ?? "",
+        voiceStyle: agent?.voiceStyle ?? null,
+      },
       incomingWasAudio: incoming.hasAudio,
     });
 

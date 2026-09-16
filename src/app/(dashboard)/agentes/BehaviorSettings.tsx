@@ -6,6 +6,8 @@ import { Alert } from "@/components/ui/alert";
 import { Switch } from "@/components/ui/switch";
 import { setAgentBehavior } from "./actions";
 import { VoiceRecorder } from "./VoiceRecorder";
+import { SpeechBlocklistForm } from "./SpeechBlocklistForm";
+import { VoiceStyleSelect } from "./VoiceStyleSelect";
 
 type BehaviorKey = "listenAudio" | "speakReplies" | "stopOnEmoji";
 
@@ -47,11 +49,17 @@ export function BehaviorSettings({
   voice,
   catalogKey = null,
   voiceAvailable,
+  speechBlocklist = "",
+  voiceStyle = "",
 }: {
   agentId: string;
   listenAudio: boolean;
   speakReplies: boolean;
   stopOnEmoji: boolean;
+  /** Termos que o agente não pronuncia, um por linha (ver SpeechBlocklistForm). */
+  speechBlocklist?: string;
+  /** Como a voz se comporta (`Agent.voiceStyle`, ver VoiceStyleSelect). */
+  voiceStyle?: string;
   /** Voz já clonada na Fish Audio, se houver. */
   voice: { label: string | null; createdAt: Date | null; source: string | null } | null;
   /** Chave da voz pronta em uso, quando a voz vem do catálogo. */
@@ -113,6 +121,13 @@ export function BehaviorSettings({
             }}
           />
         </div>
+        {/* Sempre visível, mesmo sem voz escolhida. A primeira versão escondia
+            até ter voz ("sem voz nada é pronunciado") e o resultado foi quem
+            procurava a configuração não achar — o campo some justamente para
+            quem ainda está montando o agente. Configuração que existe e não
+            aparece é pior que uma linha a mais na tela. */}
+        <VoiceStyleSelect agentId={agentId} initial={voiceStyle} />
+        <SpeechBlocklistForm agentId={agentId} initial={speechBlocklist} />
       </section>
 
       <ul className="space-y-2">

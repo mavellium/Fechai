@@ -60,8 +60,9 @@ export function Sandbox({ agentId }: { agentId?: string } = {}) {
         setError(data?.error ?? "O agente não respondeu. Tente enviar de novo.");
         return;
       }
-      // Agente desligado (ou conta sem agente): o silêncio é o comportamento
-      // correto, então a tela explica em vez de mostrar uma bolha vazia.
+      // Conta sem agente (o desligado responde aqui, ver `skipEnabledCheck`):
+      // o silêncio é o comportamento correto, então a tela explica em vez de
+      // mostrar uma bolha vazia.
       if (data.status && data.status !== "ok") {
         setPaused(true);
         return;
@@ -162,8 +163,8 @@ export function Sandbox({ agentId }: { agentId?: string } = {}) {
 
       {paused && (
         <Alert tone="warn">
-          O agente está desligado — por isso ele não respondeu. Ligue a chave na página do agente
-          para voltar a testar.
+          Este agente não respondeu. Verifique se a conta tem um agente principal configurado e
+          tente de novo.
         </Alert>
       )}
 

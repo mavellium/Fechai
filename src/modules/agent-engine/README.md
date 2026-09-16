@@ -42,6 +42,25 @@ caminho de busca) e libera o telefone canônico para nascer vazio na próxima
 mensagem — a IA não recomeça vendo o histórico do teste anterior, mas nada é
 perdido do lado do usuário.
 
+#### O teste responde com o agente desligado (`skipEnabledCheck`)
+
+`Agent.enabled` é a chave geral, e desligada ela cala o agente **para o
+cliente** — WhatsApp e widget do site. O chat de teste é a exceção: os dois
+caminhos de teste (`/api/sandbox` e `sendTestClientMessage`) passam
+`skipEnabledCheck: true`, e o gate de `agent_off` em `runAgentTurn` só vale
+sem essa marca.
+
+Existe pelo mesmo motivo do `skipUsageCheck` ao lado: desligar o agente é
+justamente o que se faz para mexer nele. Com o sandbox mudo, conferir uma
+mudança de persona exigia religar a chave — ou seja, voltar a atender cliente
+de verdade com a versão que ainda estava sendo ajustada, que é o oposto do
+que a chave existe para permitir.
+
+Só o teste ganha a exceção. As outras pausas continuam valendo lá dentro:
+`agentPaused` (humano assumiu a conversa) é checado antes e cala o teste
+também — um humano no comando de uma conversa é um fato sobre aquela
+conversa, não sobre o canal.
+
 #### Escrever dos dois lados dentro da conversa de teste
 
 Numa conversa com `isTest: true`, a caixa de resposta de `/conversas` ganha um
@@ -60,14 +79,15 @@ que sempre começa do zero, sem o histórico da conversa aberta.
 `sendTestClientMessage` recusa qualquer conversa que não seja de teste
 (`isTest: true` no `where`, junto do `tenantId`): forjar numa conversa real uma
 mensagem "do cliente" que ele nunca mandou envenenaria o histórico e os
-relatórios. Usa `skipUsageCheck: true` pelo mesmo motivo do `/api/sandbox` —
-teste não é atendimento.
+relatórios. Usa `skipUsageCheck: true` e `skipEnabledCheck: true` pelo mesmo
+motivo do `/api/sandbox` — teste não é atendimento.
 
 O `status` do turno volta para a interface e vira aviso quando o agente fica
-calado (`human_handling` = pausado nesta conversa, `agent_off` = chave geral
-desligada, `no_agent`, `limit_reached`). Sem isso, escrever como cliente e não
-ver resposta parecia bug, sendo que cada um desses silêncios é o comportamento
-correto — só que por uma causa diferente.
+calado (`human_handling` = pausado nesta conversa, `no_agent`,
+`limit_reached`). Sem isso, escrever como cliente e não ver resposta parecia
+bug, sendo que cada um desses silêncios é o comportamento correto — só que por
+uma causa diferente. `agent_off` não chega por aqui: o teste responde com a
+chave geral desligada (ver abaixo).
 
 O seletor nasce **recolhido**, atrás de um botão "Enviando como você/cliente":
 aberto, ele custava duas linhas acima do campo em toda mensagem enviada. O
@@ -88,7 +108,8 @@ Sempre grava com `sentBy: "human"` e liga `Conversation.agentPaused`.
 `runAgentTurn` checa `agentPaused` logo no início: se ligado, persiste a
 mensagem do contato e retorna `status: "human_handling"` sem gerar resposta —
 só nesta conversa, as outras do mesmo agente continuam normais. Diferente de
-`Agent.enabled` (`agent_off`), que é a chave geral e afeta todo mundo.
+`Agent.enabled` (`agent_off`), que é a chave geral e cala o agente em todas as
+conversas de cliente — mas não no chat de teste (`skipEnabledCheck`).
 "Devolver para o agente" desliga `agentPaused`.
 
 Mensagens `role: "assistant"` carregam `sentBy: "agent" | "human" | null`

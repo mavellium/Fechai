@@ -24,6 +24,9 @@
  * esperando o resultado, e "falhou em silêncio" viraria um botão quebrado.
  */
 
+import { toSpeech } from "./speech-text";
+import { voiceStyleParams } from "./style";
+
 const API_BASE = "https://api.fish.audio";
 
 /**
@@ -174,10 +177,17 @@ export type Synthesized = { audio: Buffer; mime: string };
 export async function synthesize(input: {
   text: string;
   referenceId: string;
+  /** Lista do agente (`Agent.speechBlocklist`), um termo por linha. */
+  blocklist?: string | string[];
+  /** `Agent.voiceStyle`. Omitido (ou desconhecido) = voz neutra. */
+  style?: string | null;
 }): Promise<Synthesized | null> {
   if (!isFishAudioConfigured()) return null;
 
-  const text = input.text.trim();
+  // O texto falado passa por `toSpeech()`: risada escrita, emoji e marcação de
+  // formatação não têm pronúncia útil (ver speech-text.ts). Vazio aqui quer
+  // dizer que a resposta inteira era isso — quem chama manda o texto original.
+  const text = toSpeech(input.text, input.blocklist ?? "");
   if (!text) return null;
 
   for (const model of TTS_MODELS) {
@@ -193,6 +203,7 @@ export async function synthesize(input: {
           text,
           reference_id: input.referenceId,
           format: "opus",
+          ...voiceStyleParams(input.style),
           // "balanced" troca um pouco de qualidade por latência. Aqui tem alguém
           // esperando a resposta no WhatsApp, e o texto já passou pelo LLM antes.
           latency: "balanced",

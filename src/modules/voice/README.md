@@ -10,6 +10,10 @@ painel, e depois cada resposta em áudio é sintetizada com esse modelo.
 | --- | --- |
 | `fish.ts` | Cliente HTTP da Fish Audio: `cloneVoice()` (POST `/model`), `synthesize()` (POST `/v1/tts`), `deleteVoice()`. |
 | `reply.ts` | A **regra** do envio automático: `speakReply()` decide se esta resposta vira áudio e produz os bytes. |
+| `style.ts` | `VOICE_STYLES` — como a voz se comporta (neutra/calorosa/animada) e os números da Fish por trás de cada uma. |
+| `speech-text.ts` | `toSpeech()` — o que é pronunciável no texto da resposta (tira risada escrita, emoji, formatação e a lista do agente). |
+| `../../app/(dashboard)/agentes/VoiceStyleSelect.tsx` | O menu "Como ele fala" no passo Comportamento. |
+| `../../app/(dashboard)/agentes/SpeechBlocklistForm.tsx` | A lista "o que ele não fala" (`Agent.speechBlocklist`) no passo Comportamento. |
 | `storage.ts` | `storeVoiceMessage()` — guarda o áudio enviado na CDN para dar play no histórico. |
 | `../../app/(dashboard)/agentes/VoiceRecorder.tsx` | Gravação da voz do dono (`MediaRecorder`) + upload de arquivo. |
 | `../../app/(dashboard)/agentes/actions.ts` | `saveAgentVoice`, `deleteAgentVoice` e o toggle em `setAgentBehavior`. |
@@ -63,6 +67,94 @@ Só responde em áudio quem mandou áudio (`incomingWasAudio`). Quem escreve rec
 texto. Isso mantém a conversa natural e segura o custo — TTS é cobrado por
 caractere, e a maioria das mensagens é texto. A decisão vem **antes** da chamada
 paga: responder em texto nunca custa uma síntese jogada fora.
+
+## O que o agente pronuncia não é o que ele escreve
+
+`Message.content` é o texto da resposta e continua intocado — é ele que vai para
+o histórico, o resumo, a busca e o próximo turno do LLM. O que vira **som** passa
+antes por `toSpeech()` (`speech-text.ts`), e isso tira três coisas:
+
+- **Risada escrita** — `kkkk`, `hahaha`, `rsrs`, `hehe`, `huehue` e rubricas do
+  tipo `(risos)`. Lendo, são pontuação emocional; falando, viram gargalhada no
+  meio de um orçamento. Foi o defeito relatado em produção: cliente perguntou
+  preço e ouviu o agente rir.
+- **Emoji** — ou some (e a frase perde o tom) ou é lido literalmente ("rosto
+  sorrindo com olhos de coração"). Nenhum dos dois é fala.
+- **Formatação** — `*negrito*`, `_itálico_`, `~riscado~`, crase. Delimitador é
+  coisa de tela.
+
+O regex é conservador de propósito: exige repetição (`kk`, não `k`) e só tira
+`rs` minúsculo, porque `RS` maiúsculo é o estado e sumir com ele faria o agente
+falar um endereço pela metade. Na dúvida entre cortar e manter, **mantém** —
+falar de leve errado é melhor que engolir metade do atendimento. Os casos de
+"palavra parecida com risada" (`ok`, `Hoje`, `Bahia`, `Porto Alegre - RS`) estão
+presos em `tests/voz.test.ts`.
+
+### A lista de cada agente
+
+Em cima disso vem `Agent.speechBlocklist` — um termo por linha, editado em
+**Agentes › Comportamento**, dentro do card "A voz do agente"
+(`SpeechBlocklistForm.tsx`, salva a cada chip como os toggles ao lado). Ela
+**soma** com a limpeza padrão, nunca substitui: ninguém deveria precisar
+descobrir que tem de digitar "kkkk" para o agente parar de rir.
+
+Serve para o que é daquele negócio — bordão, apelido, muleta do LLM. **Não é
+filtro de assunto**: quem manda no que o agente _diz_ é a persona (as Regras
+viram instrução no prompt); aqui a frase já está pronta, e tirar uma palavra de
+conteúdo ("não", "sem") só deixaria a fala torta. A dica do campo diz isso.
+
+Detalhes que o regex por termo obriga:
+
+- **Sem `\b`.** O `\w` do JavaScript é ASCII: "né" e "tá" terminam em letra
+  acentuada e nunca casariam. A borda é `[^\p{L}\p{N}]` feita à mão, e o grupo
+  da esquerda volta no `replace` para não comer o espaço que segurava a frase.
+- **Termo de 1 letra é ignorado** (casaria com meia conversa) e a lista para em
+  40 termos — na LEITURA, em silêncio, porque linha antiga ou colada de planilha
+  não pode derrubar o áudio. Na escrita, `saveSpeechBlocklist` recusa com
+  explicação: ali tem alguém na tela para corrigir.
+- **Vírgula pendurada** ("beleza então, né" sem o "né") é limpa no fim, senão
+  sobra uma pausa sem motivo.
+
+O campo fica **sempre visível** no passo Comportamento, mesmo sem voz escolhida.
+A primeira versão o escondia até existir voz ("sem voz nada é pronunciado") e o
+efeito foi quem procurava a configuração não encontrar — ela sumia justamente
+para quem ainda está montando o agente. Trocar ou remover a voz também não apaga
+a lista.
+
+Se sobrar string vazia (a resposta era só "kkkkk 😂"), `speakReply()` devolve
+`nothing_to_say` **antes** da chamada paga e a resposta sai em texto. No envio
+manual de `/conversas` a tela recusa com "não há nada para falar" em vez de
+"falhou" — não houve falha nenhuma.
+
+## Como a voz se comporta: escolha do dono, padrão contido
+
+A outra metade do problema não é o texto, é o modelo. `temperature`/`top_p`
+controlam o quanto ele pode interpretar a frase, e nos defaults da Fish
+(0.7/0.7) a família s2 improvisa paralinguagem — risadinha, suspiro, mudança de
+ânimo — que o texto não pediu.
+
+Isso virou escolha do dono da conta (`Agent.voiceStyle`, catálogo em
+`style.ts`), porque não existe número certo: um estúdio de tatuagem quer a voz
+solta, uma clínica não. Três opções, do mais contido ao mais solto — **neutra**
+(0.3/0.6, o padrão), **calorosa** (0.55/0.75) e **animada** (0.8/0.9).
+
+Duas decisões que não devem ser desfeitas:
+
+- **Neutra é o padrão**, e conta antiga, chave desconhecida ou coluna editada à
+  mão caem nela (`parseVoiceStyle` nunca lança). Voz que improvisa é surpresa no
+  meio de um atendimento: quem quer, escolhe; ninguém recebe sem pedir.
+- **A "animada" avisa** que nessa faixa o modelo pode rir ou suspirar sozinho
+  (campo `warning`, mostrado abaixo do menu). Oferecer a opção sem dizer isso
+  repetiria o defeito que originou este arquivo.
+
+Três opções e não um slider: entre 0.42 e 0.47 ninguém ouve diferença, e um
+controle contínuo pediria que a pessoa descobrisse sozinha onde a voz começa a
+rir. Os números ficam no código pelo mesmo motivo do catálogo de vozes — mudar
+um deles muda como todas as contas naquele estilo soam, então passa por deploy.
+
+Se o relato de "voz rindo" voltar já na neutra e com o texto limpo, a suspeita
+seguinte é a **amostra**: uma gravação em que o dono ri ensina isso ao clone, e
+a correção é regravar (`saveAgentVoice` troca o modelo na Fish).
 
 ## De onde vem a voz: pronta ou gravada
 

@@ -102,6 +102,8 @@ export default async function AgentePage({ params }: { params: Promise<{ id: str
         }
         catalogKey={catalogVoiceByReferenceId(agent.voiceId)?.key ?? null}
         voiceAvailable={isFishAudioConfigured()}
+        speechBlocklist={agent.speechBlocklist}
+        voiceStyle={agent.voiceStyle}
         done={done}
       />
     </div>

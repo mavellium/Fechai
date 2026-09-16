@@ -99,6 +99,18 @@ export const AUDIT_EVENTS = {
     group: "agente",
     revertible: true,
   },
+  "agent.voice_style_updated": {
+    label: "Mudou o jeito de falar do agente",
+    kind: "update",
+    group: "agente",
+    revertible: true,
+  },
+  "agent.speech_blocklist_updated": {
+    label: "Mudou o que o agente não fala em áudio",
+    kind: "update",
+    group: "agente",
+    revertible: true,
+  },
   "agent.action_toggled": {
     label: "Ligou/desligou uma ação do agente",
     kind: "update",

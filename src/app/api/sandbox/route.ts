@@ -61,6 +61,10 @@ export async function POST(req: Request) {
     // Teste não é atendimento: o sandbox segue respondendo mesmo com a cota do
     // mês esgotada, para o dono conseguir testar/diagnosticar o agente.
     skipUsageCheck: true,
+    // ...e mesmo com a chave geral desligada. Desligar cala o agente para o
+    // cliente (WhatsApp, widget); aqui é o dono falando com o próprio agente,
+    // justamente para ajustar antes de religar.
+    skipEnabledCheck: true,
   });
 
   return NextResponse.json({ reply, toolsUsed, status });

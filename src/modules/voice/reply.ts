@@ -18,6 +18,7 @@
  */
 
 import { MAX_TTS_CHARS, isFishAudioConfigured, synthesize } from "./fish";
+import { toSpeech } from "./speech-text";
 
 /** O que o agente precisa saber para decidir se fala. Vem do `Agent`. */
 export type VoiceSettings = {
@@ -25,12 +26,26 @@ export type VoiceSettings = {
   speakReplies: boolean;
   /** Id do modelo de voz na Fish Audio. Null = a pessoa ainda não gravou a voz. */
   voiceId: string | null;
+  /**
+   * O que este agente não pronuncia (`Agent.speechBlocklist`, um termo por
+   * linha). Opcional: agente sem lista fala com a limpeza padrão, que já tira
+   * risada escrita e emoji.
+   */
+  speechBlocklist?: string | null;
+  /**
+   * Como a voz se comporta (`Agent.voiceStyle`, ver `voice/style.ts`).
+   * Omitido ou desconhecido = neutra, que é o padrão do produto.
+   */
+  voiceStyle?: string | null;
 };
 
 export type SpokenReply =
   | { spoken: true; audio: Buffer; mime: string }
   /** `reason` é para o log/sandbox entender o silêncio — não vai para o contato. */
-  | { spoken: false; reason: "off" | "no_voice" | "not_audio" | "too_long" | "failed" };
+  | {
+      spoken: false;
+      reason: "off" | "no_voice" | "not_audio" | "too_long" | "nothing_to_say" | "failed";
+    };
 
 /**
  * Decide e produz o áudio da resposta.
@@ -54,7 +69,19 @@ export async function speakReply(input: {
   // que o mesmo conteúdo escrito, e custa proporcionalmente.
   if (text.trim().length > MAX_TTS_CHARS) return { spoken: false, reason: "too_long" };
 
-  const audio = await synthesize({ text, referenceId: settings.voiceId });
+  // Resposta que só tem risada escrita e emoji ("kkkk 😄") não tem áudio
+  // possível: `toSpeech()` a esvazia inteira (ver speech-text.ts). Sai em
+  // texto, como o WhatsApp já esperava, e sem gastar uma síntese paga para
+  // descobrir isso — a mesma lógica do corte por tamanho logo acima.
+  const blocklist = settings.speechBlocklist ?? "";
+  if (!toSpeech(text, blocklist)) return { spoken: false, reason: "nothing_to_say" };
+
+  const audio = await synthesize({
+    text,
+    referenceId: settings.voiceId,
+    blocklist,
+    style: settings.voiceStyle,
+  });
   if (!audio) return { spoken: false, reason: "failed" };
 
   return { spoken: true, audio: audio.audio, mime: audio.mime };

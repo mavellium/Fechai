@@ -101,6 +101,8 @@ export function AgentWizard({
   voice,
   catalogKey = null,
   voiceAvailable,
+  speechBlocklist,
+  voiceStyle,
   done,
 }: {
   agentId: string;
@@ -123,6 +125,10 @@ export function AgentWizard({
   voice: { label: string | null; createdAt: Date | null; source: string | null } | null;
   catalogKey?: string | null;
   voiceAvailable: boolean;
+  /** Termos que o agente não pronuncia, um por linha (ver SpeechBlocklistForm). */
+  speechBlocklist: string;
+  /** Como a voz se comporta (`Agent.voiceStyle`, ver VoiceStyleSelect). */
+  voiceStyle: string;
   done: Record<string, boolean>;
 }) {
   // Abre no primeiro passo pendente — quem volta continua de onde parou em vez
@@ -247,6 +253,8 @@ export function AgentWizard({
                     voice={voice}
                     catalogKey={catalogKey}
                     voiceAvailable={voiceAvailable}
+                    speechBlocklist={speechBlocklist}
+                    voiceStyle={voiceStyle}
                   />
                 ),
               },
@@ -265,9 +273,9 @@ export function AgentWizard({
                 content: (
                   <div className="space-y-4">
                     {!enabled && (
-                      <Alert tone="warn">
-                        Este agente está desligado, então ele não responde nem aqui. Ligue a chave
-                        no topo da página para testar.
+                      <Alert tone="info">
+                        Este agente está desligado para os clientes, mas responde aqui no teste —
+                        é assim que você ajusta antes de ligar a chave no topo da página.
                       </Alert>
                     )}
                     <Sandbox agentId={agentId} />

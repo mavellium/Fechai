@@ -53,7 +53,9 @@ const INJECTION_GUARD = [
 /**
  * `ok` — o agente respondeu.
  * `agent_off` — existe agente, mas ele está desligado: a mensagem do contato
- *   fica registrada e NINGUÉM responde (é o ponto do botão de desligar).
+ *   fica registrada e NINGUÉM responde (é o ponto do botão de desligar). O
+ *   sandbox pula essa checagem (`skipEnabledCheck`) — desligar cala o agente
+ *   para o cliente, não para quem está ajustando a persona.
  * `human_handling` — um humano respondeu manualmente pelo painel nesta
  *   conversa (`sendManualMessage`); a IA fica em silêncio só aqui até a
  *   conversa ser devolvida a ela. Diferente de `agent_off`: as outras
@@ -89,6 +91,14 @@ export async function runAgentTurn(input: {
   agentId?: string;
   /** Sandbox: pula a checagem de cota — testar não conta como atendimento. */
   skipUsageCheck?: boolean;
+  /**
+   * Sandbox: responde mesmo com o agente desligado. A chave geral existe para
+   * calar o agente PARA O CLIENTE (WhatsApp, widget); o chat de teste é o
+   * dono falando com o próprio agente, e é justamente com ele desligado que se
+   * ajusta persona e base antes de religar. Só o sandbox passa isso — nenhum
+   * canal com contato real.
+   */
+  skipEnabledCheck?: boolean;
 }): Promise<AgentTurn> {
   const { tenantId, conversationId, leadId, userMessage } = input;
 
@@ -127,7 +137,12 @@ export async function runAgentTurn(input: {
   // sobe para "precisa de você" — desligar o agente pausa a resposta
   // automática, não o atendimento. Sem essa marcação, mensagens recebidas com
   // o agente desligado sumiriam no meio da lista sem nenhum sinal.
-  if (agent && !agent.enabled) {
+  //
+  // O chat de teste é a exceção (`skipEnabledCheck`): quem desligou o agente
+  // costuma ter desligado para mexer nele, e um sandbox mudo obrigava a
+  // religar (voltando a atender cliente de verdade) só para conferir a
+  // mudança. Mesma lógica do `skipUsageCheck` acima.
+  if (agent && !agent.enabled && !input.skipEnabledCheck) {
     await prisma.conversation
       .update({ where: { id: conversationId }, data: { needsHuman: true } })
       .catch(() => {});
@@ -337,6 +352,10 @@ export async function resolveAgent(tenantId: string, agentId?: string) {
     // por mensagem recebida.
     speakReplies: true,
     voiceId: true,
+    // Como a voz se comporta e o que ela não pronuncia (ver modules/voice).
+    // Vêm na mesma query pelo mesmo motivo dos dois acima.
+    voiceStyle: true,
+    speechBlocklist: true,
   } as const;
   if (agentId) {
     return prisma.agent.findFirst({

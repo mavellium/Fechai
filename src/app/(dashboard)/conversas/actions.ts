@@ -9,6 +9,7 @@ import { summarizeConversation } from "@/modules/agent-engine/summary";
 import { runAgentTurn, resolveAgent } from "@/modules/agent-engine/orchestrator";
 import { transcribeAudio } from "@/modules/ai/transcribe";
 import { MAX_TTS_CHARS, isFishAudioConfigured, synthesize } from "@/modules/voice/fish";
+import { toSpeech } from "@/modules/voice/speech-text";
 
 type Result = { ok: boolean; error?: string };
 
@@ -136,7 +137,25 @@ export async function sendManualAudioMessage(
     };
   }
 
-  const audio = await synthesize({ text: trimmed, referenceId: agent.voiceId });
+  // O que vai ser falado passa por `toSpeech()` — risada escrita, emoji,
+  // formatação e a lista do agente não viram som (ver
+  // modules/voice/speech-text.ts). Se não sobrar nada, a síntese devolveria
+  // `null` e a tela diria "não foi possível gerar o áudio", mandando a pessoa
+  // investigar uma falha que não existe.
+  const blocklist = agent.speechBlocklist ?? "";
+  if (!toSpeech(trimmed, blocklist)) {
+    return {
+      ok: false,
+      error: "Não sobrou nada para falar nesse texto. Escreva a mensagem em palavras.",
+    };
+  }
+
+  const audio = await synthesize({
+    text: trimmed,
+    referenceId: agent.voiceId,
+    blocklist,
+    style: agent.voiceStyle,
+  });
   if (!audio) {
     return { ok: false, error: "Não foi possível gerar o áudio agora. Tente de novo ou envie como texto." };
   }
@@ -320,8 +339,10 @@ export async function sendTestClientMessage(
     userMessage: trimmed,
     agentId: conversation.agentId ?? undefined,
     // Mesmo motivo do `/api/sandbox`: teste não é atendimento, então segue
-    // funcionando com a cota do mês esgotada.
+    // funcionando com a cota do mês esgotada e com o agente desligado — a
+    // chave geral cala o agente para o cliente, não para quem está ajustando.
     skipUsageCheck: true,
+    skipEnabledCheck: true,
   });
 
   revalidatePath("/conversas");

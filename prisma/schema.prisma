@@ -176,10 +176,14 @@ model Agent {
   /// Agente que atende o número de WhatsApp da conta. Enquanto o WhatsApp for
   /// um por conta (ver CHANGELOG), exatamente um agente é o principal.
   isPrimary      Boolean   @default(false)
-  /// Chave geral do agente. `false` = ele para de responder em qualquer canal
-  /// (WhatsApp, widget do site e sandbox) sem perder persona, base nem ações.
-  /// Existe porque a única forma de calar um agente era excluí-lo ou desligar
-  /// o WhatsApp inteiro — as duas destrutivas demais para uma pausa.
+  /// Chave geral do agente. `false` = ele para de responder aos CLIENTES
+  /// (WhatsApp e widget do site) sem perder persona, base nem ações. Existe
+  /// porque a única forma de calar um agente era excluí-lo ou desligar o
+  /// WhatsApp inteiro — as duas destrutivas demais para uma pausa.
+  ///
+  /// O chat de teste ignora a chave (`skipEnabledCheck` em `runAgentTurn`):
+  /// desligar é o que se faz para mexer no agente, e um sandbox mudo obrigava
+  /// a religar — voltando a atender cliente de verdade — só para conferir.
   enabled        Boolean   @default(true)
   /// Ouve mensagens de voz do WhatsApp: o áudio é transcrito e o agente
   /// responde como se fosse texto. Desligado, áudios são ignorados.
@@ -212,6 +216,25 @@ model Agent {
   voiceSource    String?
   /// Quando a voz foi gravada — a tela usa para mostrar "gravada em ...".
   voiceCreatedAt DateTime?
+  /// Como a voz se comporta ao falar: "neutra" (padrão), "calorosa" ou
+  /// "animada" — ver `modules/voice/style.ts`, que guarda os números da Fish
+  /// por trás de cada uma. Nasce neutra: uma voz que improvisa (e por isso ri
+  /// sozinha) é surpresa no meio de um atendimento, então quem quer isso
+  /// escolhe. Chave desconhecida ou null cai na neutra na leitura.
+  voiceStyle      String    @default("neutra")
+  /// O que o agente NÃO pronuncia quando a resposta vira áudio — um termo por
+  /// linha, no mesmo formato das regras da persona (`personaDraft.avoid`).
+  ///
+  /// Sai só do texto FALADO: `Message.content` continua sendo o que o agente
+  /// escreveu (é ele que vai para o histórico, o resumo e o próximo turno do
+  /// LLM). Risada escrita, emoji e formatação já saem por padrão em
+  /// `modules/voice/speech-text.ts`; esta lista é para o que é específico do
+  /// negócio — um bordão, um apelido, uma muleta que o LLM repete.
+  ///
+  /// Coluna no `Agent`, e não `TenantAction.config`: voz não é uma ação do
+  /// catálogo, é comportamento do agente — mesmo lugar de `speakReplies` e
+  /// `voiceId`.
+  speechBlocklist String    @default("")
   archived       Boolean   @default(false)
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
