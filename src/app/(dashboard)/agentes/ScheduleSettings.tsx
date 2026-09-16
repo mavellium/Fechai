@@ -1,6 +1,6 @@
 "use client";
 
-import { startTransition, useActionState, useEffect, useRef, useState } from "react";
+import { startTransition, useActionState, useRef, useState } from "react";
 import type { ScheduleConfig } from "@/modules/scheduling/config";
 import { weekdayLabel } from "@/modules/scheduling/config";
 import { TIMEZONES } from "@/modules/scheduling/time";
@@ -52,24 +52,21 @@ export function ScheduleSettings({
    * produto tinha perdido a configuração. Mesmo comportamento do toggle da
    * própria ação, logo acima deste bloco.
    *
-   * `requestSubmit` (e não `formAction(new FormData(...))`) de propósito: leva
-   * o formulário INTEIRO no mesmo envio, então o clique no switch nunca grava
-   * um horário pela metade se o campo ao lado foi editado e não salvo.
+   * O envio sai daqui mesmo, e não de um efeito que observa o estado: o valor
+   * novo já é conhecido no clique, então esperar o render seguinte só criaria
+   * a cascata de renders que o lint (com razão) recusa. `FormData` do
+   * formulário + `set` do que acabou de mudar cobre o resto dos campos sem
+   * depender do input escondido já ter sido atualizado.
    */
-  const [optionsDirty, setOptionsDirty] = useState(false);
-
   function saveOption(key: keyof typeof options, checked: boolean) {
     setOptions((current) => ({ ...current, [key]: checked }));
-    setOptionsDirty(true);
-  }
 
-  // Envia DEPOIS do render que atualizou o input escondido — submeter dentro
-  // do onChange mandaria o valor antigo, que é justamente o bug em questão.
-  useEffect(() => {
-    if (!optionsDirty) return;
-    setOptionsDirty(false);
-    formRef.current?.requestSubmit();
-  }, [optionsDirty]);
+    const form = formRef.current;
+    if (!form) return;
+    const data = new FormData(form);
+    data.set(key, String(checked));
+    startTransition(() => formAction(data));
+  }
 
   return (
     <UnsavedForm ref={formRef} result={state} label="Agendamento" onSubmit={(event) => {
