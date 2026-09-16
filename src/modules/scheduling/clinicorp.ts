@@ -479,7 +479,7 @@ export async function cancelAppointmentInClinicorp(
 // Disponibilidade
 // ---------------------------------------------------------------------------
 
-type ClinicorpBusyBlock = { startsAt: Date; endsAt: Date };
+export type ClinicorpBusyBlock = { startsAt: Date; endsAt: Date };
 
 /**
  * O que já está ocupado na agenda da clínica num dia.
@@ -539,6 +539,29 @@ async function fetchBusyBlocks(
   }
 
   return blocks;
+}
+
+/**
+ * Tudo que está ocupado no Clinicorp num dia local — base da lista de horários
+ * livres que o agente oferece. Uma chamada por dia em vez de uma por horário.
+ *
+ * Mesma escolha do `hasClinicorpConflict`: desligado ou fora do ar devolve
+ * lista vazia e nunca lança. O `schedule_meeting` ainda confere o horário
+ * escolhido antes de gravar.
+ */
+export async function listClinicorpBusyBlocks(
+  tenantId: string,
+  day: string,
+  timeZone: string,
+): Promise<ClinicorpBusyBlock[]> {
+  try {
+    const integration = await getIntegration(tenantId);
+    if (!integration || !integration.checkAvailability) return [];
+    return (await fetchBusyBlocks(integration, day, timeZone)) ?? [];
+  } catch (err) {
+    console.error("[clinicorp] listar agenda do dia falhou", err);
+    return [];
+  }
 }
 
 /**

@@ -158,6 +158,8 @@ export function scheduleSystemContext(cfg: ScheduleConfig, now = new Date()): st
       ? `- Só marque com pelo menos ${cfg.minNoticeHours}h de antecedência.`
       : "",
     cfg.location ? `- Local/formato: ${cfg.location}.` : "",
+    "- Antes de sugerir QUALQUER horário, chame list_available_slots e ofereça somente horários dessa lista. O expediente acima não diz o que está livre: há consultas já marcadas. Nunca proponha um horário que não veio da lista.",
+    "- Se o contato pedir um horário específico, confira em list_available_slots antes de responder. Se estiver ocupado, diga isso já e ofereça os livres mais próximos — nunca aceite o horário para depois voltar atrás.",
     "- Converta o que o contato disser ('amanhã às 15h') para data e hora exatas antes de chamar a ação schedule_meeting.",
     "- Nunca confirme um horário sem antes chamar schedule_meeting e receber a confirmação.",
     "- Depois que schedule_meeting confirmar um horário, não chame de novo para confirmar. Para trocar uma consulta use reschedule_meeting, nunca crie outra consulta no lugar da existente.",
@@ -172,6 +174,23 @@ export function scheduleSystemContext(cfg: ScheduleConfig, now = new Date()): st
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+/**
+ * Inícios possíveis ("HH:MM") de um dia de atendimento: blocos da duração a
+ * partir do início do expediente e de novo a partir do fim de cada pausa — com
+ * almoço 12:00–13:00 e blocos de 45 min, a tarde começa às 13:00, não às 13:30.
+ * Não olha dia da semana nem conflito; isso fica com `listFreeSlots`.
+ */
+export function slotStartTimes(cfg: ScheduleConfig): string[] {
+  const end = minutesOf(cfg.endTime);
+  const starts = new Set<number>();
+  for (const from of [minutesOf(cfg.startTime), ...cfg.breaks.map((b) => minutesOf(b.endTime))]) {
+    for (let m = from; m + cfg.durationMinutes <= end; m += cfg.durationMinutes) starts.add(m);
+  }
+  return [...starts]
+    .sort((a, b) => a - b)
+    .map((m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`);
 }
 
 /** O horário cai dentro do expediente configurado? */

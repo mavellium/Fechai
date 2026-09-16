@@ -11,7 +11,7 @@ import {
 import { formatInZone, parseLocalDateTime } from "@/modules/scheduling/time";
 import { addLeadToHandoffGroup } from "./handoff";
 import { ACTION_BY_KEY, type ActionKey } from "./actions";
-import { runSchedulingTool, SCHEDULING_TOOLS, schedulingToolAllowed } from "./scheduling-tools";
+import { freeSlotsHint, runSchedulingTool, SCHEDULING_TOOLS, schedulingToolAllowed } from "./scheduling-tools";
 
 export type ToolContext = {
   tenantId: string;
@@ -182,7 +182,7 @@ const TOOLS: Record<ActionKey, ToolDef> = {
       // marca paciente direto no sistema da clínica e esses horários nunca
       // passaram por aqui.
       if (await hasConflictAnywhere(ctx.tenantId, startsAt, endsAt, cfg.timezone)) {
-        return "Já existe um compromisso nesse horário. Ofereça outro horário ao contato.";
+        return `Esse horário está ocupado; nada foi marcado. Não diga ao contato que está confirmado.${await freeSlotsHint(ctx, cfg, startsAt)}`;
       }
 
       const lead = await prisma.lead.findUnique({

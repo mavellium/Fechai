@@ -1,10 +1,22 @@
 import type { LlmToolSchema } from "@/modules/ai";
 import { isWithinBusinessHours, type ScheduleConfig } from "@/modules/scheduling/config";
-import { cancelAppointment, findLeadAppointment, listUpcomingLeadAppointments, rescheduleAppointment } from "@/modules/scheduling/repository";
-import { formatInZone, parseLocalDateTime } from "@/modules/scheduling/time";
+import { cancelAppointment, findLeadAppointment, listFreeSlots, listUpcomingLeadAppointments, rescheduleAppointment } from "@/modules/scheduling/repository";
+import { dayKeyInZone, formatInZone, parseLocalDateTime, partsInZone, timeInZone } from "@/modules/scheduling/time";
 import type { ToolContext } from "./tools";
 
 export const SCHEDULING_TOOLS: LlmToolSchema[] = [
+  {
+    name: "list_available_slots",
+    description: "Lista os horários LIVRES da agenda, já descontando consultas marcadas, pausas, expediente e antecedência mínima. Use sempre antes de sugerir ou aceitar um horário e ofereça somente horários desta lista. Não marca nada.",
+    parameters: {
+      type: "object",
+      properties: {
+        date: { type: "string", description: "Primeiro dia a consultar, AAAA-MM-DD" },
+        days: { type: "number", description: "Quantos dias consultar a partir da data (1 a 7). Padrão 1." },
+      },
+      required: ["date"],
+    },
+  },
   {
     name: "list_appointments",
     description: "Consulta os próximos agendamentos deste contato. Use ao retornar, responder a lembretes ou pedir cancelamento/reagendamento. Não cria nem altera horários.",
@@ -40,6 +52,7 @@ export const SCHEDULING_TOOLS: LlmToolSchema[] = [
 
 export function schedulingToolAllowed(name: string, cfg: ScheduleConfig): boolean {
   return name === "list_appointments"
+    || name === "list_available_slots"
     || (name === "cancel_meeting" && cfg.allowCancellation)
     || (name === "reschedule_meeting" && cfg.allowRescheduling);
 }
@@ -53,9 +66,59 @@ export async function leadAppointmentsContext(ctx: Pick<ToolContext, "tenantId" 
   ).join("\n");
 }
 
+/** "2026-09-16" + 2 -> "2026-09-18". Aritmética de calendário, sem fuso. */
+function addDays(date: string, days: number): string {
+  const [y, m, d] = date.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+}
+
+function dayLabel(date: string, timeZone: string): string {
+  const noon = parseLocalDateTime(date, "12:00", timeZone);
+  return noon
+    ? new Intl.DateTimeFormat("pt-BR", { timeZone, weekday: "short", day: "2-digit", month: "short" }).format(noon)
+    : date;
+}
+
+export async function availableSlotsContext(ctx: Pick<ToolContext, "tenantId">, cfg: ScheduleConfig, date: string, days = 1): Promise<string> {
+  if (!parseLocalDateTime(date, "12:00", cfg.timezone)) return "Data inválida. Use AAAA-MM-DD.";
+  const count = Math.min(Math.max(Math.round(days) || 1, 1), 7);
+  const dates = Array.from({ length: count }, (_, i) => addDays(date, i));
+  const perDay = await Promise.all(dates.map((d) => listFreeSlots(ctx.tenantId, cfg, d)));
+
+  const lines = dates.map((d, i) => {
+    const slots = perDay[i];
+    if (slots.length) return `- ${dayLabel(d, cfg.timezone)} (${d}): ${slots.map((s) => timeInZone(s, cfg.timezone)).join(", ")}`;
+    const weekday = partsInZone(parseLocalDateTime(d, "12:00", cfg.timezone)!, cfg.timezone).weekday;
+    return `- ${dayLabel(d, cfg.timezone)} (${d}): ${cfg.workdays.includes(weekday) ? "sem horário livre" : "não atendemos"}`;
+  });
+  return `Horários livres (${cfg.durationMinutes} min cada). Ofereça somente estes:\n${lines.join("\n")}`;
+}
+
+/**
+ * Complemento da recusa por conflito: já devolve o que está livre no mesmo dia,
+ * para o agente não sugerir outro horário ocupado no chute. Nunca lança — a
+ * recusa em si é o que importa.
+ */
+export async function freeSlotsHint(ctx: Pick<ToolContext, "tenantId">, cfg: ScheduleConfig, startsAt: Date): Promise<string> {
+  try {
+    const date = dayKeyInZone(startsAt, cfg.timezone);
+    const slots = await listFreeSlots(ctx.tenantId, cfg, date);
+    return slots.length
+      ? ` Livres no mesmo dia: ${slots.map((s) => timeInZone(s, cfg.timezone)).join(", ")}. Ofereça somente um destes, ou use list_available_slots para outros dias.`
+      : " Não há horário livre nesse dia. Use list_available_slots para os próximos dias antes de sugerir outro.";
+  } catch (err) {
+    console.error("[tools] horários livres falhou", err);
+    return " Use list_available_slots antes de sugerir outro horário.";
+  }
+}
+
 export async function runSchedulingTool(name: string, ctx: ToolContext, args: Record<string, unknown>, cfg: ScheduleConfig): Promise<string> {
   if (!schedulingToolAllowed(name, cfg)) return "Esta opção de agendamento está desabilitada. Ofereça atendimento humano.";
   if (name === "list_appointments") return leadAppointmentsContext(ctx, cfg);
+  if (name === "list_available_slots") {
+    if (typeof args.date !== "string") return "Informe a data em AAAA-MM-DD.";
+    return availableSlotsContext(ctx, cfg, args.date.trim(), typeof args.days === "number" ? args.days : 1);
+  }
   if (typeof args.appointmentId !== "string" || !args.appointmentId.trim()) return "Consulte os agendamentos do contato e identifique a consulta antes de alterar.";
   const appointment = await findLeadAppointment(ctx.tenantId, ctx.leadId, args.appointmentId);
   if (!appointment) return "Consulta não encontrada para este contato. Consulte os agendamentos novamente.";
@@ -77,7 +140,7 @@ export async function runSchedulingTool(name: string, ctx: ToolContext, args: Re
   const durationMinutes = (appointment.endsAt.getTime() - appointment.startsAt.getTime()) / 60_000;
   if (!isWithinBusinessHours(startsAt, { ...cfg, durationMinutes })) return "O novo horário fica fora do expediente ou atravessa uma pausa. O horário original continua reservado. Combine outro horário.";
   const result = await rescheduleAppointment({ tenantId: ctx.tenantId, leadId: ctx.leadId, id: appointment.id, startsAt, timezone: cfg.timezone });
-  if (result.status === "conflict") return "O novo horário está ocupado. O horário original continua reservado. Combine outro horário e peça nova confirmação.";
+  if (result.status === "conflict") return `O novo horário está ocupado. O horário original continua reservado.${await freeSlotsHint(ctx, cfg, startsAt)} Peça nova confirmação.`;
   if (result.status === "unavailable") return "A consulta mudou ou não está mais disponível. Consulte os agendamentos novamente antes de confirmar qualquer alteração.";
   const when = formatInZone(startsAt, cfg.timezone);
   if (result.status === "unchanged") return `A consulta já está marcada para ${when}. Nenhuma alteração necessária.`;

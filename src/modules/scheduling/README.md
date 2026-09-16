@@ -106,6 +106,28 @@ gasta uma chamada de rede.
 Sobreposição é `início < fimExistente && fim > inícioExistente`. Encostar não é
 conflito: 14:00–15:00 e 15:00–16:00 convivem.
 
+## Horários livres: o agente só oferece o que está vago
+
+O expediente no prompt diz quando atendemos, **não o que está livre**. Sem mais
+nada, o agente sugeria um horário já ocupado, o contato aceitava e só então
+`schedule_meeting` recusava — e o agente voltava atrás pedindo outra data.
+
+- `listFreeSlots(tenantId, cfg, date)` (repository) devolve os inícios livres de
+  um dia local pelas **mesmas regras da gravação**: dia atendido, expediente,
+  pausas, antecedência (`>=`, igual à recusa de `schedule_meeting`) e conflito na
+  nossa base e no Clinicorp (`listClinicorpBusyBlocks`, uma chamada por dia, que
+  nunca lança e cai para lista vazia).
+- Candidatos: `slotStartTimes(cfg)` (grade da duração, recomeçada no fim de cada
+  pausa) mais o fim de cada compromisso ocupado, para um encaixe fora da grade
+  não sumir.
+- Tool `list_available_slots` (`date` + `days` até 7), sempre exposta com o
+  agendamento ligado. O prompt manda chamá-la antes de sugerir ou aceitar
+  qualquer horário.
+- A recusa por conflito em `schedule_meeting` e `reschedule_meeting` já anexa os
+  livres do mesmo dia (`freeSlotsHint`), para a segunda sugestão não ser outro
+  chute. A lista é orientação: `hasConflictAnywhere` continua sendo a checagem
+  final antes de gravar (alguém pode marcar entre a consulta e a confirmação).
+
 ## Clinicorp
 
 Sistema de gestão de clínicas. Documentação: `https://api.clinicorp.com/api-docs/`

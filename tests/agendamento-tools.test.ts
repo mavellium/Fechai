@@ -5,10 +5,10 @@ const db = vi.hoisted(() => ({
   appointment: { findFirst: vi.fn(), findMany: vi.fn(), updateMany: vi.fn(), create: vi.fn(), update: vi.fn() },
   lead: { findFirst: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
 }));
-const mirrors = vi.hoisted(() => ({ googlePush: vi.fn(), googleDelete: vi.fn(), clinicorpPush: vi.fn(), clinicorpCancel: vi.fn(), clinicorpConflict: vi.fn() }));
+const mirrors = vi.hoisted(() => ({ googlePush: vi.fn(), googleDelete: vi.fn(), clinicorpPush: vi.fn(), clinicorpCancel: vi.fn(), clinicorpConflict: vi.fn(), clinicorpBusy: vi.fn() }));
 vi.mock("@/lib/prisma", () => ({ prisma: db }));
 vi.mock("@/modules/scheduling/google", () => ({ pushEventToGoogle: mirrors.googlePush, deleteEventFromGoogle: mirrors.googleDelete }));
-vi.mock("@/modules/scheduling/clinicorp", () => ({ pushAppointmentToClinicorp: mirrors.clinicorpPush, cancelAppointmentInClinicorp: mirrors.clinicorpCancel, hasClinicorpConflict: mirrors.clinicorpConflict }));
+vi.mock("@/modules/scheduling/clinicorp", () => ({ pushAppointmentToClinicorp: mirrors.clinicorpPush, cancelAppointmentInClinicorp: mirrors.clinicorpCancel, hasClinicorpConflict: mirrors.clinicorpConflict, listClinicorpBusyBlocks: mirrors.clinicorpBusy }));
 vi.mock("@/modules/agent-engine/handoff", () => ({ addLeadToHandoffGroup: vi.fn() }));
 
 import { getToolSchemas, runToolHandler } from "@/modules/agent-engine/tools";
@@ -40,6 +40,7 @@ beforeEach(() => {
   mirrors.googlePush.mockResolvedValue("google-novo");
   mirrors.clinicorpPush.mockResolvedValue({ status: "synced", appointmentId: "456" });
   mirrors.clinicorpConflict.mockResolvedValue(false);
+  mirrors.clinicorpBusy.mockResolvedValue([]);
 });
 afterEach(() => vi.useRealTimers());
 
@@ -148,6 +149,46 @@ describe("retorno de contato com consulta", () => {
   });
   it("não cria duplicata para confirmar ou contornar reagendamento", async () => {
     expect(await runToolHandler("schedule_meeting", ctx, { date: "2026-09-18", time: "14:00" })).toContain("já tem consulta");
+    expect(db.appointment.create).not.toHaveBeenCalled();
+  });
+});
+
+// Relato: o agente sugeria um horário já marcado, o contato aceitava e só
+// então ouvia "esse já está ocupado, escolha outro".
+describe("horários livres antes de sugerir", () => {
+  const slots = (args: Record<string, unknown>) => runToolHandler("list_available_slots", ctx, args);
+
+  it("fica disponível sempre que o agendamento está ligado", () => {
+    expect(getToolSchemas(["schedule_meeting"], { ...cfg, allowCancellation: false, allowRescheduling: false }).map((s) => s.name)).toContain("list_available_slots");
+  });
+  it("tira consultas nossas, bloqueios do Clinicorp e a pausa, e encaixa depois de cada ocupado", async () => {
+    // Nossa consulta 10:00–10:30 e Clinicorp 14:00–15:30 (horário de SP).
+    mirrors.clinicorpBusy.mockResolvedValue([{ startsAt: new Date("2026-09-17T17:00:00Z"), endsAt: new Date("2026-09-17T18:30:00Z") }]);
+    const result = await slots({ date: "2026-09-17" });
+    expect(result).toContain("09:00, 10:30, 11:00, 13:00, 15:30, 16:00, 17:00");
+    expect(result).not.toMatch(/10:00|12:00|14:00|15:00,/);
+    expect(mirrors.clinicorpBusy).toHaveBeenCalledWith(ctx.tenantId, "2026-09-17", cfg.timezone);
+  });
+  it("respeita a antecedência mínima e o limite exato aceito pela gravação", async () => {
+    db.appointment.findMany.mockResolvedValue([]);
+    // Agora são 09:00 em SP, antecedência de 2h: 11:00 ainda pode ser marcado.
+    expect(await slots({ date: "2026-09-16" })).toContain(": 11:00, 13:00");
+  });
+  it("diferencia dia sem atendimento de dia lotado", async () => {
+    expect(await slots({ date: "2026-09-19", days: 1 })).toContain("não atendemos");
+    db.appointment.findMany.mockResolvedValue([{ startsAt: new Date("2026-09-17T12:00:00Z"), endsAt: new Date("2026-09-17T21:00:00Z") }]);
+    expect(await slots({ date: "2026-09-17" })).toContain("sem horário livre");
+  });
+  it("consulta vários dias de uma vez, no máximo 7", async () => {
+    const result = await slots({ date: "2026-09-17", days: 30 });
+    expect(result.split("\n").filter((l) => l.startsWith("- "))).toHaveLength(7);
+  });
+  it("recusa por conflito já traz os livres do dia e não grava", async () => {
+    db.appointment.findMany.mockResolvedValueOnce([]).mockResolvedValue([appointment]);
+    mirrors.clinicorpConflict.mockResolvedValue(true);
+    const result = await runToolHandler("schedule_meeting", ctx, { date: "2026-09-17", time: "14:00" });
+    expect(result).toContain("ocupado");
+    expect(result).toContain("Livres no mesmo dia: 09:00, 10:30");
     expect(db.appointment.create).not.toHaveBeenCalled();
   });
 });

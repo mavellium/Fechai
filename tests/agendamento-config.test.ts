@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isWithinBusinessHours, parseScheduleConfig, scheduleSystemContext, validateScheduleBreaks } from "@/modules/scheduling/config";
+import { isWithinBusinessHours, parseScheduleConfig, scheduleSystemContext, slotStartTimes, validateScheduleBreaks } from "@/modules/scheduling/config";
 import { parseLocalDateTime } from "@/modules/scheduling/time";
 
 const cfg = parseScheduleConfig({ durationMinutes: 60, breaks: [
@@ -46,5 +46,16 @@ describe("compatibilidade de configurações", () => {
   });
   it("não trata a string false como ligada", () => {
     expect(parseScheduleConfig({ allowCancellation: "false", allowRescheduling: "true" })).toMatchObject({ allowCancellation: false, allowRescheduling: false });
+  });
+});
+
+describe("grade de horários", () => {
+  it("recomeça os blocos no fim da pausa em vez de pular a primeira hora da tarde", () => {
+    const cfg = parseScheduleConfig({ startTime: "09:00", endTime: "15:00", durationMinutes: 45, breaks: [{ label: "Almoço", startTime: "12:00", endTime: "13:00" }] });
+    expect(slotStartTimes(cfg)).toEqual(expect.arrayContaining(["09:00", "09:45", "13:00", "13:45"]));
+    expect(slotStartTimes(cfg).every((t) => t <= "14:15")).toBe(true);
+  });
+  it("diz ao agente para consultar os livres antes de sugerir", () => {
+    expect(scheduleSystemContext(parseScheduleConfig(null))).toContain("list_available_slots");
   });
 });

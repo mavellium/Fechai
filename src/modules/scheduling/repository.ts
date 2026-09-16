@@ -1,12 +1,13 @@
 import { prisma } from "@/lib/prisma";
-import { parseScheduleConfig, type ScheduleConfig } from "./config";
+import { isWithinBusinessHours, parseScheduleConfig, slotStartTimes, type ScheduleConfig } from "./config";
 import { deleteEventFromGoogle, pushEventToGoogle } from "./google";
 import {
   cancelAppointmentInClinicorp,
   hasClinicorpConflict,
+  listClinicorpBusyBlocks,
   pushAppointmentToClinicorp,
 } from "./clinicorp";
-import { dayKeyInZone, monthRangeUtc } from "./time";
+import { dayKeyInZone, monthRangeUtc, parseLocalDateTime } from "./time";
 
 /**
  * Leitura e escrita da agenda. Toda query filtra por tenantId (regra do
@@ -95,6 +96,55 @@ export async function hasConflictAnywhere(
 ): Promise<boolean> {
   if (await hasConflict(tenantId, startsAt, endsAt, ignoreId)) return true;
   return hasClinicorpConflict(tenantId, startsAt, endsAt, timezone, ignoreClinicorpId);
+}
+
+/**
+ * Horários livres de um dia local, prontos para o agente oferecer.
+ *
+ * Sem isto o agente só conhecia o expediente: sugeria um horário já ocupado, o
+ * contato aceitava e o `schedule_meeting` recusava — o agente então voltava
+ * atrás e pedia outra data. Aqui o horário só aparece se passar pelas mesmas
+ * regras da gravação: dia atendido, expediente, pausas, antecedência e
+ * conflito na nossa base e no Clinicorp.
+ *
+ * Candidatos: a grade do expediente (e recomeçada ao fim de cada pausa) mais o
+ * fim de cada compromisso ocupado, para uma consulta às 09:30 não esconder o
+ * encaixe das 10:30 numa grade de hora cheia.
+ */
+export async function listFreeSlots(
+  tenantId: string,
+  cfg: ScheduleConfig,
+  date: string,
+  now = new Date(),
+): Promise<Date[]> {
+  const earliest = now.getTime() + cfg.minNoticeHours * 3_600_000;
+  const durationMs = cfg.durationMinutes * 60_000;
+  const valid = (at: Date) =>
+    at.getTime() >= earliest && dayKeyInZone(at, cfg.timezone) === date && isWithinBusinessHours(at, cfg);
+
+  const grid = slotStartTimes(cfg)
+    .map((time) => parseLocalDateTime(date, time, cfg.timezone))
+    .filter((at): at is Date => at !== null && valid(at));
+  const dayStart = parseLocalDateTime(date, cfg.startTime, cfg.timezone);
+  const dayEnd = parseLocalDateTime(date, cfg.endTime, cfg.timezone);
+  if (!dayStart || !dayEnd || !grid.length) return [];
+
+  const [local, clinicorp] = await Promise.all([
+    prisma.appointment.findMany({
+      where: { tenantId, status: "scheduled", startsAt: { lt: dayEnd }, endsAt: { gt: dayStart } },
+      select: { startsAt: true, endsAt: true },
+    }),
+    listClinicorpBusyBlocks(tenantId, date, cfg.timezone),
+  ]);
+  const busy = [...local, ...clinicorp];
+
+  const candidates = new Map<number, Date>();
+  for (const at of [...grid, ...busy.map((b) => b.endsAt).filter(valid)]) candidates.set(at.getTime(), at);
+
+  // Mesma regra de sobreposição do `hasConflict`: encostar não é conflito.
+  return [...candidates.values()]
+    .filter((at) => !busy.some((b) => at < b.endsAt && at.getTime() + durationMs > b.startsAt.getTime()))
+    .sort((a, b) => a.getTime() - b.getTime());
 }
 
 /**
