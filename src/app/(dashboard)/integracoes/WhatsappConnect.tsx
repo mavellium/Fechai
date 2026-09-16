@@ -7,14 +7,25 @@ import { LoadingDots } from "@/components/ui/loading-dots";
 import { connectWhatsapp, refreshWhatsappStatus } from "./actions";
 import { WhatsappControls } from "./WhatsappControls";
 
-/** De quanto em quanto tempo perguntamos ao provedor se o QR já foi lido. */
+/**
+ * De quanto em quanto tempo perguntamos ao provedor se o QR já foi lido — e,
+ * na mesma resposta, buscamos o código ATUAL. Confortavelmente abaixo do giro
+ * do WhatsApp: o que não pode acontecer é a tela exibir um código já morto.
+ */
 const POLL_MS = 5000;
 /**
- * Validade do código. O provedor não devolve a expiração, mas o QR do WhatsApp
- * Web gira em torno de um minuto — antes disso a tela ficava dizendo
- * "aguardando" para sempre sobre um código que já tinha morrido.
+ * Validade do código NA TELA. O WhatsApp Web gira o QR a cada ~20s e invalida
+ * o anterior na hora; o provedor não devolve essa expiração, então contamos
+ * aqui. Antes o valor era 60s e o poll descartava o código novo que vinha
+ * junto: passados ~20s a tela seguia mostrando um QR morto, com o contador
+ * dizendo que faltava quase um minuto. Quem escaneava nessa janela levava
+ * "não foi possível conectar o dispositivo" do lado do celular, sem nada na
+ * tela sugerindo que o problema era o código velho.
+ *
+ * Como o poll renova a imagem a cada 5s, este contador hoje é só a rede de
+ * segurança para quando o provedor para de mandar código novo.
  */
-const QR_TTL_S = 60;
+const QR_TTL_S = 25;
 
 const STEPS = [
   <>Abra o WhatsApp no seu celular.</>,
@@ -101,7 +112,14 @@ export function WhatsappConnect({
     if (!configured || !qr || secondsLeft <= 0 || status === "connected") return;
     const id = setInterval(() => {
       void refreshWhatsappStatus().then((res) => {
-        if (res.ok && res.status) setStatus(res.status);
+        if (!res.ok) return;
+        if (res.status) setStatus(res.status);
+        // O código ATUAL vem nesta mesma resposta. Descartá-lo (o que a tela
+        // fazia) deixava o QR velho no ar depois do giro do WhatsApp.
+        if (res.qrCode) {
+          setQr(res.qrCode);
+          setSecondsLeft(QR_TTL_S);
+        }
       });
     }, POLL_MS);
     return () => clearInterval(id);

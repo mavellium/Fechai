@@ -38,11 +38,48 @@ export async function connectWhatsapp(): Promise<ConnectResult> {
 
   try {
     const existing = await prisma.whatsappInstance.findUnique({ where: { tenantId } });
+
+    // Instância que existe mas NÃO está conectada: desloga antes de pedir o QR.
+    //
+    // A Evolution conta os QRs que gera e, ao bater `QRCODE_LIMIT` (30 por
+    // padrão), marca a sessão como `refused` e para de aceitar leitura — o
+    // celular passa a responder "não foi possível conectar o dispositivo" em
+    // TODA tentativa, por mais rápido que se escaneie. Esse contador só zera
+    // com um logout de verdade, e o nosso estava quebrado (mandava POST numa
+    // rota DELETE), então ele só subia. Pedir QR sobre uma sessão meia-morta
+    // era empilhar código novo em cima do problema.
+    //
+    // Só quando NÃO está conectada: deslogar um número que está atendendo
+    // derruba o atendimento para gerar um QR que ninguém pediu.
+    if (existing?.externalId && existing.status !== "connected") {
+      try {
+        await provider.disconnect(existing.externalId);
+      } catch (err) {
+        // Sessão já limpa devolve erro, e isso é exatamente o estado que
+        // queríamos — seguir para o QR é o certo. Falha real também não pode
+        // travar aqui: sem QR a pessoa não tem o que fazer nesta tela.
+        console.error("[whatsapp] logout antes de gerar QR falhou", err);
+      }
+    }
+
     // Instância já criada: só atualiza o QR. Recriar com o mesmo nome devolve
     // 403 da Evolution (instância em uso) e quebrava a tela na 2ª visita.
     const res = existing?.externalId
       ? { externalId: existing.externalId, ...(await provider.getQrCode(existing.externalId)) }
       : await provider.createInstance(tenantId);
+
+    // Reaponta o webhook a cada conexão, não só ao criar: instâncias criadas
+    // antes desta correção ficaram penduradas no webhook global (sem o header
+    // de segredo), e a URL pública do app pode ter mudado desde então. É barato
+    // e idempotente. NÃO derruba a conexão se falhar: o número conectado é o
+    // que o cliente veio buscar aqui; webhook quebrado é problema do próximo
+    // passo, e o script `whatsapp:webhooks` conserta em lote.
+    try {
+      await provider.ensureWebhook(res.externalId);
+    } catch (err) {
+      console.error("[whatsapp] falha ao configurar webhook da instância", err);
+    }
+
     await prisma.whatsappInstance.upsert({
       where: { tenantId },
       create: { tenantId, externalId: res.externalId, status: res.status },

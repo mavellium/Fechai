@@ -16,6 +16,7 @@
     "db:studio": "prisma studio",
     "worker": "tsx workers/follow-up-worker/index.ts",
     "widget:deploy": "tsx scripts/deploy-widget.ts",
+    "whatsapp:webhooks": "tsx scripts/fix-evolution-webhooks.ts",
     "backup:daemon": "tsx scripts/backup-daemon.ts",
     "backup:now": "tsx scripts/backup.ts manual",
     "db:restore": "tsx scripts/restore.ts",
