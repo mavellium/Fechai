@@ -86,7 +86,8 @@ describe("envio de agendamentos ao Clinicorp", () => {
 
   it("não lança com timeout e não informa sincronização bem-sucedida", async () => {
     fetchMock.mockRejectedValue(new DOMException("timeout", "TimeoutError"));
-    expect(await pushAppointmentToClinicorp("tenant-1", event)).toMatchObject({ status: "failed", error: "O Clinicorp não respondeu a tempo." });
+    const result = await pushAppointmentToClinicorp("tenant-1", event);
+    expect(result).toMatchObject({ status: "failed", error: expect.stringContaining("O Clinicorp não respondeu a tempo.") });
   });
 
   it("não envia sem contato", async () => {
@@ -174,5 +175,82 @@ describe("disponibilidade", () => {
     expect(await hasClinicorpConflict("tenant-1", event.startsAt, event.endsAt, event.timeZone)).toBe(false);
     fetchMock.mockResolvedValue(json([{ Dentist_PersonId: 222222222222, fromTime: "16:40", toTime: "17:00" }]));
     expect(await hasClinicorpConflict("tenant-1", event.startsAt, event.endsAt, event.timeZone)).toBe(true);
+  });
+});
+
+// Relato: "Última tentativa falhou: Vincule um contato com telefone" — vinha do
+// chat de teste. O teste precisa marcar em todas as integrações, mas o telefone
+// dele é sintético ("sandbox:<agente>").
+describe("agendamento do chat de teste", () => {
+  const testLead = { name: "Chat de teste", phone: "sandbox:cmf9x2k7p0001", isTest: true };
+  const body = () => {
+    const [, init] = fetchMock.mock.calls.find(([url]) => url.pathname.endsWith("/create_appointment_by_api"))! as unknown as [URL, RequestInit];
+    return JSON.parse(String(init.body));
+  };
+
+  it("vai ao Clinicorp sem telefone, sem cadastro de paciente e identificado como teste", async () => {
+    db.lead.findUnique.mockResolvedValue(testLead);
+    const result = await createAppointment({ tenantId: "tenant-1", leadId: "lead-teste", title: event.title,
+      startsAt: event.startsAt, durationMinutes: 15, source: "agent", timezone: event.timeZone });
+
+    expect(result.clinicorpSync).toEqual({ status: "synced", appointmentId: "987654321" });
+    expect(fetchMock.mock.calls.some(([url]) => url.pathname.includes("/patient/"))).toBe(false);
+    expect(body()).not.toHaveProperty("MobilePhone");
+    expect(body()).not.toHaveProperty("Patient_PersonId");
+    expect(body().PatientName).toContain("TESTE");
+    expect(body().Notes).toContain("chat de teste");
+    expect(db.clinicorpIntegration.update).not.toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ lastError: expect.stringContaining("telefone") }) }));
+  });
+
+  it("contato real sem telefone continua recusado", async () => {
+    expect(await pushAppointmentToClinicorp("tenant-1", { ...event, lead: { name: "Fulano", phone: null } })).toMatchObject({ status: "failed" });
+  });
+});
+
+// Relato: o aviso laranja do card era genérico ("Vincule um contato com
+// telefone") — sem dizer qual agendamento, de quem, nem o que o Clinicorp disse.
+describe("aviso de falha com o motivo", () => {
+  const lastError = () => {
+    const calls = db.clinicorpIntegration.update.mock.calls as unknown as [{ data: { lastError?: string } }][];
+    return calls.map(([arg]) => arg.data.lastError).filter(Boolean).at(-1) ?? "";
+  };
+
+  it("diz de quem é o agendamento, para quando, e o que fazer", async () => {
+    await pushAppointmentToClinicorp("tenant-1", { ...event, lead: { name: "Maria Souza", phone: null } });
+    expect(lastError()).toContain("Maria Souza");
+    expect(lastError()).toMatch(/14 de set\.?,? .*16:30/);
+    expect(lastError()).toContain("salvo só no fechai");
+    expect(lastError()).toContain("Adicione o telefone em Contatos");
+  });
+
+  it("repassa a mensagem que o Clinicorp escreveu no erro HTTP", async () => {
+    integration.categoryDescription = null;
+    fetchMock.mockImplementation(async (url: URL) => url.pathname.endsWith("/patient/get")
+      ? json({ PatientId: 33 })
+      : json({ message: "Profissional sem agenda neste horário" }, 400));
+    expect(await pushAppointmentToClinicorp("tenant-1", event)).toMatchObject({ error: expect.stringContaining("Profissional sem agenda neste horário") });
+    expect(lastError()).toContain('erro 400: "Profissional sem agenda neste horário"');
+  });
+
+  it("repassa o motivo de uma recusa em 200 e ignora página HTML", async () => {
+    integration.categoryDescription = null;
+    fetchMock.mockImplementation(async (url: URL) => url.pathname.endsWith("/patient/get")
+      ? json({ PatientId: 33 })
+      : json([{ Status: "ERROR", error: "Horário bloqueado" }]));
+    await pushAppointmentToClinicorp("tenant-1", event);
+    expect(lastError()).toContain('O Clinicorp recusou: "Horário bloqueado"');
+
+    fetchMock.mockImplementation(async (url: URL) => url.pathname.endsWith("/patient/get")
+      ? json({ PatientId: 33 })
+      : new Response("<html><body>Bad Gateway</body></html>", { status: 502 }));
+    await pushAppointmentToClinicorp("tenant-1", event);
+    expect(lastError()).toContain("erro 502 sem explicar o motivo");
+    expect(lastError()).not.toContain("<html>");
+  });
+
+  it("aponta a categoria pelo nome quando ela sumiu do Clinicorp", async () => {
+    integration.categoryDescription = "Retorno";
+    await pushAppointmentToClinicorp("tenant-1", event);
+    expect(lastError()).toContain('A categoria "Retorno" não existe mais no Clinicorp');
   });
 });

@@ -2,7 +2,7 @@ import { prisma } from "@/lib/prisma";
 import type { ClinicorpIntegration } from "@prisma/client";
 import { decryptSecret, encryptSecret } from "@/lib/crypto";
 import { getCalendarFeatures } from "./features";
-import { parseLocalDateTime, partsInZone } from "./time";
+import { formatInZone, parseLocalDateTime, partsInZone } from "./time";
 
 /**
  * Integração opcional com o Clinicorp (sistema de gestão de clínicas).
@@ -72,12 +72,13 @@ async function call<T>(
     });
 
     if (!res.ok) {
-      const text = (await res.text().catch(() => "")).slice(0, 300);
+      const text = await res.text().catch(() => "");
       // 401/403 é credencial: vale uma mensagem que a pessoa entenda na tela.
+      const reason = clinicorpReason(text);
       const error =
         res.status === 401 || res.status === 403
-          ? "Usuário ou token da API recusado pelo Clinicorp."
-          : `Clinicorp respondeu ${res.status}. ${text}`;
+          ? "Usuário ou token da API recusado pelo Clinicorp. Gere um novo token no Clinicorp e reconecte aqui."
+          : `O Clinicorp respondeu com erro ${res.status}${reason ? `: "${reason}"` : " sem explicar o motivo"}.`;
       return { ok: false, error, status: res.status };
     }
 
@@ -89,7 +90,13 @@ async function call<T>(
     if (row && typeof row === "object" &&
         (row.error || row.Error || row.success === false ||
          /^(ERROR|FAILED|FAILURE)$/i.test(String(row.Status ?? row.status ?? "")))) {
-      return { ok: false, error: "O Clinicorp recusou a operação. Confira as credenciais e os dados do agendamento." };
+      const reason = clinicorpReason(data);
+      return {
+        ok: false,
+        error: reason
+          ? `O Clinicorp recusou: "${reason}".`
+          : "O Clinicorp recusou a operação sem explicar o motivo. Confira as credenciais e os dados do agendamento.",
+      };
     }
     return { ok: true, data };
   } catch (err) {
@@ -101,13 +108,48 @@ async function call<T>(
   }
 }
 
-/** Anota o resultado da última chamada — a tela mostra isso ao cliente. */
+/**
+ * O motivo que o próprio Clinicorp escreveu, quando escreveu. Aceita o corpo cru
+ * (texto de uma resposta de erro) ou já lido. Página HTML de erro não é motivo:
+ * jogar markup no aviso só esconderia o problema.
+ */
+function clinicorpReason(body: unknown): string | null {
+  let parsed = body;
+  if (typeof body === "string") {
+    const text = body.trim();
+    if (!text || text.startsWith("<")) return null;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return text.slice(0, 200);
+    }
+  }
+  const row = Array.isArray(parsed) ? parsed[0] : parsed;
+  if (typeof row === "string") return row.trim().slice(0, 200) || null;
+  if (!row || typeof row !== "object") return null;
+  const r = row as Record<string, unknown>;
+  for (const key of ["message", "Message", "error", "Error", "msg", "detail", "Description"]) {
+    const value = r[key];
+    if (typeof value === "string" && value.trim()) return value.trim().slice(0, 200);
+    if (value && typeof value === "object") {
+      const nested = (value as Record<string, unknown>).message;
+      if (typeof nested === "string" && nested.trim()) return nested.trim().slice(0, 200);
+    }
+  }
+  return null;
+}
+
+/**
+ * Anota o resultado da última chamada — a tela mostra isso ao cliente. O erro
+ * chega com contexto (qual agendamento, qual operação): "falhou" sozinho não diz
+ * à clínica o que conferir.
+ */
 async function recordOutcome(tenantId: string, error: string | null): Promise<void> {
   await prisma.clinicorpIntegration
     .update({
       where: { tenantId },
       data: error
-        ? { lastErrorAt: new Date(), lastError: error.slice(0, 300) }
+        ? { lastErrorAt: new Date(), lastError: error.slice(0, 500) }
         : { lastSyncAt: new Date(), lastErrorAt: null, lastError: null },
     })
     .catch(() => {});
@@ -164,9 +206,9 @@ export async function getClinicorpStatus(tenantId: string) {
   const integration = await getIntegration(tenantId, { ignoreFeatureFlag: true });
   if (!integration) return null;
   const { subscriberId, businessId, dentistId, categoryDescription, syncEnabled,
-    checkAvailability, lastError, lastSyncAt } = integration;
+    checkAvailability, lastError, lastErrorAt, lastSyncAt } = integration;
   return { subscriberId, businessId, dentistId, categoryDescription, syncEnabled,
-    checkAvailability, lastError, lastSyncAt };
+    checkAvailability, lastError, lastErrorAt, lastSyncAt };
 }
 
 /**
@@ -258,7 +300,7 @@ export async function testClinicorpConnection(tenantId: string): Promise<CallRes
   if (!integration) return { ok: false, error: "Clinicorp não está conectado. Revise as credenciais." };
   const result = await verifyClinicorpCredentials(integration);
   if (!result.ok) {
-    await recordOutcome(tenantId, result.error);
+    await recordOutcome(tenantId, `Teste de conexão falhou. ${result.error}`);
     return result;
   }
   if (!result.businesses.some((b) => b.id === integration.businessId)) {
@@ -347,7 +389,8 @@ export type ClinicorpEventInput = {
   startsAt: Date;
   endsAt: Date;
   timeZone: string;
-  lead?: { name: string | null; phone: string | null } | null;
+  /** `isTest`: contato do chat de teste, com telefone sintético ("sandbox:<agente>"). */
+  lead?: { name: string | null; phone: string | null; isTest?: boolean } | null;
 };
 
 /** "09:30" no fuso do negócio — a API espera hora local, não UTC. */
@@ -372,18 +415,34 @@ export async function pushAppointmentToClinicorp(
   tenantId: string,
   input: ClinicorpEventInput,
 ): Promise<ClinicorpSyncResult> {
+  // O chat de teste marca de verdade em todas as integrações — é assim que o
+  // dono vê o fluxo inteiro funcionando. Mas o telefone dele é sintético:
+  // exigi-lo gravava "Vincule um contato com telefone" no card da clínica, e
+  // os dígitos do id do agente viravam um paciente com celular inventado.
+  // Vai sem telefone e sem cadastro, com o nome dizendo que é teste.
+  const isTest = input.lead?.isTest === true;
+
+  // O aviso do card precisa dizer QUAL agendamento falhou: "falhou" sozinho
+  // não deixa a clínica achar o horário nem saber o que conferir. Quem chama
+  // recebe só o motivo, porque já tem o próprio contexto na mão.
+  const who = isTest
+    ? "do chat de teste"
+    : `de ${input.lead?.name?.trim() || input.lead?.phone || "contato sem nome"}`;
+  const context = `Agendamento ${who} para ${formatInZone(input.startsAt, input.timeZone)}, salvo só no fechai`;
   const failed = async (error: string): Promise<ClinicorpSyncResult> => {
-    await recordOutcome(tenantId, error);
+    await recordOutcome(tenantId, `${context}. ${error}`);
     return { status: "failed", error };
   };
   try {
     const integration = await getIntegration(tenantId);
     if (!integration || !integration.syncEnabled) return { status: "skipped" };
     if (!integration.businessId) {
-      return await failed("Nenhuma clínica escolhida para receber os agendamentos.");
+      return await failed("Nenhuma clínica escolhida para receber os agendamentos: escolha a clínica abaixo e salve as preferências.");
     }
-    if (!input.lead?.phone || !digits(input.lead.phone)) {
-      return await failed("Vincule um contato com telefone para enviar o agendamento ao Clinicorp.");
+    if (!isTest && (!input.lead?.phone || !digits(input.lead.phone))) {
+      return await failed(input.lead
+        ? "O contato não tem telefone, e o Clinicorp precisa dele para achar ou cadastrar o paciente. Adicione o telefone em Contatos."
+        : "O horário não tem contato vinculado, e o Clinicorp precisa de um paciente com telefone. Vincule um contato ao marcar.");
     }
 
     // O nome continua no banco por compatibilidade. Resolva o ID real antes de
@@ -391,10 +450,12 @@ export async function pushAppointmentToClinicorp(
     let categoryId: string | undefined;
     if (integration.categoryDescription) {
       const categories = await fetchCategories(integration);
-      if (!categories.ok) return await failed(categories.error);
+      if (!categories.ok) return await failed(`Não foi possível carregar as categorias. ${categories.error}`);
       const matches = categories.data.filter((c) => c.name === integration.categoryDescription);
       if (matches.length !== 1) {
-        return await failed("A categoria escolhida não existe ou tem nome duplicado no Clinicorp. Revise a categoria em Integrações.");
+        return await failed(matches.length
+          ? `Existem ${matches.length} categorias chamadas "${integration.categoryDescription}" no Clinicorp. Renomeie uma delas lá ou escolha outra categoria abaixo.`
+          : `A categoria "${integration.categoryDescription}" não existe mais no Clinicorp. Escolha outra categoria abaixo.`);
       }
       categoryId = matches[0].id;
     }
@@ -405,7 +466,7 @@ export async function pushAppointmentToClinicorp(
       }
     }
 
-    const patientId = input.lead ? await resolvePatientId(integration, input.lead) : null;
+    const patientId = input.lead && !isTest ? await resolvePatientId(integration, input.lead) : null;
     if (patientId && (!/^\d+$/.test(patientId) || !Number.isSafeInteger(Number(patientId)) || Number(patientId) <= 0)) {
       return await failed("O identificador do paciente é inválido ou excede a precisão suportada.");
     }
@@ -417,15 +478,17 @@ export async function pushAppointmentToClinicorp(
         Clinic_BusinessId: Number(integration.businessId),
         ...(integration.dentistId ? { Dentist_PersonId: Number(integration.dentistId) } : {}),
         ...(patientId ? { Patient_PersonId: Number(patientId) } : {}),
-        PatientName: input.lead?.name?.trim() || input.title,
-        ...(input.lead?.phone ? { MobilePhone: digits(input.lead.phone) } : {}),
+        PatientName: isTest ? "TESTE fechai (chat de teste do agente)" : input.lead?.name?.trim() || input.title,
+        ...(!isTest && input.lead?.phone ? { MobilePhone: digits(input.lead.phone) } : {}),
         // A data vai como o dia local em ISO. Mandar o instante UTC cru faria o
         // agendamento cair no dia anterior para horários da manhã no Brasil.
         date: `${localDate(input.startsAt, input.timeZone)}T00:00:00.000Z`,
         fromTime: localTime(input.startsAt, input.timeZone),
         toTime: localTime(input.endsAt, input.timeZone),
         ...(categoryId ? { CategoryId: Number(categoryId) } : {}),
-        ...(input.notes ? { Notes: input.notes } : {}),
+        ...(isTest
+          ? { Notes: ["Agendamento de teste feito no chat de teste do fechai. Pode excluir.", input.notes].filter(Boolean).join("\n") }
+          : input.notes ? { Notes: input.notes } : {}),
       },
     });
 
@@ -440,13 +503,15 @@ export async function pushAppointmentToClinicorp(
     const id = row?.id ?? row?.Id;
     if (!id || !/^\d+$/.test(String(id)) || !Number.isSafeInteger(Number(id)) || Number(id) <= 0 ||
         (row?.Status && row.Status !== "CREATED")) {
-      return await failed("O Clinicorp não confirmou a criação com um identificador válido. O horário está salvo no fechai; confira a agenda da clínica antes de tentar novamente.");
+      const status = row?.Status ? ` (status "${String(row.Status)}")` : "";
+      return await failed(`O Clinicorp respondeu sem confirmar a criação${status}. Confira a agenda da clínica antes de marcar de novo, para não duplicar.`);
     }
     await recordOutcome(tenantId, null);
     return { status: "synced", appointmentId: String(id) };
   } catch (err) {
     console.error("[clinicorp] criar agendamento falhou", err);
-    return failed("Não foi possível confirmar o envio do horário ao Clinicorp.");
+    const detail = err instanceof Error && err.message ? ` (${err.message.slice(0, 120)})` : "";
+    return failed(`Erro inesperado ao enviar ao Clinicorp${detail}. Confira a agenda da clínica antes de marcar de novo.`);
   }
 }
 
@@ -465,7 +530,7 @@ export async function cancelAppointmentInClinicorp(
     });
     if (!res.ok) {
       console.error("[clinicorp] cancelar agendamento falhou", res.error);
-      await recordOutcome(tenantId, res.error);
+      await recordOutcome(tenantId, `Cancelamento do agendamento ${clinicorpAppointmentId} no Clinicorp não foi confirmado; ele pode continuar na agenda da clínica. ${res.error}`);
       return false;
     }
     return true;

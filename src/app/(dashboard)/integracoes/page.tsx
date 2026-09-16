@@ -12,7 +12,7 @@ import { Card, CardTitle } from "@/components/ui/card";
 import { InfoHint } from "@/components/ui/info-hint";
 import { PageHeader } from "@/components/ui/page-header";
 import { FilterTabs } from "@/components/ui/filter-tabs";
-import { dateLabel } from "@/lib/format";
+import { dateLabel, relativeTime } from "@/lib/format";
 import { ensureTenantWidgetDeployed } from "@/lib/widget/deploy";
 import { isGoogleCalendarConfigured } from "@/modules/scheduling/google";
 import { getCalendarFeatures } from "@/modules/scheduling/features";
@@ -117,6 +117,9 @@ export default async function IntegracoesPage({
           syncEnabled: clinicorpRow.syncEnabled,
           checkAvailability: clinicorpRow.checkAvailability,
           lastError: clinicorpRow.lastError,
+          // Calculado aqui, não no cliente: "há 3 horas" com o relógio do
+          // navegador divergiria do HTML do servidor na hidratação.
+          lastErrorWhen: clinicorpRow.lastErrorAt ? relativeTime(clinicorpRow.lastErrorAt) : null,
           businesses: await listClinicorpBusinesses(tenantId),
         }
       : { connected: false };

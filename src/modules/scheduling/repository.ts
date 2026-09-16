@@ -202,7 +202,7 @@ export async function createAppointment(input: CreateAppointmentInput) {
   // precisa do contato — o Google não usa nada disso.
   const lead = input.leadId
     ? await prisma.lead
-        .findUnique({ where: { id: input.leadId }, select: { name: true, phone: true } })
+        .findUnique({ where: { id: input.leadId }, select: { name: true, phone: true, isTest: true } })
         .catch(() => null)
     : null;
 
@@ -298,7 +298,7 @@ export async function rescheduleAppointment(input: {
     previous.clinicorpAppointmentId ? cancelAppointmentInClinicorp(input.tenantId, previous.clinicorpAppointmentId) : Promise.resolve(true),
   ]);
   const lead = await prisma.lead.findFirst({
-    where: { id: input.leadId, tenantId: input.tenantId }, select: { name: true, phone: true },
+    where: { id: input.leadId, tenantId: input.tenantId }, select: { name: true, phone: true, isTest: true },
   }).catch(() => null);
   const event = { title: previous.title, startsAt: input.startsAt, endsAt, timeZone: input.timezone };
   const [googleEventId, clinicorpSync] = await Promise.all([

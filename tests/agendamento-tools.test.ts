@@ -192,3 +192,4 @@ describe("horários livres antes de sugerir", () => {
     expect(db.appointment.create).not.toHaveBeenCalled();
   });
 });
+

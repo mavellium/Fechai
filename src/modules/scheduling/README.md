@@ -162,6 +162,12 @@ Base: `https://api.clinicorp.com/rest/v1`. Quase todo endpoint pede
 - **A data vai como dia local, não instante UTC.** `fromTime`/`toTime` são hora
   local (`HH:mm`) e `date` é o dia local em ISO com `T00:00:00.000Z`. Mandar o
   instante UTC cru jogaria horários da manhã no Brasil para o dia anterior.
+- **Chat de teste marca em todas as integrações**, como um contato real — é assim
+  que o dono vê o fluxo inteiro. Só muda o paciente: o telefone do sandbox é
+  sintético (`sandbox:<agente>`), então o envio vai **sem telefone e sem
+  cadastro de paciente**, com `PatientName` "TESTE fechai" e nota dizendo que
+  pode excluir. Exigir telefone gravava "Vincule um contato com telefone" no
+  card; usar os dígitos do id criava paciente com celular inventado.
 - **`IgnoreSameName: "X"` ao criar paciente.** Sem isso o Clinicorp recusa quando
   já existe alguém com o mesmo nome — e "João Silva" repetido é rotina numa base
   de pacientes. O telefone é o que de fato distingue, e ele já foi consultado
@@ -178,7 +184,13 @@ Base: `https://api.clinicorp.com/rest/v1`. Quase todo endpoint pede
   agendamento é da clínica e tudo conta.
 - **`lastError`/`lastErrorAt`** existem para a tela avisar que a credencial
   venceu. Sem isso, um token expirado só apareceria quando a clínica reclamasse
-  de um paciente que não chegou na agenda.
+  de um paciente que não chegou na agenda. **O erro gravado tem que se explicar
+  sozinho**: `pushAppointmentToClinicorp` prefixa de quem é o agendamento e para
+  quando ("Agendamento de Maria para seg., 14 de set., 16:30, salvo só no
+  fechai."), o motivo diz o que fazer, e `clinicorpReason()` repassa o texto que
+  o próprio Clinicorp escreveu (JSON `message`/`error`; página HTML é ignorada).
+  O card mostra ainda "há 3 horas" (`lastErrorWhen`, formatado no servidor).
+  Quem chama o push recebe só o motivo, sem o prefixo — já tem o contexto.
 
 ### Confirmação de envio e preferências
 

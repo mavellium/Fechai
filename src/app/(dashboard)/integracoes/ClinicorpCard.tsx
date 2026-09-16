@@ -34,6 +34,8 @@ export type ClinicorpState =
       syncEnabled: boolean;
       checkAvailability: boolean;
       lastError: string | null;
+      /** "há 3 horas" — quando o erro aconteceu, já formatado no servidor. */
+      lastErrorWhen: string | null;
       businesses: ClinicorpBusinessOption[];
     };
 
@@ -196,7 +198,7 @@ function ClinicorpConnected({ state }: { state: Extract<ClinicorpState, { connec
           vista em vez de só no log do servidor. */}
       {state.lastError && (
         <Alert tone="warn">
-          Última tentativa falhou: {state.lastError}
+          Falha no envio ao Clinicorp{state.lastErrorWhen ? ` ${state.lastErrorWhen}` : ""}: {state.lastError}
         </Alert>
       )}
 
