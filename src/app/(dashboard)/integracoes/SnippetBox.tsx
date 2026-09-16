@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { Switch } from "@/components/ui/switch";
 import { setWidgetEnabled, updateWidgetConfig } from "./actions";
+import { UnsavedForm } from "@/components/ui/unsaved-changes";
 
 const MAX_ICON_BYTES = 5 * 1024 * 1024;
 
@@ -124,7 +125,7 @@ export function SnippetBox({
         {copyError && <Alert tone="warn">{copyError}</Alert>}
       </div>
 
-      <form action={formAction} className="space-y-5 border-t border-white/10 pt-4">
+      <UnsavedForm action={formAction} result={state} label="Personalização do widget" className="space-y-5 border-t border-white/10 pt-4">
         <h4 className="font-mono text-micro uppercase tracking-[0.15em] text-white/60">
           Personalizar botão
         </h4>
@@ -245,7 +246,7 @@ export function SnippetBox({
         <Button type="submit" variant="outline" size="sm" loading={pending} loadingLabel="Salvando">
           Salvar personalização
         </Button>
-      </form>
+      </UnsavedForm>
     </div>
   );
 }

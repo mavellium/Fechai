@@ -10,6 +10,7 @@ import { Field, fieldProps } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { SelectMenu } from "@/components/ui/select-menu";
 import { Switch } from "@/components/ui/switch";
+import { UnsavedForm } from "@/components/ui/unsaved-changes";
 import {
   connectClinicorpAction,
   disconnectClinicorpAction,
@@ -59,7 +60,7 @@ function ClinicorpConnectForm() {
   }, [result, router]);
 
   return (
-    <form action={action} className="space-y-3">
+    <UnsavedForm action={action} result={result} label="Conexão Clinicorp" className="space-y-3">
       <p className="text-sm text-white/55">
         Conecte para que os horários marcados aqui entrem na agenda da clínica, já ligados à ficha
         do paciente — e para o agente não oferecer um horário que a recepção já ocupou.
@@ -113,7 +114,7 @@ function ClinicorpConnectForm() {
       </Button>
 
       {result && !result.ok && <Alert tone="danger">{result.error}</Alert>}
-    </form>
+    </UnsavedForm>
   );
 }
 
@@ -202,7 +203,7 @@ function ClinicorpConnected({ state }: { state: Extract<ClinicorpState, { connec
       {/* Via onSubmit + transition, pois <form action> dispara um reset nativo
           no commit do React (até selects controlados voltam à primeira opção).
           Preferências devem continuar preenchidas após sucesso ou erro. */}
-      <form onSubmit={(event) => {
+      <UnsavedForm result={settings} label="Preferências Clinicorp" onSubmit={(event) => {
         event.preventDefault();
         const data = new FormData(event.currentTarget);
         startTransition(() => saveSettings(data));
@@ -328,7 +329,7 @@ function ClinicorpConnected({ state }: { state: Extract<ClinicorpState, { connec
         </Button>
         {settings && !settings.ok && <Alert tone="danger">{settings.error}</Alert>}
         {settings?.ok && <Alert tone="success">{settings.info}</Alert>}
-      </form>
+      </UnsavedForm>
 
       <div className="space-y-3 border-t border-white/10 pt-3">
         <div className="flex items-center justify-between gap-3">

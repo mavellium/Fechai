@@ -212,18 +212,20 @@ export async function pushEventToGoogle(
 }
 
 /** Remove o evento espelhado. Silencioso pelo mesmo motivo do push. */
-export async function deleteEventFromGoogle(tenantId: string, eventId: string): Promise<void> {
+export async function deleteEventFromGoogle(tenantId: string, eventId: string): Promise<boolean> {
   try {
     const integration = await prisma.calendarIntegration.findUnique({ where: { tenantId } });
-    if (!integration) return;
+    if (!integration) return false;
     const accessToken = await validAccessToken(tenantId);
-    if (!accessToken) return;
+    if (!accessToken) return false;
 
-    await fetch(
+    const response = await fetch(
       `${CALENDAR_API}/calendars/${encodeURIComponent(integration.calendarId)}/events/${encodeURIComponent(eventId)}`,
       { method: "DELETE", headers: { Authorization: `Bearer ${accessToken}` } },
     );
+    return response.ok;
   } catch (err) {
     console.error("[google-calendar] remover evento falhou", err);
+    return false;
   }
 }

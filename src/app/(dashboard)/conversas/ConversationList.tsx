@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { Badge } from "@/components/ui/badge";
 import { shortAge } from "@/lib/format";
 import { leadStatusLabel } from "./leadStatus";
 import { DeleteTestConversationButton } from "./DeleteTestConversationButton";
@@ -44,6 +43,15 @@ function group(items: ConversationListItem[], now: Date) {
   return buckets.filter((b) => b.items.length > 0);
 }
 
+/** Cor do estágio do lead, a mesma do ponto no seletor de filtros. */
+const STATUS_DOT: Record<string, string> = {
+  neutral: "bg-neutral panel:bg-white/40",
+  iris: "bg-iris",
+  warn: "bg-warn",
+  success: "bg-success",
+  danger: "bg-danger",
+};
+
 function Item({
   item,
   href,
@@ -56,25 +64,51 @@ function Item({
   const status = leadStatusLabel(item.lead.status);
   const name = item.lead.name ?? item.lead.phone;
 
+  // A linha tem duas alturas de informação, não três: quem é + o que disse.
+  // O estágio do lead virou o ponto colado ao nome (mesma cor do filtro, sem
+  // ocupar linha), e "precisa de você" virou a faixa na borda esquerda — os
+  // dois estados que restam são excludentes na prática e cabem num rótulo só.
+  const flag = item.needsHuman
+    ? { text: "precisa de você", color: "text-danger", bar: "bg-danger" }
+    : item.agentPaused
+      ? { text: "agente pausado", color: "text-warn", bar: "bg-warn" }
+      : null;
+
   return (
     <li className="group/item relative">
       <Link
         href={href}
         aria-current={active ? "true" : undefined}
-        className={`flex gap-3 rounded-surface px-3 py-2.5 pr-10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris ${
+        className={`flex gap-2.5 rounded-surface py-2 pl-3 pr-9 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris ${
           active ? "bg-iris/20" : "hover:bg-white/5"
         }`}
       >
+        {/* Faixa na borda: sinaliza urgência sem consumir largura de texto. */}
+        {flag && (
+          <span
+            aria-hidden
+            className={`absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full ${flag.bar}`}
+          />
+        )}
+
         <span
           aria-hidden
-          className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/10 font-display text-sm font-semibold uppercase text-white/70"
+          className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/10 font-display text-xs font-semibold uppercase text-white/70"
         >
           {name.slice(0, 1)}
         </span>
 
         <span className="min-w-0 flex-1">
-          <span className="flex items-baseline justify-between gap-2">
-            <span className="truncate text-sm font-medium text-white">{name}</span>
+          <span className="flex items-baseline gap-1.5">
+            {/* Ponto do estágio: cor + nome acessível, nunca cor sozinha. */}
+            <span
+              aria-hidden
+              className={`h-1.5 w-1.5 shrink-0 self-center rounded-full ${
+                item.isTest ? "bg-white/25" : STATUS_DOT[status.tone] ?? STATUS_DOT.neutral
+              }`}
+            />
+            <span className="sr-only">{item.isTest ? "Conversa de teste" : status.label}. </span>
+            <span className="min-w-0 flex-1 truncate text-sm font-medium text-white">{name}</span>
             <time
               dateTime={item.updatedAt.toISOString()}
               className="shrink-0 font-mono text-micro text-white/45"
@@ -83,24 +117,22 @@ function Item({
             </time>
           </span>
 
-          <span className="mt-0.5 block truncate text-xs text-white/60">
-            {item.preview ?? "Sem mensagens"}
-          </span>
-
-          <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
-            {item.isTest ? (
-              <Badge tone="neutral">teste</Badge>
-            ) : (
-              <Badge tone={status.tone}>{status.label}</Badge>
+          <span className="mt-0.5 flex items-baseline gap-1.5 pl-3">
+            <span className="min-w-0 flex-1 truncate text-xs text-white/55">
+              {item.preview ?? "Sem mensagens"}
+            </span>
+            {/* Texto puro no lugar da pílula: mesma informação, sem a caixa. */}
+            {flag && (
+              <span className={`shrink-0 font-mono text-micro uppercase tracking-wide ${flag.color}`}>
+                {flag.text}
+              </span>
             )}
-            {item.agentPaused && <Badge tone="warn">agente pausado</Badge>}
-            {item.needsHuman && <Badge tone="danger">precisa de você</Badge>}
           </span>
         </span>
       </Link>
 
       {item.isTest && (
-        <span className="absolute right-1.5 top-1/2 -translate-y-1/2 opacity-60 transition-opacity group-hover/item:opacity-100">
+        <span className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 transition-opacity group-hover/item:opacity-100 focus-within:opacity-100">
           <DeleteTestConversationButton conversationId={item.id} iconOnly />
         </span>
       )}

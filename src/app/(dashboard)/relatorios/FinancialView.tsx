@@ -15,6 +15,7 @@ import { dateLabel, formatBRL } from "@/lib/format";
 import type { FinancialSummary } from "@/modules/reports/service";
 import { saveLeadValue } from "./actions";
 import { FinancialCharts } from "./FinancialCharts";
+import { UnsavedForm, useUnsavedNavigation } from "@/components/ui/unsaved-changes";
 
 /**
  * Visão Financeira de /relatorios. Número central é o retorno ESTIMADO (nunca
@@ -29,6 +30,8 @@ import { FinancialCharts } from "./FinancialCharts";
  */
 export function FinancialView({ summary }: { summary: FinancialSummary }) {
   const dialog = useRef<HTMLDialogElement>(null);
+  const confirmNavigation = useUnsavedNavigation();
+  const close = () => confirmNavigation(() => dialog.current?.close(), dialog.current);
   const [state, formAction, pending] = useActionState(saveLeadValue, null);
 
   useEffect(() => {
@@ -142,6 +145,7 @@ export function FinancialView({ summary }: { summary: FinancialSummary }) {
 
       <dialog
         ref={dialog}
+        onCancel={(event) => { event.preventDefault(); close(); }}
         aria-labelledby="valor-do-lead-titulo"
         className="m-auto w-[min(28rem,92vw)] rounded-surface border border-white/15 bg-ink p-6 text-white backdrop:bg-ink/70"
       >
@@ -156,7 +160,7 @@ export function FinancialView({ summary }: { summary: FinancialSummary }) {
           </div>
           <button
             type="button"
-            onClick={() => dialog.current?.close()}
+            onClick={close}
             aria-label="Fechar"
             className="shrink-0 rounded-control p-1 text-white/60 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris"
           >
@@ -164,7 +168,7 @@ export function FinancialView({ summary }: { summary: FinancialSummary }) {
           </button>
         </div>
 
-        <form action={formAction} className="space-y-4">
+        <UnsavedForm action={formAction} result={state} label="Valor do lead" className="space-y-4">
           <Field
             label="Valor por lead (R$)"
             htmlFor="valor-do-lead-valor"
@@ -186,7 +190,7 @@ export function FinancialView({ summary }: { summary: FinancialSummary }) {
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => dialog.current?.close()}
+              onClick={close}
               disabled={pending}
             >
               Cancelar
@@ -195,7 +199,7 @@ export function FinancialView({ summary }: { summary: FinancialSummary }) {
               Salvar
             </Button>
           </div>
-        </form>
+        </UnsavedForm>
       </dialog>
     </div>
   );

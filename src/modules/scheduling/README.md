@@ -16,6 +16,40 @@ mostrada no painel, e o horário combinado com o lead continua de pé.
 | `clinicorp.ts` | Espelho + leitura de disponibilidade no Clinicorp (Basic auth por tenant). |
 | `features.ts` | Quais calendários a conta habilitou em /integracoes. |
 
+## Configuração do agendamento por agente
+
+Em Agentes › Ações › Agendar horário, `TenantAction.config` guarda também:
+
+- `allowCancellation` e `allowRescheduling`: desligados por padrão, inclusive
+  para configs antigas. As ferramentas de cancelar/reagendar só são expostas
+  quando a opção e a ação principal estão ligadas; o handler relê essa permissão.
+- `recognizeExisting`: ligado por padrão. Acrescenta ao contexto os próximos
+  horários do contato na nossa agenda, mesmo sem estarem no histórico recente.
+  Retorno e confirmação de lembrete não devem reiniciar o agendamento.
+- `breaks`: lista de `{ label, startTime, endTime }`, vazia em configs antigas.
+  Pausas repetem-se nos dias atendidos. O formulário recusa sobreposição,
+  intervalos invertidos e pausas fora do expediente. `isWithinBusinessHours`
+  recusa qualquer consulta que atravesse uma pausa; encostar é permitido.
+
+`agent-engine/scheduling-tools.ts` fornece `list_appointments`, `cancel_meeting`
+e `reschedule_meeting`, como capacidades da mesma ação (sem consumir novas
+ações do plano). Consulta e alteração filtram por tenant e lead. O prompt exige
+identificar a consulta, perguntar a confirmação e esperar a resposta clara;
+os handlers recusam alterações sem `confirmed: true`. A interpretação da
+confirmação na conversa cabe ao LLM.
+
+Reagendar preserva o ID e a duração da consulta original, valida expediente,
+pausas e conflitos **antes** da alteração e sincroniza os espelhos. O conflito
+ignora somente o ID local e o ID espelhado da própria consulta. Falha de
+disponibilidade preserva o original; falha de espelho mantém o novo horário
+na agenda local. Uma atualização concorrente impede a alteração.
+Se remover o espelho antigo falhar, não cria uma segunda cópia nesse serviço e
+preserva o ID antigo para uma tentativa posterior de cancelamento.
+
+`schedule_meeting` recusa duplicar uma consulta existente, salvo pedido de uma
+consulta adicional (`additionalAppointment: true`); trocar data usa reagendamento.
+Regressões: `tests/agendamento-config.test.ts` e `tests/agendamento-tools.test.ts`.
+
 ## Onde cada coisa acontece
 
 - **`/integracoes?aba=calendarios`** — habilitar E configurar. O toggle grava em

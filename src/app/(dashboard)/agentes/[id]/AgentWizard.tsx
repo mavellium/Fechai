@@ -17,6 +17,7 @@ import { KnowledgeManager } from "../KnowledgeManager";
 import { ActionsToggles } from "../ActionsToggles";
 import { BehaviorSettings } from "../BehaviorSettings";
 import { StepTabs } from "../StepTabs";
+import { useUnsavedNavigation } from "@/components/ui/unsaved-changes";
 
 type Doc = {
   id: string;
@@ -146,6 +147,10 @@ export function AgentWizard({
       : STEPS.length - 1;
 
   const [step, setStep] = useState(initialStep);
+  const confirmNavigation = useUnsavedNavigation();
+  function goTo(next: number) {
+    if (next !== step) confirmNavigation(() => setStep(next));
+  }
   const current = STEPS[step];
 
   return (
@@ -160,7 +165,7 @@ export function AgentWizard({
             <li key={s.key}>
               <button
                 type="button"
-                onClick={() => setStep(i)}
+                onClick={() => goTo(i)}
                 aria-current={isCurrent ? "step" : undefined}
                 className={cn(
                   "flex items-center gap-2 rounded-control border px-3 py-2 font-mono text-micro uppercase tracking-[0.15em] transition-colors",
@@ -291,7 +296,7 @@ export function AgentWizard({
         <Button
           type="button"
           variant="ghost"
-          onClick={() => setStep((s) => Math.max(0, s - 1))}
+          onClick={() => goTo(Math.max(0, step - 1))}
           disabled={step === 0}
         >
           Voltar
@@ -302,7 +307,7 @@ export function AgentWizard({
         <Button
           type="button"
           variant="outline"
-          onClick={() => setStep((s) => Math.min(STEPS.length - 1, s + 1))}
+          onClick={() => goTo(Math.min(STEPS.length - 1, step + 1))}
           disabled={step === STEPS.length - 1}
         >
           Próximo

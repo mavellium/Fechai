@@ -5,6 +5,7 @@ import { Briefcase, Check, HandCoins } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { updateAccountRoles } from "./actions";
+import { UnsavedForm } from "@/components/ui/unsaved-changes";
 
 type Result = { ok: boolean; error?: string; info?: string };
 
@@ -33,7 +34,7 @@ export function RolesForm({
   const mudou = produto !== usesProduct || afiliado !== isAffiliate;
 
   return (
-    <form action={action} className="space-y-3">
+    <UnsavedForm action={action} result={state} label="Papéis da conta" className="space-y-3">
       <RoleCheck
         name="usesProduct"
         icon={Briefcase}
@@ -82,7 +83,7 @@ export function RolesForm({
           {state.error}
         </p>
       )}
-    </form>
+    </UnsavedForm>
   );
 }
 

@@ -91,9 +91,10 @@ export async function hasConflictAnywhere(
   endsAt: Date,
   timezone: string,
   ignoreId?: string,
+  ignoreClinicorpId?: string,
 ): Promise<boolean> {
   if (await hasConflict(tenantId, startsAt, endsAt, ignoreId)) return true;
-  return hasClinicorpConflict(tenantId, startsAt, endsAt, timezone);
+  return hasClinicorpConflict(tenantId, startsAt, endsAt, timezone, ignoreClinicorpId);
 }
 
 /**
@@ -107,12 +108,14 @@ export async function hasConflictAnywhere(
  * outro, marcava esse, e repetia — nunca fechando o agendamento.
  */
 export async function findOwnAppointment(
+  tenantId: string,
   conversationId: string,
   startsAt: Date,
   endsAt: Date,
 ) {
   return prisma.appointment.findFirst({
     where: {
+      tenantId,
       conversationId,
       status: "scheduled",
       startsAt: { lt: endsAt },
@@ -188,11 +191,17 @@ export async function createAppointment(input: CreateAppointmentInput) {
   return { ...appointment, googleEventId, clinicorpAppointmentId, clinicorpSync };
 }
 
-export async function cancelAppointment(tenantId: string, id: string) {
-  const appointment = await prisma.appointment.findFirst({ where: { id, tenantId } });
+export async function cancelAppointment(tenantId: string, id: string, leadId?: string) {
+  const appointment = await prisma.appointment.findFirst({ where: { id, tenantId, ...(leadId ? { leadId } : {}) } });
   if (!appointment) return null;
+  if (appointment.status === "canceled") return appointment;
+  if (appointment.status !== "scheduled") return null;
 
-  await prisma.appointment.update({ where: { id }, data: { status: "canceled" } });
+  const changed = await prisma.appointment.updateMany({
+    where: { id, tenantId, status: "scheduled", startsAt: appointment.startsAt, endsAt: appointment.endsAt, ...(leadId ? { leadId } : {}) },
+    data: { status: "canceled" },
+  });
+  if (!changed.count) return null;
   await Promise.all([
     appointment.googleEventId
       ? deleteEventFromGoogle(tenantId, appointment.googleEventId)
@@ -202,6 +211,60 @@ export async function cancelAppointment(tenantId: string, id: string) {
       : Promise.resolve(),
   ]);
   return appointment;
+}
+
+/** Consultas futuras do contato, inclusive as combinadas em outra conversa. */
+export async function listUpcomingLeadAppointments(tenantId: string, leadId: string) {
+  return prisma.appointment.findMany({
+    where: { tenantId, leadId, status: "scheduled", startsAt: { gte: new Date() } },
+    orderBy: { startsAt: "asc" },
+  });
+}
+
+export async function findLeadAppointment(tenantId: string, leadId: string, id: string) {
+  return prisma.appointment.findFirst({ where: { id, tenantId, leadId } });
+}
+
+/** Mantém o ID da consulta. O horário local só muda depois de validar conflitos. */
+export async function rescheduleAppointment(input: {
+  tenantId: string; leadId: string; id: string; startsAt: Date; timezone: string;
+}) {
+  const previous = await findLeadAppointment(input.tenantId, input.leadId, input.id);
+  if (!previous || previous.status !== "scheduled" || previous.startsAt <= new Date()) return { status: "unavailable" } as const;
+  if (previous.startsAt.getTime() === input.startsAt.getTime()) return { status: "unchanged" } as const;
+  const endsAt = new Date(input.startsAt.getTime() + previous.endsAt.getTime() - previous.startsAt.getTime());
+  if (await hasConflictAnywhere(input.tenantId, input.startsAt, endsAt, input.timezone, previous.id, previous.clinicorpAppointmentId ?? undefined)) {
+    return { status: "conflict" } as const;
+  }
+  const changed = await prisma.appointment.updateMany({
+    where: { id: previous.id, tenantId: input.tenantId, leadId: input.leadId, status: "scheduled", startsAt: previous.startsAt, endsAt: previous.endsAt },
+    data: { startsAt: input.startsAt, endsAt },
+  });
+  if (!changed.count) return { status: "unavailable" } as const;
+
+  // A alteração local já está confirmada. Espelhos são opcionais e nunca lançam.
+  const [googleRemoved, clinicorpRemoved] = await Promise.all([
+    previous.googleEventId ? deleteEventFromGoogle(input.tenantId, previous.googleEventId) : Promise.resolve(true),
+    previous.clinicorpAppointmentId ? cancelAppointmentInClinicorp(input.tenantId, previous.clinicorpAppointmentId) : Promise.resolve(true),
+  ]);
+  const lead = await prisma.lead.findFirst({
+    where: { id: input.leadId, tenantId: input.tenantId }, select: { name: true, phone: true },
+  }).catch(() => null);
+  const event = { title: previous.title, startsAt: input.startsAt, endsAt, timeZone: input.timezone };
+  const [googleEventId, clinicorpSync] = await Promise.all([
+    googleRemoved ? pushEventToGoogle(input.tenantId, { ...event, description: previous.notes ?? undefined }) : Promise.resolve(previous.googleEventId),
+    clinicorpRemoved ? pushAppointmentToClinicorp(input.tenantId, { ...event, notes: previous.notes, lead })
+      : Promise.resolve({ status: "failed", error: "Não foi possível remover o horário anterior no Clinicorp." } as const),
+  ]);
+  // Preserva o ID antigo se sua remoção falhou: não cria duplicata nem perde
+  // a referência para uma tentativa posterior de cancelamento.
+  const clinicorpAppointmentId = clinicorpSync.status === "synced" ? clinicorpSync.appointmentId
+    : clinicorpRemoved ? null : previous.clinicorpAppointmentId;
+  await prisma.appointment.updateMany({
+    where: { id: previous.id, tenantId: input.tenantId, status: "scheduled", startsAt: input.startsAt, endsAt },
+    data: { googleEventId, clinicorpAppointmentId },
+  });
+  return { status: "rescheduled", clinicorpSync } as const;
 }
 
 export async function markAppointmentDone(tenantId: string, id: string) {

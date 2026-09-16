@@ -191,6 +191,7 @@ export function ConversationThread({
       )}
 
       <SendMessageForm
+        key={conversation.id}
         conversationId={conversation.id}
         isTest={conversation.isTest}
         agentPaused={conversation.agentPaused}

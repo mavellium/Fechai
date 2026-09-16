@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Field, fieldProps } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { updateProfile } from "./actions";
+import { UnsavedForm } from "@/components/ui/unsaved-changes";
 
 export function ProfileForm({ name, email }: { name: string; email: string }) {
   const [state, formAction, pending] = useActionState(updateProfile, null);
@@ -13,7 +14,7 @@ export function ProfileForm({ name, email }: { name: string; email: string }) {
   const emailId = useId();
 
   return (
-    <form action={formAction} className="space-y-5">
+    <UnsavedForm action={formAction} result={state} label="Perfil" className="space-y-5">
       <Field label="Nome" htmlFor={nameId}>
         <Input {...fieldProps(nameId)} name="name" defaultValue={name} required />
       </Field>
@@ -31,6 +32,6 @@ export function ProfileForm({ name, email }: { name: string; email: string }) {
       <Button type="submit" loading={pending} loadingLabel="Salvando perfil">
         Salvar perfil
       </Button>
-    </form>
+    </UnsavedForm>
   );
 }

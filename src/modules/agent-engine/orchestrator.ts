@@ -3,6 +3,7 @@ import { getUsageSummary } from "@/modules/billing/usage";
 import { embedQuery } from "@/modules/knowledge-base/embeddings";
 import { searchSimilarChunks } from "@/modules/knowledge-base/repository";
 import {
+  AiError,
   isAiError,
   createProvider,
   getUsableChain,
@@ -10,7 +11,6 @@ import {
   resolveSecret,
   markCredentialOk,
   markCredentialCooldown,
-  type AiError,
   type ChainStep,
   type LLMProvider,
   type LlmMessage,
@@ -20,6 +20,7 @@ import {
 import { recordUsage } from "@/modules/ai/usage";
 import { parseScheduleConfig, scheduleSystemContext } from "@/modules/scheduling/config";
 import { getToolSchemas, runToolHandler, type ToolContext } from "./tools";
+import { leadAppointmentsContext } from "./scheduling-tools";
 import { appendMessage, getRecentMessages } from "./conversation";
 
 const MAX_TOOL_ITERATIONS = 3;
@@ -173,13 +174,21 @@ export async function runAgentTurn(input: {
   // ligado: sem isso o LLM não tem como saber que dia é hoje nem o horário de
   // atendimento, e propunha horários que a tool depois recusava.
   const scheduling = actions.find((a) => a.key === "schedule_meeting");
-  const scheduleContext = scheduling
-    ? scheduleSystemContext(parseScheduleConfig(scheduling.config))
+  const scheduleConfig = scheduling ? parseScheduleConfig(scheduling.config) : undefined;
+  const scheduleContext = scheduleConfig
+    ? scheduleSystemContext(scheduleConfig)
+    : "";
+  const appointmentsContext = scheduleConfig?.recognizeExisting
+    ? await leadAppointmentsContext({ tenantId, leadId }, scheduleConfig).catch((err) => {
+        console.error("[orchestrator] consulta da agenda falhou", err);
+        return "Não foi possível consultar a agenda. Não presuma que o contato está sem consulta; use list_appointments antes de marcar.";
+      })
     : "";
 
   const systemPrompt = [
     agent?.systemPrompt || DEFAULT_SYSTEM,
     scheduleContext,
+    appointmentsContext,
     context,
     INJECTION_GUARD,
   ]
@@ -191,7 +200,7 @@ export async function runAgentTurn(input: {
     ...history.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
   ];
 
-  const toolSchemas = getToolSchemas(actions.map((a) => a.key));
+  const toolSchemas = getToolSchemas(actions.map((a) => a.key), scheduleConfig);
   const ctx: ToolContext = { tenantId, conversationId, leadId, agentId: agent?.id ?? null };
   // A cadeia de fallback vem do painel (/admin/ia): o admin monta a ordem e
   // aponta cada degrau para uma credencial. Sem nada cadastrado, cai no padrão
@@ -222,6 +231,10 @@ export async function runAgentTurn(input: {
 
       messages.push({ role: "assistant", content: result.content, toolCalls: result.toolCalls });
       for (const call of result.toolCalls) {
+        if (!toolSchemas.some((tool) => tool.name === call.name)) {
+          messages.push({ role: "tool", toolCallId: call.id, content: "Ação não habilitada para este agente." });
+          continue;
+        }
         toolsUsed.push(call.name);
         const out = await runToolHandler(call.name, ctx, call.arguments);
         messages.push({ role: "tool", toolCallId: call.id, content: out });
@@ -295,6 +308,17 @@ async function completeWithFallback(
     const apiKey = await resolveSecret(step.model.provider, step.credentialId);
     const provider = createProvider(step.model, apiKey);
 
+    // Degrau sem chave nenhuma (credencial some do banco e o ambiente também
+    // não tem) não vira erro de rede: é só pular para o próximo. Se nenhum
+    // sobrar, quem decide o que dizer ao lead é o `throw` lá embaixo.
+    if (typeof provider.isConfigured === "function" && !provider.isConfigured()) {
+      console.warn(
+        `[orchestrator] Fallback: ${step.model.provider} ${step.model.id}` +
+          `${step.credentialLabel ? ` (${step.credentialLabel})` : ""} sem credencial configurada`,
+      );
+      continue;
+    }
+
     try {
       const result = await provider.complete(messages, toolSchemas);
       // Registrado no provider que RESPONDEU — é o que dá atribuição de uso
@@ -322,7 +346,18 @@ async function completeWithFallback(
     }
   }
 
-  throw lastErr ?? new Error("Nenhum provedor de IA disponível na cadeia.");
+  // Cadeia vazia ou toda sem credencial é problema de CONFIGURAÇÃO, não bug:
+  // vai como `AiError` de `auth` para o `catch` do turno tratar como qualquer
+  // outra indisponibilidade — o lead recebe a mensagem de sempre, a conversa
+  // sobe para humano e o console registra a causa. Um `Error` cru aqui subia
+  // até o render da página e quebrava a tela inteira de /conversas.
+  throw (
+    lastErr ??
+    new AiError("auth", "Nenhum provedor de IA disponível na cadeia.", {
+      provider: chain[0]?.model.provider ?? "openai",
+      model: chain[0]?.model.id ?? "-",
+    })
+  );
 }
 
 /**

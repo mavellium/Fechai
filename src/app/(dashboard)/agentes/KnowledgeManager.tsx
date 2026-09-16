@@ -1,7 +1,7 @@
 "use client";
 
-import { useActionState, useEffect, useRef, useState, useTransition, type ChangeEvent } from "react";
-import { Download, FileText, Trash2 } from "lucide-react";
+import { useRef, useState, useTransition, type ChangeEvent, type FormEvent } from "react";
+import { Download, FileText, Trash2, X } from "lucide-react";
 import posthog from "posthog-js";
 import { Alert, FormFeedback } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -12,8 +12,10 @@ import { Field, fieldProps } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { StepTabs, type StepTab } from "./StepTabs";
-import { addDocument, removeDocument } from "./actions";
+import { addDocument, removeDocument, type Result } from "./actions";
 import { ViewEditDocumentDialog } from "./ViewEditDocumentDialog";
+import { useUnsavedChanges } from "@/components/ui/unsaved-changes";
+import { selectKnowledgeFiles, uploadKnowledgeItems, type KnowledgeUploadItem, type SelectedKnowledgeFile } from "@/modules/knowledge-base/upload-batch";
 
 type Doc = {
   id: string;
@@ -26,7 +28,6 @@ type Doc = {
 
 // Mesmo teto de agentes/actions.ts (MAX_KB_FILE_BYTES) — checar aqui evita que
 // o usuário só descubra o limite depois de esperar o upload falhar.
-const MAX_FILE_BYTES = 50 * 1024 * 1024;
 
 const STATUS: Record<string, { label: string; tone: "success" | "warn" | "danger" | "neutral" }> = {
   ready: { label: "Pronto", tone: "success" },
@@ -36,33 +37,62 @@ const STATUS: Record<string, { label: string; tone: "success" | "warn" | "danger
 };
 
 export function KnowledgeManager({ agentId, documents }: { agentId: string; documents: Doc[] }) {
-  const [state, formAction, pending] = useActionState(addDocument, null);
+  const [state, setState] = useState<Result | null>(null);
+  const [pending, setPending] = useState(false);
+  const [files, setFiles] = useState<SelectedKnowledgeFile[]>([]);
+  const [title, setTitle] = useState("");
+  const [content, setContent] = useState("");
+  const [progress, setProgress] = useState("");
   const [, startRemove] = useTransition();
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [removeError, setRemoveError] = useState<string | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
+  useUnsavedChanges(pending || files.length > 0 || Boolean(title) || Boolean(content), "Cérebro", formRef);
 
   // O limite do Next.js (next.config.ts) é aplicado antes da action rodar — um
   // arquivo grande demais derruba a requisição com um 413 cru. Bloquear aqui,
   // no input, evita esse crash e explica o motivo na hora.
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    if (file && file.size > MAX_FILE_BYTES) {
-      setFileError(`"${file.name}" tem ${(file.size / (1024 * 1024)).toFixed(1)}MB — o máximo é 50MB.`);
-      event.target.value = "";
-      return;
-    }
-    setFileError(null);
+    const selection = selectKnowledgeFiles(files, Array.from(event.target.files ?? []));
+    setFiles(selection.files);
+    setFileError(selection.errors.join(" ") || null);
+    setState(null);
+    event.target.value = ""; // Permite selecionar novamente um arquivo removido.
   }
 
-  // Antes o reset era chamado direto no corpo do render enquanto `state.ok`
-  // fosse verdadeiro — ou seja, a cada re-render, apagando o que o usuário
-  // tivesse acabado de digitar para o próximo documento. Agora roda uma vez,
-  // como efeito, quando o resultado muda.
-  useEffect(() => {
-    if (state?.ok) formRef.current?.reset();
-  }, [state]);
+  async function send(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (pending) return;
+    if (!files.length && !content.trim()) { setState({ ok: false, error: "Selecione arquivos ou cole um texto." }); return; }
+    if (title.trim() && !content.trim()) { setState({ ok: false, error: "Preencha o conteúdo do texto ou limpe seu título para enviar apenas os arquivos." }); return; }
+    setPending(true); setState(null); setFileError(null);
+    posthog.capture("knowledge_document_submitted", { files: files.length });
+    const items: KnowledgeUploadItem[] = files.map((file) => ({ id: file.id, title: file.title, file: file.file }));
+    if (content.trim()) items.unshift({ id: "pasted-text", title: title.trim() });
+    try {
+      const results = await uploadKnowledgeItems(items, async (item, index, total) => {
+        setProgress(`Enviando ${index + 1} de ${total}: ${item.title}`);
+        const data = new FormData();
+        data.set("agentId", agentId);
+        data.set("title", item.title);
+        if (item.file) data.set("file", item.file);
+        else data.set("content", content);
+        return addDocument(null, data);
+      });
+      const succeeded = new Set(results.filter((r) => r.ok).map((r) => r.id));
+      setFiles((current) => current.filter((file) => !succeeded.has(file.id)).map((file) => ({
+        ...file, error: results.find((r) => r.id === file.id)?.error,
+      })));
+      if (succeeded.has("pasted-text")) { setTitle(""); setContent(""); }
+      const failed = results.filter((r) => !r.ok);
+      const warnings = results.filter((r) => r.ok && r.info && r.info !== "Documento adicionado à base.").map((r) => r.info);
+      setState({ ok: failed.length === 0,
+        info: succeeded.size ? `${succeeded.size} documento(s) adicionado(s). ${warnings.join(" ")}` : undefined,
+        error: failed.length ? `${failed.length} documento(s) não foram enviados. ${failed.find((r) => r.id === "pasted-text")?.error ?? "Os arquivos com falha continuam selecionados para tentar novamente."}` : undefined,
+      });
+    } finally { setPending(false); setProgress(""); }
+  }
 
   function remove(doc: Doc) {
     setRemoveError(null);
@@ -84,46 +114,71 @@ export function KnowledgeManager({ agentId, documents }: { agentId: string; docu
       content: (
         <form
           ref={formRef}
-          action={formAction}
+          onSubmit={send}
           className="space-y-4"
-          onSubmit={() => posthog.capture("knowledge_document_submitted")}
         >
+          <fieldset disabled={pending} className="min-w-0 space-y-4">
           <input type="hidden" name="agentId" value={agentId} />
-          <Field label="Título do documento" htmlFor="kb-title">
-            <Input {...fieldProps("kb-title")} name="title" placeholder="Ex: Tabela de preços" required />
+          <Field label="Título do texto" htmlFor="kb-title" optional={!content.trim()}>
+            <Input {...fieldProps("kb-title")} name="title" placeholder="Ex: Tabela de preços" value={title} onChange={(e) => setTitle(e.target.value)} required={Boolean(content.trim())} />
           </Field>
 
           <Field
             label="Conteúdo"
             htmlFor="kb-content"
-            hint="Cole o texto aqui ou envie um arquivo abaixo."
+            hint="Cole um texto e/ou selecione arquivos abaixo. Cada arquivo vira um documento separado."
             optional
           >
             <Textarea
               {...fieldProps("kb-content", { hint: true })}
               name="content"
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
               rows={5}
               placeholder="Cole aqui o texto da sua base de conhecimento..."
             />
           </Field>
 
-          <Field label="Arquivo" htmlFor="kb-file" hint="Aceita .txt, .md ou .pdf. Tamanho máximo: 50MB." optional>
+          <Field label="Arquivos" htmlFor="kb-file" hint="Selecione vários .txt, .md ou .pdf de uma vez. Até 50MB por arquivo; o envio acontece um por vez." optional>
             <input
               {...fieldProps("kb-file", { hint: true })}
               type="file"
               name="file"
+              multiple
               accept=".txt,.md,.pdf"
               onChange={handleFileChange}
               className="w-full text-sm text-white/70 file:mr-3 file:rounded-control file:border-0 file:bg-white/10 file:px-3 file:py-2 file:text-sm file:text-white file:transition-colors hover:file:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris"
             />
           </Field>
 
+          {files.length > 0 && <div className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm text-white/70">{files.length} arquivo(s) selecionado(s)</p>
+              <Button type="button" variant="ghost" size="sm" onClick={() => { setFiles([]); setFileError(null); }}>Limpar seleção</Button>
+            </div>
+            <ul className="space-y-2">{files.map((file) => <li key={file.id} className="rounded-control border border-white/10 p-3">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0 flex-1">
+                  <p className="break-all text-sm text-white/75">{file.file.name} · {(file.file.size / (1024 * 1024)).toFixed(1)} MB</p>
+                  <label className="mt-2 block text-xs text-white/55" htmlFor={`kb-file-${file.id}`}>Título na base</label>
+                  <Input id={`kb-file-${file.id}`} className="mt-1" value={file.title} required maxLength={200}
+                    onChange={(e) => setFiles((current) => current.map((f) => f.id === file.id ? { ...f, title: e.target.value } : f))} />
+                </div>
+                <Button type="button" variant="ghost" size="icon" aria-label={`Remover arquivo selecionado ${file.file.name}`} title="Remover da seleção"
+                  onClick={() => setFiles((current) => current.filter((f) => f.id !== file.id))}><X size={16} aria-hidden /></Button>
+              </div>
+              {file.error && <p role="alert" className="mt-2 text-sm text-danger">{file.error}</p>}
+            </li>)}</ul>
+          </div>}
+          </fieldset>
+
           {fileError && <Alert tone="warn">{fileError}</Alert>}
 
           <FormFeedback error={state?.error} info={state?.info} />
 
-          <Button type="submit" loading={pending} loadingLabel="Enviando documento">
-            Adicionar à base
+          {progress && <p role="status" className="text-sm text-white/70">{progress}</p>}
+          <Button type="submit" loading={pending} loadingLabel="Enviando documentos">
+            {files.some((file) => file.error) ? "Tentar enviar os pendentes" : "Adicionar à base"}
           </Button>
         </form>
       ),

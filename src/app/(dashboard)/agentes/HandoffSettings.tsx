@@ -8,6 +8,7 @@ import { Field, fieldProps } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { saveHandoffConfigAction } from "./actions";
+import { UnsavedForm } from "@/components/ui/unsaved-changes";
 
 /**
  * Config da ação "Transferir para humano".
@@ -22,7 +23,7 @@ export function HandoffSettings({ agentId, config }: { agentId: string; config: 
   const groupFieldId = useId();
 
   return (
-    <form action={formAction} className="space-y-5 border-t border-white/10 pt-5">
+    <UnsavedForm action={formAction} result={state} label="Transferência" className="space-y-5 border-t border-white/10 pt-5">
       <input type="hidden" name="agentId" value={agentId} />
 
       <div className="flex items-center justify-between gap-3">
@@ -75,6 +76,6 @@ export function HandoffSettings({ agentId, config }: { agentId: string; config: 
       <Button type="submit" variant="outline" loading={pending} loadingLabel="Salvando transferência">
         Salvar transferência
       </Button>
-    </form>
+    </UnsavedForm>
   );
 }

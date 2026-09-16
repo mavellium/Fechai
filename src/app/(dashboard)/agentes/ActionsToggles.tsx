@@ -18,10 +18,11 @@ import { ScheduleSettings } from "./ScheduleSettings";
 import { FollowUpSettings } from "./FollowUpSettings";
 import { HandoffSettings } from "./HandoffSettings";
 import { setActionEnabled } from "./actions";
+import { useUnsavedNavigation } from "@/components/ui/unsaved-changes";
 
 /** Rótulo do botão que abre a configuração — uma linha por ação configurável. */
 const CONFIG_LABEL: Partial<Record<ActionKey, string>> = {
-  schedule_meeting: "Configurar horário de atendimento",
+  schedule_meeting: "Configurar agendamento e pausas",
   follow_up: "Configurar intervalo do follow-up",
   handoff_human: "Configurar transferência",
 };
@@ -52,6 +53,7 @@ export function ActionsToggles({
   // é o momento em que a pessoa precisa dizer o horário de atendimento.
   const [openConfig, setOpenConfig] = useState<ActionKey | null>(null);
   const [, startTransition] = useTransition();
+  const confirmNavigation = useUnsavedNavigation();
 
   const atLimit = enabled.size >= planLimit;
 
@@ -128,7 +130,7 @@ export function ActionsToggles({
 
                 <Switch
                   checked={on}
-                  onCheckedChange={(next) => toggle(a.key, next)}
+                  onCheckedChange={(next) => confirmNavigation(() => toggle(a.key, next))}
                   loading={busyKey === a.key}
                   disabled={busyKey !== null || blockedByPlan}
                   label={`${a.label}: ${on ? "ativa" : "inativa"}`}
@@ -140,7 +142,7 @@ export function ActionsToggles({
                 <div className="mt-3">
                   <button
                     type="button"
-                    onClick={() => setOpenConfig(showConfig ? null : a.key)}
+                    onClick={() => confirmNavigation(() => setOpenConfig(showConfig ? null : a.key))}
                     aria-expanded={showConfig}
                     className="inline-flex items-center gap-2 rounded-control font-mono text-micro uppercase tracking-[0.15em] text-white/70 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris"
                   >

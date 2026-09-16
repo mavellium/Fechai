@@ -157,6 +157,15 @@ describe("conexão e preferências", () => {
 });
 
 describe("disponibilidade", () => {
+  it("ignora somente o espelho da própria consulta ao reagendar", async () => {
+    fetchMock.mockResolvedValue(json([{ id: 123, Dentist_PersonId: 222222222222, fromTime: "16:00", toTime: "17:00" }]));
+    expect(await hasClinicorpConflict("tenant-1", event.startsAt, event.endsAt, event.timeZone, "123")).toBe(false);
+    fetchMock.mockResolvedValue(json([
+      { id: 123, Dentist_PersonId: 222222222222, fromTime: "16:00", toTime: "17:00" },
+      { id: 456, Dentist_PersonId: 222222222222, fromTime: "16:00", toTime: "17:00" },
+    ]));
+    expect(await hasClinicorpConflict("tenant-1", event.startsAt, event.endsAt, event.timeZone, "123")).toBe(true);
+  });
   it("consulta o profissional escolhido, permite horários encostados e bloqueia sobreposição", async () => {
     fetchMock.mockResolvedValue(json([
       { Dentist_PersonId: 999, fromTime: "16:30", toTime: "17:00" },

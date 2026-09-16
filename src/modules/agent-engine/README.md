@@ -66,6 +66,10 @@ conversa, não sobre o canal.
 Numa conversa com `isTest: true`, a caixa de resposta de `/conversas` ganha um
 seletor de lado (`SendMessageForm`, `SegmentedControl` "você | cliente"):
 
+O modo inicial é **cliente** em cada conversa de teste aberta. A escolha manual
+vale durante aquela abertura; trocar de conversa remonta o formulário pelo ID.
+Conversas reais continuam iniciando como **você**.
+
 | lado | action | o que acontece |
 | --- | --- | --- |
 | **você** | `sendManualMessage` → `sendManualReply` | grava `assistant`/`sentBy: "human"` e liga `agentPaused` |

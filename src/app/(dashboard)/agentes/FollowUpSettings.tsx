@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { SelectMenu } from "@/components/ui/select-menu";
 import { Textarea } from "@/components/ui/textarea";
 import { saveFollowUpConfigAction } from "./actions";
+import { UnsavedForm } from "@/components/ui/unsaved-changes";
 
 type Unit = "minutes" | "hours";
 
@@ -69,7 +70,7 @@ export function FollowUpSettings({ agentId, config }: { agentId: string; config:
   }
 
   return (
-    <form action={formAction} className="space-y-5 border-t border-white/10 pt-5">
+    <UnsavedForm action={formAction} result={state} label="Follow-up" className="space-y-5 border-t border-white/10 pt-5">
       <input type="hidden" name="agentId" value={agentId} />
       <input type="hidden" name="delayMinutes" value={delayMinutes} />
 
@@ -137,6 +138,6 @@ export function FollowUpSettings({ agentId, config }: { agentId: string; config:
       <Button type="submit" variant="outline" loading={pending} loadingLabel="Salvando follow-up">
         Salvar follow-up
       </Button>
-    </form>
+    </UnsavedForm>
   );
 }

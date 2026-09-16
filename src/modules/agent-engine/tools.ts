@@ -1,15 +1,17 @@
 import { prisma } from "@/lib/prisma";
 import type { LlmToolSchema } from "@/modules/ai";
-import { isWithinBusinessHours } from "@/modules/scheduling/config";
+import { isWithinBusinessHours, parseScheduleConfig, type ScheduleConfig } from "@/modules/scheduling/config";
 import {
   createAppointment,
   findOwnAppointment,
   getScheduleConfig,
   hasConflictAnywhere,
+  listUpcomingLeadAppointments,
 } from "@/modules/scheduling/repository";
 import { formatInZone, parseLocalDateTime } from "@/modules/scheduling/time";
 import { addLeadToHandoffGroup } from "./handoff";
 import { ACTION_BY_KEY, type ActionKey } from "./actions";
+import { runSchedulingTool, SCHEDULING_TOOLS, schedulingToolAllowed } from "./scheduling-tools";
 
 export type ToolContext = {
   tenantId: string;
@@ -27,13 +29,18 @@ function str(v: unknown): string | undefined {
 }
 
 // Definições das tools por ação. O orquestrador expõe ao LLM só as ativas.
-export function getToolSchemas(activeKeys: string[]): LlmToolSchema[] {
-  return activeKeys
+export function getToolSchemas(activeKeys: string[], scheduleConfig?: ScheduleConfig): LlmToolSchema[] {
+  const schemas = activeKeys
     // Desativadas temporariamente não são expostas ao LLM mesmo se o tenant
     // ainda tiver a linha enabled no banco.
     .filter((k) => ACTION_BY_KEY[k as ActionKey]?.status !== "disabled")
     .map((k) => TOOLS[k as ActionKey]?.schema)
     .filter((s): s is LlmToolSchema => Boolean(s));
+  if (activeKeys.includes("schedule_meeting")) {
+    const cfg = scheduleConfig ?? parseScheduleConfig(null);
+    schemas.push(...SCHEDULING_TOOLS.filter((tool) => schedulingToolAllowed(tool.name, cfg)));
+  }
+  return schemas;
 }
 
 export async function runToolHandler(
@@ -41,6 +48,19 @@ export async function runToolHandler(
   ctx: ToolContext,
   args: Record<string, unknown>,
 ): Promise<string> {
+  if (SCHEDULING_TOOLS.some((tool) => tool.name === key)) {
+    try {
+      const action = ctx.agentId ? await prisma.tenantAction.findFirst({
+        where: { tenantId: ctx.tenantId, agentId: ctx.agentId, key: "schedule_meeting", enabled: true },
+        select: { config: true },
+      }) : null;
+      if (!action) return "Agendamento desabilitado para este agente.";
+      return await runSchedulingTool(key, ctx, args, parseScheduleConfig(action.config));
+    } catch (err) {
+      console.error(`[tools] falha em ${key}`, err);
+      return `Falha ao executar ${key}. Consulte a agenda antes de afirmar que houve alteração.`;
+    }
+  }
   const tool = TOOLS[key as ActionKey];
   if (!tool) return `Ação desconhecida: ${key}`;
   if (ACTION_BY_KEY[key as ActionKey]?.status === "disabled") {
@@ -106,6 +126,7 @@ const TOOLS: Record<ActionKey, ToolDef> = {
           time: { type: "string", description: "Hora de início no formato HH:MM (24h)" },
           title: { type: "string", description: "Assunto do horário. Ex: 'Aula experimental'" },
           notes: { type: "string", description: "Observações combinadas na conversa" },
+          additionalAppointment: { type: "boolean", description: "True somente se o contato pediu explicitamente OUTRA consulta separada, mantendo a anterior. Nunca use para reagendamento." },
         },
         required: ["date", "time"],
       },
@@ -138,7 +159,7 @@ const TOOLS: Record<ActionKey, ToolDef> = {
       }
 
       if (!isWithinBusinessHours(startsAt, cfg)) {
-        return `Fora do horário de atendimento (${cfg.startTime} às ${cfg.endTime}). Proponha outro horário dentro do expediente.`;
+        return `Fora do expediente (${cfg.startTime} às ${cfg.endTime}) ou durante uma pausa. Proponha outro horário respeitando os intervalos.`;
       }
 
       const endsAt = new Date(startsAt.getTime() + cfg.durationMinutes * 60_000);
@@ -146,10 +167,15 @@ const TOOLS: Record<ActionKey, ToolDef> = {
       // O LLM pode chamar de novo pra "confirmar" um horário que ele mesmo já
       // marcou nesta conversa — trata como sucesso (idempotente) em vez de
       // bater no conflito contra o próprio agendamento e entrar em loop.
-      const own = await findOwnAppointment(ctx.conversationId, startsAt, endsAt);
+      const own = await findOwnAppointment(ctx.tenantId, ctx.conversationId, startsAt, endsAt);
       if (own) {
         const when = formatInZone(own.startsAt, cfg.timezone);
         return `Esse horário já está confirmado para ${when}${cfg.location ? ` (${cfg.location})` : ""}. Não é necessário marcar de novo — apenas confirme com o contato.`;
+      }
+
+      const upcoming = await listUpcomingLeadAppointments(ctx.tenantId, ctx.leadId);
+      if (upcoming.length && args.additionalAppointment !== true) {
+        return `O contato já tem consulta marcada: ${upcoming.map((a) => `${a.id}: ${formatInZone(a.startsAt, cfg.timezone)}`).join("; ")}. Não crie outra para confirmar ou reagendar. Para trocar, use reschedule_meeting se habilitado; caso contrário, ofereça atendimento humano. Só marque outra consulta se o contato pedir explicitamente uma consulta adicional, mantendo a anterior.`;
       }
 
       // Olha a nossa agenda E a do Clinicorp, quando conectado: a recepção

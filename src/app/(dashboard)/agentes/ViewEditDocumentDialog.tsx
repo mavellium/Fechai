@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { getDocumentContent, updateDocumentAction } from "./actions";
+import { UnsavedForm, useUnsavedNavigation } from "@/components/ui/unsaved-changes";
 
 type Result = { ok: boolean; error?: string; info?: string };
 
@@ -33,6 +34,8 @@ export function ViewEditDocumentDialog({
   hasFile: boolean;
 }) {
   const ref = React.useRef<HTMLDialogElement>(null);
+  const confirmNavigation = useUnsavedNavigation();
+  const close = () => confirmNavigation(() => ref.current?.close(), ref.current);
   const [loading, setLoading] = React.useState(false);
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const [content, setContent] = React.useState<string | null>(null);
@@ -76,6 +79,7 @@ export function ViewEditDocumentDialog({
 
       <dialog
         ref={ref}
+        onCancel={(event) => { event.preventDefault(); close(); }}
         aria-labelledby="kb-doc-title"
         className={cn(
           "m-auto w-[calc(100%-2rem)] max-w-2xl rounded-surface border p-6 backdrop:bg-ink/70",
@@ -92,7 +96,7 @@ export function ViewEditDocumentDialog({
             variant="ghost"
             size="icon"
             aria-label="Fechar"
-            onClick={() => ref.current?.close()}
+            onClick={close}
           >
             <X size={18} aria-hidden />
           </Button>
@@ -103,7 +107,7 @@ export function ViewEditDocumentDialog({
         ) : loadError ? (
           <FormFeedback error={loadError} />
         ) : content !== null ? (
-          <form action={formAction} className="mt-4 space-y-4">
+          <UnsavedForm action={formAction} result={state} label="Documento" className="mt-4 space-y-4">
             <input type="hidden" name="agentId" value={agentId} />
             <input type="hidden" name="documentId" value={documentId} />
 
@@ -140,14 +144,14 @@ export function ViewEditDocumentDialog({
             <FormFeedback error={state?.error} info={state?.info} />
 
             <div className="flex flex-wrap justify-end gap-2">
-              <Button type="button" variant="ghost" onClick={() => ref.current?.close()} disabled={pending}>
+              <Button type="button" variant="ghost" onClick={close} disabled={pending}>
                 Cancelar
               </Button>
               <Button type="submit" loading={pending} loadingLabel="Salvando">
                 Salvar alterações
               </Button>
             </div>
-          </form>
+          </UnsavedForm>
         ) : null}
       </dialog>
     </>

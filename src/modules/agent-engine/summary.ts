@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import {
+  AiError,
   isAiError,
   createProvider,
   getUsableChain,
@@ -160,5 +161,13 @@ async function completeWithFallback(messages: LlmMessage[]): Promise<string> {
     }
   }
 
-  throw lastErr ?? new Error("Nenhum provedor de IA disponível para o resumo.");
+  // Mesmo motivo do orquestrador: cadeia vazia/sem credencial é `AiError` de
+  // configuração, para o chamador devolver `{ ok: false }` em vez de estourar.
+  throw (
+    lastErr ??
+    new AiError("auth", "Nenhum provedor de IA disponível para o resumo.", {
+      provider: chain[0]?.model.provider ?? "openai",
+      model: chain[0]?.model.id ?? "-",
+    })
+  );
 }

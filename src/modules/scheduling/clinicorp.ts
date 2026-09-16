@@ -454,10 +454,10 @@ export async function pushAppointmentToClinicorp(
 export async function cancelAppointmentInClinicorp(
   tenantId: string,
   clinicorpAppointmentId: string,
-): Promise<void> {
+): Promise<boolean> {
   try {
     const integration = await getIntegration(tenantId, { ignoreFeatureFlag: true });
-    if (!integration) return;
+    if (!integration) return false;
 
     const res = await call<unknown>(integration, "/appointment/cancel_appointment", {
       method: "POST",
@@ -466,9 +466,12 @@ export async function cancelAppointmentInClinicorp(
     if (!res.ok) {
       console.error("[clinicorp] cancelar agendamento falhou", res.error);
       await recordOutcome(tenantId, res.error);
+      return false;
     }
+    return true;
   } catch (err) {
     console.error("[clinicorp] cancelar agendamento falhou", err);
+    return false;
   }
 }
 
@@ -490,6 +493,7 @@ async function fetchBusyBlocks(
   integration: ClinicorpIntegration,
   day: string,
   timeZone: string,
+  ignoreAppointmentId?: string,
 ): Promise<ClinicorpBusyBlock[] | null> {
   const res = await call<unknown>(integration, "/appointment/list", {
     query: {
@@ -507,6 +511,8 @@ async function fetchBusyBlocks(
 
   for (const row of rows) {
     const r = row as Record<string, unknown>;
+    // Ao reagendar, o espelho da própria consulta não ocupa o novo intervalo.
+    if (ignoreAppointmentId && String(r.id) === ignoreAppointmentId) continue;
 
     // Filtra por profissional só quando a conta fixou um: com dentista
     // definido, a agenda de um colega não bloqueia o horário. Sem dentista, o
@@ -549,12 +555,13 @@ export async function hasClinicorpConflict(
   startsAt: Date,
   endsAt: Date,
   timeZone: string,
+  ignoreAppointmentId?: string,
 ): Promise<boolean> {
   try {
     const integration = await getIntegration(tenantId);
     if (!integration || !integration.checkAvailability) return false;
 
-    const blocks = await fetchBusyBlocks(integration, localDate(startsAt, timeZone), timeZone);
+    const blocks = await fetchBusyBlocks(integration, localDate(startsAt, timeZone), timeZone, ignoreAppointmentId);
     if (!blocks) return false;
 
     // Mesma regra de sobreposição do `hasConflict` do repository: encostar não

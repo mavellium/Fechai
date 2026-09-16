@@ -15,6 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { StepTabs, type StepTab } from "./StepTabs";
 import { savePersona } from "./actions";
+import { UnsavedForm } from "@/components/ui/unsaved-changes";
 
 const EMPTY: PersonaAnswers = {
   agentName: "",
@@ -94,7 +95,7 @@ export function PersonaForm({
   }));
 
   return (
-    <form action={formAction} className="space-y-8">
+    <UnsavedForm action={formAction} result={state} label="Personalidade" className="space-y-8">
       <input type="hidden" name="agentId" value={agentId} />
 
       {/* O aviso "isto vira instrução permanente; fato que muda vai na Base de
@@ -127,6 +128,6 @@ export function PersonaForm({
       <Button type="submit" loading={pending} loadingLabel="Salvando persona">
         Salvar persona
       </Button>
-    </form>
+    </UnsavedForm>
   );
 }

@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { MIN_PAYOUT_CENTS } from "@/modules/affiliates/config";
 import { formatBRL } from "@/lib/format";
 import { savePayoutInfo, type ActionState } from "./actions";
+import { UnsavedForm } from "@/components/ui/unsaved-changes";
 
 /**
  * Dados de recebimento. Pedidos antes de existir saldo de propósito: quando a
@@ -24,7 +25,7 @@ export function PayoutForm({ pixKey, holderName }: { pixKey: string; holderName:
         Onde você recebe
       </CardTitle>
 
-      <form action={action} className="space-y-4">
+      <UnsavedForm action={action} result={state} label="Dados de recebimento" className="space-y-4">
         <Field label="Chave Pix" htmlFor={keyId} hint="CPF/CNPJ, e-mail, telefone ou chave aleatória.">
           <Input
             {...fieldProps(keyId, { hint: true })}
@@ -63,7 +64,7 @@ export function PayoutForm({ pixKey, holderName }: { pixKey: string; holderName:
             {state.error}
           </p>
         )}
-      </form>
+      </UnsavedForm>
     </Card>
   );
 }

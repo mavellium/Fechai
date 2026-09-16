@@ -11,6 +11,7 @@ import { composeSystemPrompt, type PersonaAnswers } from "@/modules/agent-engine
 import { ACTION_BY_KEY, type ActionKey } from "@/modules/agent-engine/actions";
 import { createAgent, getAgentOwned, getAgentUsage } from "@/modules/agent-engine/agents";
 import { saveScheduleConfig } from "@/modules/scheduling/repository";
+import { isScheduleTime, isScheduleTimezone, validateScheduleBreaks } from "@/modules/scheduling/config";
 import { MAX_FOLLOWUP_DELAY_MINUTES, saveFollowUpConfig } from "@/modules/follow-up/config";
 import { normalizeGroupId, saveHandoffConfig } from "@/modules/agent-engine/handoff";
 import {
@@ -732,11 +733,19 @@ export async function setActionEnabled(
 
 const scheduleConfigSchema = z.object({
   durationMinutes: z.coerce.number().int().min(5).max(480),
-  timezone: z.string().trim().min(1),
-  startTime: z.string().regex(/^\d{1,2}:\d{2}$/, "Horário inválido"),
-  endTime: z.string().regex(/^\d{1,2}:\d{2}$/, "Horário inválido"),
+  timezone: z.string().trim().refine(isScheduleTimezone, "Fuso horário inválido"),
+  startTime: z.string().refine(isScheduleTime, "Horário inválido"),
+  endTime: z.string().refine(isScheduleTime, "Horário inválido"),
   location: z.string().trim().max(200).default(""),
   minNoticeHours: z.coerce.number().int().min(0).max(168),
+  allowCancellation: z.enum(["true", "false"]).transform((v) => v === "true"),
+  allowRescheduling: z.enum(["true", "false"]).transform((v) => v === "true"),
+  recognizeExisting: z.enum(["true", "false"]).transform((v) => v === "true"),
+  breaks: z.array(z.object({
+    label: z.string().trim().max(60),
+    startTime: z.string().refine(isScheduleTime, "Início da pausa inválido"),
+    endTime: z.string().refine(isScheduleTime, "Fim da pausa inválido"),
+  })).max(12, "Cadastre no máximo 12 pausas."),
 });
 
 /**
@@ -755,7 +764,13 @@ export async function saveScheduleConfigAction(
   const { tenantId, agent } = await requireAgent(agentId);
   if (!agent) return { ok: false, error: "Agente não encontrado" };
 
-  const parsed = scheduleConfigSchema.safeParse(Object.fromEntries(formData));
+  let breaks: unknown;
+  try {
+    breaks = JSON.parse(String(formData.get("breaks") ?? "[]"));
+  } catch {
+    return { ok: false, error: "Pausas inválidas. Confira os intervalos." };
+  }
+  const parsed = scheduleConfigSchema.safeParse({ ...Object.fromEntries(formData), breaks });
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Dados inválidos" };
   }
@@ -774,11 +789,13 @@ export async function saveScheduleConfigAction(
   if (startH * 60 + startM >= endH * 60 + endM) {
     return { ok: false, error: "O fim do expediente precisa ser depois do início." };
   }
+  const breakError = validateScheduleBreaks(parsed.data);
+  if (breakError) return { ok: false, error: breakError };
 
   await saveScheduleConfig(tenantId, agent.id, { ...parsed.data, workdays });
   revalidateAgent(agent.id);
   revalidatePath("/agenda");
-  return { ok: true, info: "Horário de atendimento salvo." };
+  return { ok: true, info: "Configurações de agendamento salvas." };
 }
 
 // --------------------------------------------------- configuração do follow-up

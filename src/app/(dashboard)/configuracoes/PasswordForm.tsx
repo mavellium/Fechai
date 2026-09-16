@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { PasswordStrength } from "@/components/ui/password-strength";
 import { MIN_PASSWORD_LENGTH } from "@/lib/password";
 import { changePassword } from "./actions";
+import { UnsavedForm } from "@/components/ui/unsaved-changes";
 
 export function PasswordForm() {
   const [state, formAction, pending] = useActionState(changePassword, null);
@@ -36,7 +37,7 @@ export function PasswordForm() {
   }
 
   return (
-    <form key={clearCount} action={formAction} className="space-y-5">
+    <UnsavedForm key={clearCount} action={formAction} result={state} label="Senha" className="space-y-5">
       <Field label="Senha atual" htmlFor={currentId}>
         <Input
           {...fieldProps(currentId)}
@@ -90,6 +91,6 @@ export function PasswordForm() {
       <Button type="submit" loading={pending} loadingLabel="Alterando senha">
         Alterar senha
       </Button>
-    </form>
+    </UnsavedForm>
   );
 }

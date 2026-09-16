@@ -10,6 +10,7 @@ import { Field } from "@/components/ui/field";
 import { dateLabel } from "@/lib/format";
 import { deleteAgentVoice, saveAgentVoice } from "./actions";
 import { CatalogVoicePicker } from "./CatalogVoicePicker";
+import { useUnsavedChanges, useUnsavedNavigation } from "@/components/ui/unsaved-changes";
 
 /**
  * Grava a voz do dono da conta e a envia para clonagem (Fish Audio).
@@ -61,6 +62,8 @@ export function VoiceRecorder({
   const [info, setInfo] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState(false);
+  useUnsavedChanges(Boolean(recorded) || recording || saving, "Gravação de voz");
+  const confirmNavigation = useUnsavedNavigation();
   /**
    * Qual caminho a pessoa está usando. Abre em "prontas" para quem ainda não
    * tem voz: escolher uma da lista é 2 cliques, gravar exige microfone,
@@ -281,7 +284,7 @@ export function VoiceRecorder({
             type="button"
             role="tab"
             aria-selected={tab === t.key}
-            onClick={() => setTab(t.key)}
+            onClick={() => { if (tab !== t.key) confirmNavigation(() => setTab(t.key)); }}
             className={`-mb-px rounded-t-control border-b-2 px-3 py-2 font-mono text-micro uppercase tracking-[0.15em] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris ${
               tab === t.key
                 ? "border-iris text-white"

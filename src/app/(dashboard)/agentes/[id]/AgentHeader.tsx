@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Check, Pencil, Power, Star, Trash2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -11,6 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { Alert } from "@/components/ui/alert";
 import { InfoHint } from "@/components/ui/info-hint";
 import { deleteAgent, renameAgent, setAgentEnabled, setPrimaryAgent } from "../actions";
+import { useUnsavedChanges, useUnsavedNavigation } from "@/components/ui/unsaved-changes";
 
 /** Nome do agente (edição no lugar) + gestão: liga/desliga, principal e exclusão. */
 export function AgentHeader({
@@ -23,6 +24,16 @@ export function AgentHeader({
   const router = useRouter();
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(agent.name);
+  const [savedName, setSavedName] = useState(agent.name);
+  const [lastServerName, setLastServerName] = useState(agent.name);
+  if (agent.name !== lastServerName) {
+    setLastServerName(agent.name);
+    setSavedName(agent.name);
+    if (!editing) setName(agent.name);
+  }
+  const rootRef = useRef<HTMLDivElement>(null);
+  useUnsavedChanges(editing && name !== savedName, "Nome do agente", rootRef);
+  const confirmNavigation = useUnsavedNavigation();
   const [enabled, setEnabled] = useState(agent.enabled);
   const [togglingPower, setTogglingPower] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -41,25 +52,30 @@ export function AgentHeader({
   }
 
   function save() {
+    if (pending) return;
+    const submittedName = name.trim();
     setError(null);
     startTransition(async () => {
-      const res = await renameAgent(agent.id, name);
+      const res = await renameAgent(agent.id, submittedName);
       if (!res.ok) {
         setError(res.error ?? "Falha ao renomear");
         return;
       }
+      setSavedName(submittedName);
+      setName(submittedName);
       setEditing(false);
       router.refresh();
     });
   }
 
   return (
-    <div className="space-y-3">
+    <div ref={rootRef} className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         {editing ? (
           <div className="flex min-w-0 flex-1 items-center gap-2">
             <Input
               value={name}
+              disabled={pending}
               onChange={(e) => setName(e.target.value)}
               maxLength={60}
               autoFocus
@@ -68,8 +84,7 @@ export function AgentHeader({
               onKeyDown={(e) => {
                 if (e.key === "Enter") save();
                 if (e.key === "Escape") {
-                  setName(agent.name);
-                  setEditing(false);
+                  confirmNavigation(() => { setName(savedName); setEditing(false); }, rootRef.current);
                 }
               }}
             />
@@ -80,25 +95,26 @@ export function AgentHeader({
               size="icon"
               variant="ghost"
               aria-label="Cancelar edição"
-              onClick={() => {
-                setName(agent.name);
+              disabled={pending}
+              onClick={() => confirmNavigation(() => {
+                setName(savedName);
                 setEditing(false);
                 setError(null);
-              }}
+              }, rootRef.current)}
             >
               <X size={16} aria-hidden />
             </Button>
           </div>
         ) : (
           <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <h1 className="font-display truncate text-3xl font-bold text-white">{agent.name}</h1>
+            <h1 className="font-display truncate text-3xl font-bold text-white">{savedName}</h1>
             {agent.isPrimary && <Badge tone="iris">atende o whatsapp</Badge>}
             {!enabled && <Badge tone="danger">desligado</Badge>}
             <Button
               size="icon"
               variant="ghost"
               aria-label="Renomear agente"
-              onClick={() => setEditing(true)}
+              onClick={() => { setName(savedName); setEditing(true); }}
             >
               <Pencil size={15} aria-hidden />
             </Button>

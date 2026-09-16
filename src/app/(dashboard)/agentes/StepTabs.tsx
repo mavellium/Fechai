@@ -3,6 +3,7 @@
 import { useId, useState } from "react";
 import { cn } from "@/lib/utils";
 import { InfoHint } from "@/components/ui/info-hint";
+import { useUnsavedNavigation } from "@/components/ui/unsaved-changes";
 
 export type StepTab = {
   key: string;
@@ -25,6 +26,7 @@ export type StepTab = {
 export function StepTabs({ tabs }: { tabs: StepTab[] }) {
   const [active, setActive] = useState(0);
   const groupId = useId();
+  const confirmNavigation = useUnsavedNavigation();
 
   return (
     <div>
@@ -45,7 +47,7 @@ export function StepTabs({ tabs }: { tabs: StepTab[] }) {
                 aria-selected={on}
                 aria-controls={panelId}
                 tabIndex={on ? 0 : -1}
-                onClick={() => setActive(i)}
+                onClick={() => { if (!on) confirmNavigation(() => setActive(i)); }}
                 className={cn(
                   "-mb-px rounded-t-control border-b-2 px-3 py-2 font-mono text-micro uppercase tracking-[0.15em] transition-colors",
                   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris",

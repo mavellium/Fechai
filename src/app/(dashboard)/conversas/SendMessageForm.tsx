@@ -75,7 +75,7 @@ export function SendMessageForm({
   voiceReady?: boolean;
 }) {
   const [state, formAction, pending] = useActionState<Result | null, FormData>(action, null);
-  const [sender, setSender] = useState<Sender>("human");
+  const [sender, setSender] = useState<Sender>(isTest ? "client" : "human");
   const [showSender, setShowSender] = useState(false);
   // Modo gravação: substitui o campo de texto enquanto está ativo, como no
   // WhatsApp — gravar e digitar ao mesmo tempo não é uma ação real.
