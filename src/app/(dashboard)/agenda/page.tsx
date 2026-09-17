@@ -16,6 +16,8 @@ import { timeInZone, todayInZone } from "@/modules/scheduling/time";
 import { leadStatusLabel } from "../conversas/leadStatus";
 import { CalendarMonth } from "./CalendarMonth";
 import { AppointmentActions } from "./AppointmentActions";
+import { AppointmentReminders } from "./AppointmentReminders";
+import { parseReminderOverride } from "@/modules/scheduling/reminder-override";
 import { NewAppointmentDialog, type ContactOption } from "./NewAppointmentDialog";
 import { CalendarSyncStatus, type CalendarSyncItem } from "./CalendarSyncStatus";
 
@@ -158,6 +160,7 @@ export default async function AgendaPage({
             contacts={contactOptions}
             defaultDate={selectedKey ?? `${today.year}-${pad(today.month)}-${pad(today.day)}`}
             defaultDuration={config.durationMinutes}
+            durations={config.durations}
             requiresContact={Boolean(features.clinicorpEnabled && clinicorp?.syncEnabled)}
           />
         }
@@ -274,7 +277,17 @@ export default async function AgendaPage({
                         </div>
 
                         {appointment.status === "scheduled" && (
-                          <AppointmentActions id={appointment.id} title={appointment.title} />
+                          <div className="flex flex-wrap items-center gap-2">
+                            <AppointmentReminders
+                              id={appointment.id}
+                              title={appointment.title}
+                              override={parseReminderOverride(appointment.reminderOverride)}
+                              agentReminders={config.reminderEnabled ? config.reminders : []}
+                              location={config.location}
+                              sentCount={appointment.remindersSent.length}
+                            />
+                            <AppointmentActions id={appointment.id} title={appointment.title} />
+                          </div>
                         )}
                       </div>
                     </li>

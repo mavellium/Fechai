@@ -137,7 +137,9 @@ function ClinicorpConnected({ state }: { state: Extract<ClinicorpState, { connec
   const [category, setCategory] = useState(state.categoryDescription ?? "");
 
   // Os profissionais só são buscados quando a pessoa abre o seletor: são uma
-  // chamada de rede ao Clinicorp, e a agenda carrega em toda navegação.
+  // chamada de rede ao Clinicorp, e a agenda carrega em toda navegação. A
+  // exceção é já haver escolha salva (o efeito abaixo) — aí a lista é o que
+  // traduz o id guardado em nome, e sem ela o card abre mostrando o número.
   const [professionals, setProfessionals] = useState<{ id: string; name: string }[] | null>(null);
   const [loadingPros, setLoadingPros] = useState(false);
   const [categories, setCategories] = useState<{ id: string; name: string }[] | null>(null);
@@ -166,6 +168,40 @@ function ClinicorpConnected({ state }: { state: Extract<ClinicorpState, { connec
       setLoadingCategories(false);
     });
   }
+
+  // Com escolha já salva, buscar na montagem: o que está gravado é o id, e só a
+  // lista sabe o nome. Sem isso o card abre com "Profissional selecionado ·
+  // 4966731235983360" e a pessoa precisa abrir o menu para ver quem é. Sem nada
+  // escolhido não há o que traduzir, e a busca continua esperando o clique.
+  // Falha aqui não vira alerta: o menu ainda abre e recarrega ao clicar, e a
+  // tela não deve acusar erro de algo que a pessoa não pediu.
+  useEffect(() => {
+    if (!state.dentistId && !state.categoryDescription) return;
+    let active = true;
+    startTransition(async () => {
+      // Marcar como carregando fecha a janela em que um clique rápido no menu
+      // dispararia uma segunda chamada (o guard de `loadProfessionals` olha
+      // estas flags), além de explicar o "Carregando…" que o botão mostra.
+      if (state.dentistId) setLoadingPros(true);
+      if (state.categoryDescription) setLoadingCategories(true);
+      const [pros, cats] = await Promise.all([
+        state.dentistId
+          ? loadClinicorpProfessionalsAction().catch(() => null)
+          : Promise.resolve(null),
+        state.categoryDescription
+          ? loadClinicorpCategoriesAction().catch(() => null)
+          : Promise.resolve(null),
+      ]);
+      if (!active) return;
+      if (pros?.ok) setProfessionals(pros.data);
+      if (cats?.ok) setCategories(cats.data);
+      setLoadingPros(false);
+      setLoadingCategories(false);
+    });
+    return () => {
+      active = false;
+    };
+  }, [state.dentistId, state.categoryDescription]);
 
   function toggle(field: "syncEnabled" | "checkAvailability", next: boolean) {
     setBusy(field === "syncEnabled" ? "sync" : "availability");
@@ -272,10 +308,20 @@ function ClinicorpConnected({ state }: { state: Extract<ClinicorpState, { connec
               placeholder="Nenhum"
               options={[
                 { value: "", label: "Nenhum" },
-                // Antes de carregar a lista, o valor já salvo precisa existir
-                // como opção — senão o menu "esquece" a escolha ao renderizar.
+                // Antes de a lista chegar, o valor salvo precisa existir como
+                // opção — senão o menu "esquece" a escolha ao renderizar. O id
+                // cru não diz nada a quem lê, então o rótulo é provisório
+                // enquanto carrega; se a lista vier e o id não estiver nela, o
+                // profissional saiu do Clinicorp e a tela precisa dizer isso.
                 ...(dentistId && !professionals?.some((p) => p.id === dentistId)
-                  ? [{ value: dentistId, label: `Profissional selecionado · ${dentistId}` }]
+                  ? [
+                      {
+                        value: dentistId,
+                        label: professionals
+                          ? `Profissional removido do Clinicorp · ${dentistId}`
+                          : "Carregando…",
+                      },
+                    ]
                   : []),
                 ...(professionals ?? []).map((p) => ({ value: p.id, label: p.name })),
               ]}
@@ -302,8 +348,18 @@ function ClinicorpConnected({ state }: { state: Extract<ClinicorpState, { connec
               placeholder="Sem categoria"
               options={[
                 { value: "", label: "Sem categoria" },
+                // Categoria é gravada pelo NOME, então o rótulo já é legível sem
+                // a lista; o sufixo só marca que ainda não confirmamos que ela
+                // existe lá — e vira aviso se a lista vier sem ela.
                 ...(category && !categories?.some((c) => c.name === category)
-                  ? [{ value: category, label: `${category} (salva)` }]
+                  ? [
+                      {
+                        value: category,
+                        label: categories
+                          ? `${category} (não existe mais no Clinicorp)`
+                          : category,
+                      },
+                    ]
                   : []),
                 // Uma opção por NOME, não por categoria: o que gravamos é o
                 // nome (o `CategoryId` é resolvido na hora de enviar), então

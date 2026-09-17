@@ -2,14 +2,74 @@
 
 ## O que faz
 
-Processo separado (BullMQ + Redis) que, periodicamente, encontra conversas sem resposta do lead e dispara um follow-up automático — para tenants com a ação `follow_up` ativa.
+Processo separado (BullMQ + Redis) que roda periodicamente e faz **duas
+varreduras independentes** — as mensagens que o produto manda por conta do
+relógio, não por uma resposta do contato:
+
+| varredura | reage a | para quem |
+| --- | --- | --- |
+| **follow-up** | silêncio do lead | tenants com a ação `follow_up` ativa |
+| **lembretes** | consultas chegando | tenants com `schedule_meeting` ativa **e** lembrete configurado |
+
+As duas vivem no mesmo ciclo porque a cadência serve às duas; um segundo
+processo custaria outro deploy para não ganhar nada. São independentes de
+verdade: o job usa `Promise.allSettled` e só falha se **as duas** falharem —
+o lembrete de uma consulta de amanhã não pode depender do follow-up ter dado
+certo, e reprocessar a metade que funcionou não ajudaria ninguém.
 
 ## Arquivos
 
-- `scan.ts` — lógica de negócio (testável):
+- `scan.ts` — follow-up (testável):
   - `isEligible(conv, cutoff)` — regra pura: não `needsHuman`, sem `followUpSentAt`, `lastInboundAt` antigo, última msg do agente.
   - `scanAndSendFollowUps(now?)` — varre elegíveis, envia via WhatsApp (se conectado), grava a mensagem e marca `followUpSentAt`. Retorna `{ scanned, sent }`.
+- `reminders.ts` — lembretes pré-consulta (ver seção abaixo):
+  - `dueReminders(appt, reminders, now)` — regra pura: quais disparos venceram.
+  - `staleReminders(appt, reminders, now)` — quais perderam a janela e são fechados sem envio.
+  - `remindersFor(appt, cfg)` — os da consulta, ou os do agente.
+  - `scanAndSendReminders(now?)` — varre consultas próximas e marca `Appointment.remindersSent`.
 - `index.ts` — cria a Queue, agenda o job repetível `scan` (`upsertJobScheduler`) e roda o `Worker`.
+
+## Lembretes de consulta (`reminders.ts`)
+
+A antecedência e o texto de cada lembrete são configurados por agente, dentro
+da ação "Agendar horário" (`TenantAction.config` da chave `schedule_meeting` —
+ver `src/modules/scheduling/README.md`), e uma consulta pode ter os seus
+próprios (`Appointment.reminderOverride`).
+
+Regras que não são óbvias:
+
+- **`Appointment.remindersSent` é uma lista, não um booleano.** Uma consulta
+  tem vários disparos ("1 semana antes", "1 dia antes", "2 horas antes") e
+  cada um é marcado sozinho — um booleano calaria todos depois do primeiro. E
+  fica em `Appointment`, não em `Conversation` como o follow-up, porque o
+  lembrete é **por consulta**: o mesmo paciente volta no mês seguinte.
+- **Vários disparos vencidos de uma vez mandam UM só: o mais próximo da
+  consulta.** Acontece quando o worker fica fora do ar, ou quando dois
+  lembretes estão muito perto um do outro. Mandar os dois faria chegarem
+  juntas "falta uma semana" e "é amanhã" — a primeira já mentindo. Os outros
+  são fechados sem envio.
+- **Consulta que já passou não recebe lembrete.** Worker parado por duas horas
+  não pode acordar e avisar "sua consulta é amanhã" para quem já foi atendido.
+  Os disparos pendentes dela são marcados **sem enviar nada**, senão seriam
+  reavaliados em todo ciclo para sempre.
+- **`reminderSentAt` só é gravado quando uma mensagem saiu.** A tela mostra
+  "lembrete enviado há X" a partir dele; um disparo fechado sem envio (consulta
+  passada, contato sem telefone) faria essa frase mentir. `remindersSent` é
+  quem controla o que falta.
+- **A busca tem teto**: a maior antecedência configurada entre os agentes com
+  lembrete ligado. Sem ele, a varredura carregaria a agenda do ano inteiro para
+  descartar quase tudo em memória. Consultas com lembretes próprios entram por
+  um `OR`, porque a antecedência delas pode passar desse teto.
+- **A mensagem entra na conversa** (`role: "assistant"`). É isso que faz a
+  resposta do paciente cair no `runAgentTurn` normal — "não vou poder" vira
+  reagendamento pelo fluxo que já existe, em vez de chegar como conversa nova.
+- **Conversa de teste fica de fora** (`lead.isTest`), como no follow-up: o
+  telefone do sandbox é sintético.
+- **WhatsApp desconectado não impede marcar** como enviado. A janela do
+  lembrete passa; insistir nos ciclos seguintes mandaria "é amanhã" na véspera
+  errada.
+
+Regressões: `tests/agendamento-lembrete.test.ts`.
 
 ## Como rodar
 
@@ -49,6 +109,10 @@ Regressões da conversão em `tests/follow-up-intervalo.test.ts`.
 
 ## O que NÃO faz
 
-- Não gera texto por IA (usa o texto fixo salvo na config, não um LLM).
-- Não reenvia mais de uma vez (marca `followUpSentAt`).
+- Não gera texto por IA em nenhuma das duas varreduras (texto fixo salvo na
+  config, não um LLM) — por isso nada daqui consome a cota do plano.
+- Não reenvia mais de uma vez (`followUpSentAt` no follow-up,
+  `Appointment.remindersSent` nos lembretes — um por antecedência).
+- Não responde ao que o contato escrever de volta: a mensagem entra na conversa
+  e quem conduz dali em diante é o `runAgentTurn`, pelo webhook.
 - Não roda dentro do Next — é um processo à parte (deploy no Railway/Fly.io).

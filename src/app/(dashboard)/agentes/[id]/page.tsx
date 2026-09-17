@@ -7,6 +7,8 @@ import { planOf } from "@/modules/billing/plans";
 import { getAgentOwned } from "@/modules/agent-engine/agents";
 import { isActionAvailable } from "@/modules/agent-engine/actions";
 import { getScheduleConfig } from "@/modules/scheduling/repository";
+import { getCalendarFeatures } from "@/modules/scheduling/features";
+import { getClinicorpStatus } from "@/modules/scheduling/clinicorp";
 import { getFollowUpConfig } from "@/modules/follow-up/config";
 import { getHandoffConfig } from "@/modules/agent-engine/handoff";
 import { isFishAudioConfigured } from "@/modules/voice/fish";
@@ -23,7 +25,7 @@ export default async function AgentePage({ params }: { params: Promise<{ id: str
   // 404 e não "acesso negado": para quem não é dono, o agente não existe.
   if (!agent) notFound();
 
-  const [tenant, documents, tenantActions, agentCount, scheduleConfig, followUpConfig, handoffConfig] =
+  const [tenant, documents, tenantActions, agentCount, scheduleConfig, followUpConfig, handoffConfig, calendarFeatures, clinicorp] =
     await Promise.all([
       prisma.tenant.findUnique({ where: { id: tenantId }, select: { planKey: true } }),
       prisma.knowledgeDocument.findMany({
@@ -39,7 +41,16 @@ export default async function AgentePage({ params }: { params: Promise<{ id: str
       getScheduleConfig(agent.id),
       getFollowUpConfig(agent.id),
       getHandoffConfig(agent.id),
+      getCalendarFeatures(tenantId),
+      getClinicorpStatus(tenantId),
     ]);
+
+  // Habilitado E com credencial salva: é o que decide se vale oferecer "trazer
+  // os tipos do Clinicorp" na configuração de agendamento. Mesma dupla que a
+  // /agenda usa para o aviso de envio. Esconder o botão não é autorização — a
+  // action confere a flag de novo no servidor.
+  // `getClinicorpStatus` devolve null quando não há credencial salva.
+  const clinicorpConnected = Boolean(calendarFeatures.clinicorpEnabled && clinicorp);
 
   // Desativadas temporariamente não contam como "ação ativa" no checklist.
   const actions = tenantActions.filter((a) => isActionAvailable(a.key));
@@ -85,6 +96,7 @@ export default async function AgentePage({ params }: { params: Promise<{ id: str
         enabledKeys={actions.map((a) => a.key)}
         planLimit={planOf(tenant?.planKey).maxActiveActions}
         scheduleConfig={scheduleConfig}
+        clinicorpConnected={clinicorpConnected}
         followUpConfig={followUpConfig}
         handoffConfig={handoffConfig}
         enabled={agent.enabled}

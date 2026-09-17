@@ -2,7 +2,14 @@
 
 import { startTransition, useActionState, useRef, useState } from "react";
 import type { ScheduleConfig } from "@/modules/scheduling/config";
-import { weekdayLabel } from "@/modules/scheduling/config";
+import {
+  MAX_DURATIONS,
+  MAX_DURATION_MINUTES,
+  MIN_DURATION_MINUTES,
+  normalizeDurationLabel,
+  weekdayLabel,
+} from "@/modules/scheduling/config";
+import { ReminderList, fromDrafts, toDrafts, type ReminderDraft } from "./ReminderList";
 import { TIMEZONES } from "@/modules/scheduling/time";
 import { FormFeedback } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -11,10 +18,19 @@ import { InfoHint } from "@/components/ui/info-hint";
 import { Input } from "@/components/ui/input";
 import { SelectMenu } from "@/components/ui/select-menu";
 import { Switch } from "@/components/ui/switch";
-import { saveScheduleConfigAction } from "./actions";
+import { Download } from "lucide-react";
+import { loadClinicorpDurationNamesAction, saveScheduleConfigAction } from "./actions";
 import { UnsavedForm } from "@/components/ui/unsaved-changes";
 
 const WEEKDAYS = [0, 1, 2, 3, 4, 5, 6];
+
+/**
+ * Uma variação em edição. `minutes: null` = campo em branco: o formulário
+ * recusa salvar (o input é `required`), mas o estado precisa representar isso
+ * — tanto para quem apaga o número para redigitar quanto para os tipos
+ * trazidos do Clinicorp, que chegam sem duração porque a API não a informa.
+ */
+type DurationDraft = { label: string; minutes: number | null };
 
 /**
  * Horário de atendimento da ação "Agendar horário".
@@ -27,12 +43,25 @@ const WEEKDAYS = [0, 1, 2, 3, 4, 5, 6];
 export function ScheduleSettings({
   agentId,
   config,
+  clinicorpConnected = false,
 }: {
   agentId: string;
   config: ScheduleConfig;
+  /**
+   * Clinicorp habilitado E com credencial válida. Só então o botão de trazer
+   * os tipos de lá aparece — para as outras contas seria um botão que só sabe
+   * dizer "não está conectado".
+   */
+  clinicorpConnected?: boolean;
 }) {
   const [state, formAction, pending] = useActionState(saveScheduleConfigAction, null);
   const [breaks, setBreaks] = useState(config.breaks);
+  // `minutes: null` é a linha em branco: existe enquanto a pessoa digita e é o
+  // estado em que cada tipo importado do Clinicorp nasce (a API não diz a
+  // duração). O `required` do campo é o que impede salvar assim.
+  const [durations, setDurations] = useState<DurationDraft[]>(config.durations);
+  const [importing, setImporting] = useState(false);
+  const [importNotice, setImportNotice] = useState<string | null>(null);
   const [timezone, setTimezone] = useState(config.timezone);
   const [options, setOptions] = useState({
     allowCancellation: config.allowCancellation,
@@ -40,7 +69,68 @@ export function ScheduleSettings({
     recognizeExisting: config.recognizeExisting,
   });
 
+  // O lembrete tem switch próprio (fora do trio acima) porque ele revela
+  // campos: ligar abre a lista, e gravar sozinho nesse caso salvaria um
+  // lembrete antes da pessoa escrever o texto. Aqui o switch só mostra a
+  // lista; quem grava é o botão do rodapé.
+  const [reminderEnabled, setReminderEnabled] = useState(config.reminderEnabled);
+  const [reminders, setReminders] = useState<ReminderDraft[]>(() => toDrafts(config.reminders));
+
   const formRef = useRef<HTMLFormElement>(null);
+
+  /**
+   * Traz as categorias de agendamento do Clinicorp como nomes de variação.
+   *
+   * **Só os nomes, com a duração em branco**: o Clinicorp não informa quanto
+   * tempo cada categoria leva (`list_categories` devolve id, descrição e cor).
+   * Preencher com um chute — a duração padrão, ou o slot da clínica — faria a
+   * tela afirmar um dado que a clínica nunca deu, e ninguém revisaria um campo
+   * que já parece respondido. Em branco, o `required` obriga a revisão.
+   *
+   * O que já está na lista é preservado: quem ajustou "Limpeza" para 30 min não
+   * perde isso porque clicou no botão. Importar de novo só acrescenta o que
+   * falta.
+   */
+  async function importFromClinicorp() {
+    setImporting(true);
+    setImportNotice(null);
+    try {
+      const result = await loadClinicorpDurationNamesAction();
+      if (!result.ok) {
+        setImportNotice(result.error);
+        return;
+      }
+
+      let added = 0;
+      let full = false;
+      setDurations((current) => {
+        const seen = new Set(current.map((d) => normalizeDurationLabel(d.label)));
+        const next = [...current];
+        for (const name of result.names) {
+          if (next.length >= MAX_DURATIONS) { full = true; break; }
+          if (seen.has(normalizeDurationLabel(name))) continue;
+          seen.add(normalizeDurationLabel(name));
+          next.push({ label: name, minutes: null });
+          added++;
+        }
+        return next;
+      });
+
+      setImportNotice(
+        added === 0
+          ? full
+            ? `Limite de ${MAX_DURATIONS} variações atingido. Remova alguma antes de trazer outras.`
+            : "Todos os tipos do Clinicorp já estão na lista."
+          : `${added} tipo(s) trazido(s) do Clinicorp. O Clinicorp não informa a duração de cada um — preencha os minutos antes de salvar.${full ? ` O limite de ${MAX_DURATIONS} foi atingido e o resto ficou de fora.` : ""}`,
+      );
+    } catch {
+      // Terceiro fora do ar não pode travar o formulário: o resto da
+      // configuração de agendamento continua salvável à mão.
+      setImportNotice("Não foi possível falar com o Clinicorp agora. Tente de novo ou cadastre os tipos à mão.");
+    } finally {
+      setImporting(false);
+    }
+  }
 
   /**
    * Os três switches gravam sozinhos, sem esperar o botão do rodapé.
@@ -149,16 +239,16 @@ export function ScheduleSettings({
         </Field>
 
         <Field
-          label="Duração de cada horário"
+          label="Duração padrão"
           htmlFor="schedule-duration"
-          hint="Em minutos. É o tamanho do bloco que o agente reserva."
+          hint="Em minutos. É o bloco que o agente reserva quando o atendimento não tem duração própria."
         >
           <Input
             {...fieldProps("schedule-duration", { hint: true })}
             type="number"
             name="durationMinutes"
-            min={5}
-            max={480}
+            min={MIN_DURATION_MINUTES}
+            max={MAX_DURATION_MINUTES}
             step={5}
             defaultValue={config.durationMinutes}
             required
@@ -204,6 +294,68 @@ export function ScheduleSettings({
         </Field>
       </div>
 
+      {/*
+        Variações ficam logo abaixo da duração padrão, e não numa aba própria:
+        a pergunta "e quando o atendimento é mais curto?" nasce olhando o campo
+        do padrão. Com a lista vazia (o caso comum) só o botão aparece, então
+        quem atende tudo no mesmo bloco não paga por uma opção que não usa.
+      */}
+      <fieldset className="min-w-0 space-y-3">
+        <legend className="flex items-center gap-1.5 text-sm font-medium text-white/85">
+          Durações por tipo de atendimento
+          <InfoHint label="durações por tipo de atendimento">
+            Quando um tipo de atendimento ocupa mais ou menos tempo que o padrão. O agente
+            pergunta o tipo ao contato e reserva o bloco daquele tamanho. Sem o tipo na conversa,
+            ele usa a duração padrão.
+          </InfoHint>
+        </legend>
+        <p className="text-sm text-white/60">Opcional. Sem nenhuma variação, todo horário usa a duração padrão.</p>
+        <input type="hidden" name="durations" value={JSON.stringify(durations)} />
+        {durations.map((item, index) => (
+          <div key={index} className="grid items-end gap-3 rounded-control border border-white/10 p-3 sm:grid-cols-[1fr_auto_auto]">
+            <Field label="Tipo de atendimento" htmlFor={`duration-label-${index}`}>
+              <Input id={`duration-label-${index}`} placeholder="Ex: limpeza" maxLength={60} required value={item.label}
+                onChange={(e) => setDurations((current) => current.map((d, i) => i === index ? { ...d, label: e.target.value } : d))} />
+            </Field>
+            <Field label="Duração (min)" htmlFor={`duration-minutes-${index}`}>
+              {/*
+                Vazio é estado válido durante a digitação — e é como cada linha
+                importada do Clinicorp nasce, já que a API não informa a duração.
+                O `required` é o que impede salvar assim.
+              */}
+              <Input id={`duration-minutes-${index}`} type="number" required className="sm:w-28"
+                placeholder="min" min={MIN_DURATION_MINUTES} max={MAX_DURATION_MINUTES} step={5}
+                value={item.minutes === null ? "" : item.minutes}
+                onChange={(e) => setDurations((current) => current.map((d, i) =>
+                  i === index ? { ...d, minutes: e.target.value === "" ? null : e.target.valueAsNumber } : d))} />
+            </Field>
+            <Button type="button" variant="ghost" aria-label={`Remover duração ${item.label || index + 1}`}
+              onClick={() => setDurations((current) => current.filter((_, i) => i !== index))}>Remover</Button>
+          </div>
+        ))}
+        {importNotice && (
+          <p className="text-sm text-amber/90">{importNotice}</p>
+        )}
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" disabled={durations.length >= MAX_DURATIONS}
+            onClick={() => setDurations((current) => [...current, { label: "", minutes: null }])}>
+            Adicionar duração
+          </Button>
+          {/*
+            Só com o Clinicorp habilitado e conectado: um botão que só sabe
+            dizer "não está conectado" é ruído para as contas que não usam.
+            O servidor confere a mesma coisa — esconder não é autorização.
+          */}
+          {clinicorpConnected && (
+            <Button type="button" variant="ghost" loading={importing} loadingLabel="Buscando no Clinicorp"
+              disabled={durations.length >= MAX_DURATIONS} onClick={importFromClinicorp}>
+              <Download size={14} aria-hidden />
+              Trazer tipos do Clinicorp
+            </Button>
+          )}
+        </div>
+      </fieldset>
+
       <fieldset className="min-w-0 space-y-3">
         <legend className="text-sm font-medium text-white/85">Pausas durante o expediente</legend>
         <p className="text-sm text-white/60">Almoço, café ou outros intervalos. Repetem-se nos dias de atendimento e bloqueiam todo o período.</p>
@@ -233,7 +385,39 @@ export function ScheduleSettings({
         </Button>
       </fieldset>
 
+      <fieldset className="min-w-0 space-y-4 border-t border-white/10 pt-5">
+        <legend className="sr-only">Lembrete de consulta</legend>
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <p className="text-sm font-medium text-white/85">Lembrar o contato antes da consulta</p>
+            <p id="schedule-reminder-desc" className="mt-1 text-sm text-white/60">
+              O agente manda uma mensagem sozinho antes do horário marcado. Se a pessoa responder,
+              ele continua a conversa normalmente — inclusive para remarcar.
+            </p>
+          </div>
+          <Switch
+            checked={reminderEnabled}
+            onCheckedChange={setReminderEnabled}
+            label="Lembrar o contato antes da consulta"
+            describedBy="schedule-reminder-desc"
+          />
+        </div>
+        {/* Escondido, não desmontado: desligar os lembretes é pausar, não
+            apagar os textos que a pessoa escreveu (mesma regra do grupo do
+            handoff). A lista continua no envio, então religar reencontra tudo. */}
+        <div className={reminderEnabled ? "" : "hidden"}>
+          <ReminderList
+            value={reminders}
+            onChange={setReminders}
+            location={config.location}
+            idPrefix="agente"
+          />
+        </div>
       </fieldset>
+
+      </fieldset>
+      <input type="hidden" name="reminderEnabled" value={String(reminderEnabled)} />
+      <input type="hidden" name="reminders" value={JSON.stringify(fromDrafts(reminders))} />
 
       <FormFeedback error={state?.error} info={state?.info} />
 

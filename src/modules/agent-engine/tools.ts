@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import type { LlmToolSchema } from "@/modules/ai";
-import { isWithinBusinessHours, parseScheduleConfig, type ScheduleConfig } from "@/modules/scheduling/config";
+import { isWithinBusinessHours, parseScheduleConfig, resolveDuration, type ScheduleConfig } from "@/modules/scheduling/config";
 import {
   createAppointment,
   findOwnAppointment,
@@ -126,6 +126,7 @@ const TOOLS: Record<ActionKey, ToolDef> = {
           time: { type: "string", description: "Hora de início no formato HH:MM (24h)" },
           title: { type: "string", description: "Assunto do horário. Ex: 'Aula experimental'" },
           notes: { type: "string", description: "Observações combinadas na conversa" },
+          tipoAtendimento: { type: "string", description: "Nome EXATO do tipo de atendimento, copiado da lista de tipos com duração própria do contexto. Define o tamanho do bloco. Omita quando o negócio não tiver tipos ou quando o contato não disse qual quer." },
           additionalAppointment: { type: "boolean", description: "True somente se o contato pediu explicitamente OUTRA consulta separada, mantendo a anterior. Nunca use para reagendamento." },
         },
         required: ["date", "time"],
@@ -158,11 +159,16 @@ const TOOLS: Record<ActionKey, ToolDef> = {
           : "Esse horário já passou. Proponha um horário futuro.";
       }
 
-      if (!isWithinBusinessHours(startsAt, cfg)) {
-        return `Fora do expediente (${cfg.startTime} às ${cfg.endTime}) ou durante uma pausa. Proponha outro horário respeitando os intervalos.`;
+      // A variação escolhida muda o tamanho do bloco, então entra ANTES da
+      // checagem de expediente e de conflito: uma limpeza de 30 min cabe às
+      // 17:30 num expediente que fecha às 18:00, uma avaliação de 60 não.
+      const duration = resolveDuration(cfg, str(args.tipoAtendimento));
+
+      if (!isWithinBusinessHours(startsAt, { ...cfg, durationMinutes: duration.minutes })) {
+        return `Fora do expediente (${cfg.startTime} às ${cfg.endTime}) ou durante uma pausa, considerando um bloco de ${duration.minutes} min. Proponha outro horário respeitando os intervalos.`;
       }
 
-      const endsAt = new Date(startsAt.getTime() + cfg.durationMinutes * 60_000);
+      const endsAt = new Date(startsAt.getTime() + duration.minutes * 60_000);
 
       // O LLM pode chamar de novo pra "confirmar" um horário que ele mesmo já
       // marcou nesta conversa — trata como sucesso (idempotente) em vez de
@@ -199,16 +205,24 @@ const TOOLS: Record<ActionKey, ToolDef> = {
         title: str(args.title) ?? `Atendimento — ${who}`,
         notes: str(args.notes) ?? null,
         startsAt,
-        durationMinutes: cfg.durationMinutes,
+        durationMinutes: duration.minutes,
         source: "agent",
         timezone: cfg.timezone,
       });
 
       const when = formatInZone(startsAt, cfg.timezone);
+      // O nome pedido pode não existir na lista: o horário foi marcado com a
+      // duração padrão, e o LLM precisa saber disso para não confirmar ao
+      // contato um tipo de atendimento que a agenda não registrou.
+      const kind = duration.label
+        ? ` (${duration.label}, ${duration.minutes} min)`
+        : cfg.durations.length && str(args.tipoAtendimento)
+          ? `. Atenção: "${str(args.tipoAtendimento)}" não está na lista de tipos, então reservei o bloco padrão de ${duration.minutes} min — confirme com o contato qual tipo ele quer antes de prometer outro`
+          : "";
       if (appointment.clinicorpSync.status === "failed") {
-        return `Agendado no fechai para ${when}${cfg.location ? ` (${cfg.location})` : ""}. O envio ao Clinicorp não foi confirmado. O horário continua reservado; não marque novamente nem afirme que já aparece no Clinicorp.`;
+        return `Agendado no fechai para ${when}${kind}${cfg.location ? ` (${cfg.location})` : ""}. O envio ao Clinicorp não foi confirmado. O horário continua reservado; não marque novamente nem afirme que já aparece no Clinicorp.`;
       }
-      return `Agendado para ${when}${cfg.location ? ` (${cfg.location})` : ""}. Confirme esse horário com o contato.`;
+      return `Agendado para ${when}${kind}${cfg.location ? ` (${cfg.location})` : ""}. Confirme esse horário com o contato.`;
     },
   },
 

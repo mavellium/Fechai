@@ -442,6 +442,22 @@ model Appointment {
   /// Guardado como String porque o id de lá é um inteiro de 64 bits (ex.:
   /// 4791226171916288) — fora do alcance seguro do Number do JS.
   clinicorpAppointmentId String?
+  /// Antecedências (em minutos) dos lembretes que JÁ foram enviados para esta
+  /// consulta. Fica aqui, e não em `Conversation` como `followUpSentAt`,
+  /// porque é lembrete POR CONSULTA: o mesmo paciente marca de novo no mês
+  /// seguinte e precisa ser lembrado outra vez.
+  ///
+  /// É uma lista, e não um booleano, porque uma consulta tem vários disparos
+  /// ("1 semana antes", "1 dia antes", "2 horas antes") e cada um precisa ser
+  /// marcado sozinho — senão o primeiro calaria todos os outros.
+  remindersSent          Int[]     @default([])
+  /// Quando o último lembrete saiu. Só para a tela ("lembrete enviado há 2h");
+  /// quem decide o que ainda falta enviar é `remindersSent`.
+  reminderSentAt         DateTime?
+  /// Lembretes só desta consulta, sobrescrevendo os do agente. Null = usa os
+  /// do agente (o caso comum). Lista vazia = esta consulta não recebe nenhum,
+  /// que é diferente de "não configurado" — daí ser Json e não uma relação.
+  reminderOverride       Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -449,6 +465,10 @@ model Appointment {
   @@index([tenantId, startsAt])
   @@index([leadId])
   @@index([agentId])
+  /// Varredura do worker de lembrete: consultas marcadas, pelo começo. Quais
+  /// disparos ainda faltam é decidido em memória (`remindersSent` é uma
+  /// lista, que um índice não ajudaria a filtrar).
+  @@index([status, startsAt])
 }
 
 /// Quais integrações de calendário a conta habilitou em /integracoes.

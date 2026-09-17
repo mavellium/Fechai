@@ -111,6 +111,21 @@ export function timeInZone(at: Date, timeZone: string): string {
   return `${PAD(p.hour)}:${PAD(p.minute)}`;
 }
 
+/**
+ * "terça-feira, 12 de agosto" — só o dia, por extenso. Separado de
+ * `formatInZone` porque o lembrete tem `{{data}}` e `{{hora}}` como variáveis
+ * independentes: quem escreve "sua consulta {{data}} às {{hora}}" não pode
+ * receber o horário embutido na data.
+ */
+export function dateInZone(at: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone,
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  }).format(at);
+}
+
 /** "ter, 12 de ago · 15:30" — rótulo curto usado na agenda e nas respostas. */
 export function formatInZone(at: Date, timeZone: string): string {
   return new Intl.DateTimeFormat("pt-BR", {

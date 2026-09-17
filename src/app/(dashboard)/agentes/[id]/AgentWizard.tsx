@@ -93,6 +93,7 @@ export function AgentWizard({
   enabledKeys,
   planLimit,
   scheduleConfig,
+  clinicorpConnected,
   followUpConfig,
   handoffConfig,
   enabled,
@@ -114,6 +115,7 @@ export function AgentWizard({
   enabledKeys: string[];
   planLimit: number;
   scheduleConfig: ScheduleConfig;
+  clinicorpConnected: boolean;
   followUpConfig: FollowUpConfig;
   handoffConfig: HandoffConfig;
   /** Agente ligado? Desligado, o teste não responde — a tela avisa antes. */
@@ -235,6 +237,7 @@ export function AgentWizard({
                     enabledKeys={enabledKeys}
                     planLimit={planLimit}
                     scheduleConfig={scheduleConfig}
+                    clinicorpConnected={clinicorpConnected}
                     followUpConfig={followUpConfig}
                     handoffConfig={handoffConfig}
                   />

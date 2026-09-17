@@ -10,7 +10,7 @@ mostrada no painel, e o horário combinado com o lead continua de pé.
 | Arquivo | O que faz |
 | --- | --- |
 | `repository.ts` | Toda leitura/escrita da agenda. Filtra por `tenantId` sempre. A tela, as server actions e a tool `schedule_meeting` passam por aqui. |
-| `config.ts` | `ScheduleConfig` (expediente, fuso, duração) em `TenantAction.config`, chave `schedule_meeting`. Por agente. |
+| `config.ts` | `ScheduleConfig` (expediente, fuso, duração padrão + variações) em `TenantAction.config`, chave `schedule_meeting`. Por agente. |
 | `time.ts` | Fuso: `parseLocalDateTime`, `partsInZone`, `monthRangeUtc`. Nada de data no projeto sem passar por aqui. |
 | `google.ts` | Espelho no Google Agenda (OAuth por tenant). |
 | `clinicorp.ts` | Espelho + leitura de disponibilidade no Clinicorp (Basic auth por tenant). |
@@ -26,10 +26,133 @@ Em Agentes › Ações › Agendar horário, `TenantAction.config` guarda també
 - `recognizeExisting`: ligado por padrão. Acrescenta ao contexto os próximos
   horários do contato na nossa agenda, mesmo sem estarem no histórico recente.
   Retorno e confirmação de lembrete não devem reiniciar o agendamento.
+- `durations`: lista de `{ label, minutes }`, vazia em configs antigas e no caso
+  comum. São tipos de atendimento com duração própria ("Limpeza · 30 min"), não
+  um catálogo de serviços: só existe aqui o que muda o tamanho do bloco.
+  `durationMinutes` continua sendo **o padrão** — o bloco de quem não disse o
+  tipo, e a grade de `slotStartTimes`/`listFreeSlots`. O agente recebe a lista no
+  prompt e devolve o nome em `tipoAtendimento`; `resolveDuration()` compara sem
+  caixa nem acento e **cai no padrão quando o nome não existe**, porque um bloco
+  do tamanho errado a clínica corrige e um lead perdido não. Nesse caso a
+  resposta da tool avisa o LLM, para ele não confirmar ao contato um tipo que a
+  agenda não registrou. Variação sem nome, fora de 5–480 min ou com nome
+  repetido é descartada na leitura (`parseScheduleConfig`) e recusada na escrita
+  (`validateDurations`) — nome repetido o agente não teria como escolher.
+  `list_available_slots` continua listando a grade do padrão: uma grade por
+  variação daria listas concorrentes para o mesmo dia. Um tipo mais longo que
+  não couber é recusado por `schedule_meeting`, que já devolve os livres junto.
+  Com o Clinicorp habilitado **e** conectado, a tela oferece trazer os nomes de
+  lá (`loadClinicorpDurationNamesAction`) — ver "Tipos de atendimento" abaixo.
 - `breaks`: lista de `{ label, startTime, endTime }`, vazia em configs antigas.
   Pausas repetem-se nos dias atendidos. O formulário recusa sobreposição,
   intervalos invertidos e pausas fora do expediente. `isWithinBusinessHours`
   recusa qualquer consulta que atravesse uma pausa; encostar é permitido.
+- `reminderEnabled` e `reminders`: os lembretes pré-consulta. Ver a seção abaixo.
+
+## Lembretes de consulta
+
+Entre "marcado" e o dia da consulta não havia nenhum contato, e cadeira vazia
+por paciente que esqueceu é o custo que a clínica mais sente. Com a opção
+ligada, o agente manda mensagens antes do horário.
+
+**É configuração da ação `schedule_meeting`, não uma ação nova.** Lembrete sem
+agendamento não existe — não há consulta para lembrar — e uma ação própria
+consumiria outra vaga do limite do plano para cobrar de novo pelo que a conta
+já ligou. Como toda config de ação, só age com a ação **ligada**: a varredura
+filtra `TenantAction.enabled`, mesma regra de `getActiveHandoffConfig`.
+
+### São vários, não um
+
+`reminders` é uma **lista** de `{ minutesBefore, template }`, ordenada do mais
+distante para o mais próximo. Uma clínica costuma querer mais de um ("1 semana
+antes" para dar tempo de remarcar, "2 horas antes" para quem já esqueceu), e
+cada disparo diz algo diferente — por isso o texto mora em cada linha, e não
+num template único para todos.
+
+**Não há teto de quantidade.** Quantos lembretes o paciente aguenta é decisão
+de quem conhece a própria base. A tela avisa em bloco a partir de
+`REMINDER_COUNT_WARNING` (10) e interrompe com um popup ao ultrapassar — uma
+vez por edição, porque aviso repetido treina a pessoa a fechar sem ler. O que
+está em jogo é que **quem leva o bloqueio no WhatsApp é o número da clínica**,
+e um número bloqueado deixa de alcançar também os outros pacientes.
+
+**A antecedência vai de minutos a semanas** (`REMINDER_UNITS`), guardada em
+minutos — a unidade é só a forma de digitar, como em `FollowUpConfig.
+delayMinutes`. `splitReminderLead()` devolve o valor na maior unidade inteira,
+que é como a tela reabre o que foi salvo (1440 vira "1 dia", não "1440
+minutos"). Teto por lembrete: `MAX_REMINDER_MINUTES` (8 semanas).
+
+**Dois lembretes no mesmo momento são recusados** (`validateReminders`, na tela
+e no servidor): "1 dia" e "24 horas" digitados sem perceber que são a mesma
+coisa chegariam como duas mensagens coladas.
+
+**Configs antigas continuam valendo.** Antes o lembrete era um só, em
+`reminderMinutesBefore` + `reminderTemplate`. `parseScheduleConfig` lê os dois
+formatos e converte na leitura, dando preferência à lista. **Não remova esse
+fallback** sem migrar as linhas — mesma lição do `delayHours` do follow-up.
+
+### O texto é template, não IA
+
+Cada `template` aceita `{{nome}}`, `{{data}}`, `{{hora}}` e `{{local}}`
+(`REMINDER_VARIABLES`), substituídos por `renderReminder()`. Gerar cada
+lembrete por LLM gastaria a cota do plano (`modules/billing/usage.ts`) para
+produzir uma frase que precisa sair igual todas as vezes. Duas regras dessa
+função:
+
+- **`{{local}}` já vem com a preposição** e some quando a conta não configurou
+  local — o template padrão escreve `às {{hora}}{{local}}.` por isso, senão
+  sobraria "às 15:00 em ." na mensagem.
+- **Token desconhecido é apagado**, não impresso cru: `{{medico}}` vira um
+  buraco na frase, que é ruim, mas melhor do que mandar `{{medico}}` ao
+  paciente. A tela mostra a prévia já substituída justamente para esse erro
+  aparecer antes de salvar.
+
+Contato sem nome cadastrado existe, então a limpeza final tira espaço e
+pontuação órfãos: "Oi {{nome}}!" não pode virar "Oi !".
+
+### Lembretes de UMA consulta (`reminderOverride`)
+
+O padrão do agente serve ao caso comum, não a toda consulta: um procedimento
+que exige preparo pede um aviso que a consulta de rotina não pede. Por isso
+`Appointment.reminderOverride` (Json), editado no botão "Lembretes" de cada
+compromisso em `/agenda`. Três estados, e a diferença entre os dois últimos é
+o motivo de ser Json e não uma relação:
+
+| valor | significado |
+| --- | --- |
+| `null` | segue os lembretes do agente (o caso comum) |
+| `[]` | esta consulta **não recebe** lembrete nenhum |
+| `[...]` | esta consulta usa exatamente estes |
+
+Tratar `[]` como "não configurado" faria a consulta que a clínica marcou para
+não lembrar receber os lembretes do agente assim mesmo. `remindersFor()` é
+quem resolve isso, e o override vale **mesmo com o lembrete desligado no
+agente** — são duas decisões diferentes.
+
+### O que já foi enviado
+
+**`Appointment.remindersSent`** guarda as antecedências (em minutos) dos
+disparos que já saíram. É uma **lista, não um booleano**: uma consulta tem
+vários disparos e cada um precisa ser marcado sozinho, senão o primeiro
+calaria todos os outros. E fica em `Appointment`, não em `Conversation` como o
+`followUpSentAt` do follow-up, porque o lembrete é **por consulta** — o mesmo
+paciente marca de novo no mês seguinte e precisa ser lembrado outra vez.
+
+`reminderSentAt` é só para a tela ("lembrete enviado há 2h") e **só é gravado
+quando uma mensagem de fato saiu**: um disparo fechado sem envio faria essa
+frase mentir.
+
+Mudar a régua de uma consulta não reenvia o que já saiu — os marcados
+continuam marcados.
+
+Quem envia é `workers/follow-up-worker/reminders.ts`, na mesma varredura
+periódica do follow-up (ver o README de lá, que documenta as regras de janela
+e de consulta atrasada). A mensagem entra na conversa como `role: "assistant"`,
+e é isso que faz a resposta do paciente ("não vou poder") cair no
+`runAgentTurn` normal — com `recognizeExisting` dando o contexto da consulta,
+cancelar e reagendar já existentes atuam sem código novo.
+
+Regressões: `tests/agendamento-lembrete.test.ts`.
 
 `agent-engine/scheduling-tools.ts` fornece `list_appointments`, `cancel_meeting`
 e `reschedule_meeting`, como capacidades da mesma ação (sem consumir novas
@@ -239,12 +362,50 @@ Base: `https://api.clinicorp.com/rest/v1`. Quase todo endpoint pede
 - Regressões: `tests/clinicorp.test.ts` e `tests/clinicorp-actions.test.ts`, com
   API e banco simulados. Nenhum teste cria agendamentos na conta de um cliente.
 
+### Tipos de atendimento: a API não tem duração
+
+O botão "Trazer tipos do Clinicorp" (Agentes › Agendar horário › Durações por
+tipo de atendimento) importa **só os nomes**. Isso não é economia de escopo — a
+API não expõe duração por tipo, e vale conferir antes de tentar de novo:
+
+| Endpoint | O que devolve | Duração? |
+| --- | --- | --- |
+| `/appointment/list_categories` | `id`, `Description`, `Color` | não |
+| `/procedures/list` | `ProcedureName`, `ProcedureExpertiseName`, `PriceListId`, `Type` | não (é tabela de **preço**) |
+| `/group/list_subscribers_clinics` | `SlotTime` | sim, mas **da clínica inteira** ("se o slot for 30, este é o tempo de consulta da clinica"), não por tipo |
+
+Por isso cada linha importada nasce com o campo de minutos **em branco**, e o
+`required` do input mais o `superRefine` de `saveScheduleConfigAction` (mensagem
+com o nome do tipo) obrigam a preencher antes de salvar. Preencher com um chute
+— a duração padrão, ou o `SlotTime` — faria a tela afirmar um dado que a clínica
+nunca informou, e ninguém revisa um campo que já parece respondido.
+
+Outras regras do botão:
+
+- **Só aparece com `clinicorpEnabled` E credencial salva** (`getClinicorpStatus`
+  devolve `null` sem credencial). Para as outras contas seria um botão que só
+  sabe dizer "não está conectado". Esconder não é autorização: a action confere
+  a flag de novo no servidor.
+- **Importar não sobrescreve.** Quem já ajustou "Limpeza" para 30 min não perde
+  isso ao clicar; a comparação é por `normalizeDurationLabel`, e só o que falta
+  é acrescentado. Nome repetido no Clinicorp entra uma vez só — duas linhas com
+  o mesmo nome fariam `validateDurations` recusar o formulário inteiro depois.
+- **Falha nunca trava o formulário**: erro de rede ou credencial vira aviso na
+  própria seção e o resto da configuração continua salvável à mão.
+- Regressões: `tests/clinicorp-actions.test.ts`.
+
 ### Estendendo
 
 Endpoints úteis ainda não usados: `/appointment/change_status` +
 `/appointment/status_list` (marcar "realizado" aqui refletir lá),
 `/business/list_available_times` (oferecer os slots reais da clínica em vez de
 derivar do expediente configurado no fechai).
+
+Para a duração por tipo (que a API não informa, ver acima), o único caminho
+seria **deduzir do histórico**: ler `/appointment/list` de semanas passadas e
+tirar a duração média real por categoria. Daria nome *e* tempo de verdade, mas
+depende de haver histórico, são várias chamadas e leva segundos — foi avaliado e
+deixado de fora do botão de importar, que é síncrono.
 
 Não há webhook de entrada: o que for marcado **no** Clinicorp não aparece na
 agenda daqui. Só a checagem de conflito enxerga esses horários. Trazer os

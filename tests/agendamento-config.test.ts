@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isWithinBusinessHours, parseScheduleConfig, scheduleSystemContext, slotStartTimes, validateScheduleBreaks } from "@/modules/scheduling/config";
+import { isWithinBusinessHours, parseScheduleConfig, resolveDuration, scheduleSystemContext, slotStartTimes, validateDurations, validateScheduleBreaks } from "@/modules/scheduling/config";
 import { parseLocalDateTime } from "@/modules/scheduling/time";
 
 const cfg = parseScheduleConfig({ durationMinutes: 60, breaks: [
@@ -57,5 +57,68 @@ describe("grade de horários", () => {
   });
   it("diz ao agente para consultar os livres antes de sugerir", () => {
     expect(scheduleSystemContext(parseScheduleConfig(null))).toContain("list_available_slots");
+  });
+});
+
+describe("durações por tipo de atendimento", () => {
+  const comVariacoes = parseScheduleConfig({
+    durationMinutes: 60,
+    durations: [{ label: "Limpeza", minutes: 30 }, { label: "Clareamento", minutes: 90 }],
+  });
+
+  it("nasce vazio: quem atende tudo no mesmo bloco não ganha variação sozinho", () => {
+    expect(parseScheduleConfig(null).durations).toEqual([]);
+    expect(parseScheduleConfig({ durationMinutes: 45 }).durations).toEqual([]);
+  });
+
+  it("descarta linha sem nome, fora da faixa ou com nome repetido", () => {
+    const parsed = parseScheduleConfig({ durations: [
+      { label: "Limpeza", minutes: 30 },
+      { label: "  ", minutes: 30 },
+      { label: "Curta demais", minutes: 1 },
+      { label: "Longa demais", minutes: 999 },
+      { label: "LIMPEZA", minutes: 45 },
+      { label: "Sem minutos" },
+      null,
+    ] });
+    expect(parsed.durations).toEqual([{ label: "Limpeza", minutes: 30 }]);
+  });
+
+  it("resolve o tipo ignorando caixa e acento", () => {
+    const cfg = parseScheduleConfig({ durations: [{ label: "Avaliação", minutes: 20 }] });
+    for (const pedido of ["Avaliação", "avaliacao", " AVALIAÇÃO "]) {
+      expect(resolveDuration(cfg, pedido)).toMatchObject({ minutes: 20, label: "Avaliação", matched: true });
+    }
+  });
+
+  it("cai na duração padrão quando o tipo não existe ou não veio", () => {
+    for (const pedido of [undefined, null, "", "Massagem"]) {
+      expect(resolveDuration(comVariacoes, pedido)).toMatchObject({ minutes: 60, label: null, matched: false });
+    }
+  });
+
+  it("lista as variações para o agente e manda passar o nome exato", () => {
+    const context = scheduleSystemContext(comVariacoes);
+    expect(context).toContain("Limpeza (30 min)");
+    expect(context).toContain("Clareamento (90 min)");
+    expect(context).toContain("tipoAtendimento");
+  });
+
+  it("não fala de tipos quando não há variação cadastrada", () => {
+    expect(scheduleSystemContext(parseScheduleConfig({ durationMinutes: 60 }))).not.toContain("tipoAtendimento");
+  });
+
+  it("um tipo mais longo que o padrão é recusado pelo expediente", () => {
+    const cfg = parseScheduleConfig({ startTime: "09:00", endTime: "18:00", durationMinutes: 30, durations: [{ label: "Longa", minutes: 120 }] });
+    const as1730 = parseLocalDateTime("2026-09-17", "17:30", cfg.timezone)!;
+    expect(isWithinBusinessHours(as1730, cfg)).toBe(true);
+    expect(isWithinBusinessHours(as1730, { ...cfg, durationMinutes: resolveDuration(cfg, "Longa").minutes })).toBe(false);
+  });
+
+  it("recusa nome duplicado e duração fora da faixa na validação do formulário", () => {
+    expect(validateDurations([{ label: "Limpeza", minutes: 30 }, { label: "limpeza", minutes: 45 }])).toBeTruthy();
+    expect(validateDurations([{ label: "", minutes: 30 }])).toBeTruthy();
+    expect(validateDurations([{ label: "Limpeza", minutes: 2 }])).toBeTruthy();
+    expect(validateDurations([{ label: "Limpeza", minutes: 30 }, { label: "Avaliação", minutes: 60 }])).toBeNull();
   });
 });

@@ -1,0 +1,545 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * Testes dos lembretes pré-consulta.
+ *
+ * O estrago que cada regra evita é concreto:
+ *
+ * - config antiga (lembrete único, em campos soltos) perdendo o que a conta
+ *   já tinha configurado — a mesma armadilha do `delayHours` do follow-up;
+ * - config antiga ligando lembrete sozinha, mandando mensagem para a base de
+ *   pacientes de quem nunca pediu;
+ * - dois lembretes no mesmo instante virando duas mensagens coladas;
+ * - um disparo calando os outros da mesma consulta;
+ * - worker parado acordando e avisando "sua consulta é amanhã" para quem já
+ *   foi atendido;
+ * - ação de agendamento desligada continuando a mandar lembrete.
+ */
+
+const db = vi.hoisted(() => ({
+  tenantAction: { findMany: vi.fn() },
+  appointment: { findMany: vi.fn(), update: vi.fn() },
+  whatsappInstance: { findUnique: vi.fn() },
+  message: { create: vi.fn() },
+}));
+const provider = vi.hoisted(() => ({
+  isConfigured: vi.fn(() => true),
+  sendMessage: vi.fn((...args: [string, string, string]) => {
+    void args;
+    return Promise.resolve("wamid-1");
+  }),
+}));
+
+vi.mock("../src/lib/prisma", () => ({ prisma: db }));
+vi.mock("../src/modules/whatsapp", () => ({ getWhatsAppProvider: () => provider }));
+
+import {
+  DEFAULT_REMINDER_MINUTES,
+  DEFAULT_REMINDER_TEMPLATE,
+  MAX_REMINDER_MINUTES,
+  REMINDER_VARIABLES,
+  describeSchedule,
+  formatReminderLead,
+  parseScheduleConfig,
+  renderReminder,
+  splitReminderLead,
+  validateReminders,
+} from "@/modules/scheduling/config";
+import { parseReminderOverride, serializeReminderOverride } from "@/modules/scheduling/reminder-override";
+import {
+  dueReminders,
+  remindersFor,
+  scanAndSendReminders,
+  staleReminders,
+} from "../workers/follow-up-worker/reminders";
+
+const AGENTE = "agente-1";
+const AGORA = new Date("2026-09-16T12:00:00.000Z");
+const UM_DIA = 24 * 60;
+const UMA_SEMANA = 7 * 24 * 60;
+
+describe("Leitura da config (parseScheduleConfig)", () => {
+  it("não liga o lembrete numa config antiga, que não tem o campo", () => {
+    expect(parseScheduleConfig({ startTime: "09:00" }).reminderEnabled).toBe(false);
+    expect(parseScheduleConfig(null).reminderEnabled).toBe(false);
+  });
+
+  it("converte o formato antigo de lembrete único, sem perder o que estava salvo", () => {
+    // Toda conta que configurou lembrete antes da lista existir tem
+    // `reminderMinutesBefore`/`reminderTemplate` no banco. Ignorá-los faria o
+    // lembrete escolhido virar o padrão em silêncio.
+    const cfg = parseScheduleConfig({
+      reminderEnabled: true,
+      reminderMinutesBefore: 120,
+      reminderTemplate: "Texto antigo {{nome}}",
+    });
+    expect(cfg.reminders).toEqual([{ minutesBefore: 120, template: "Texto antigo {{nome}}" }]);
+  });
+
+  it("prefere a lista nova quando os dois formatos existem", () => {
+    const cfg = parseScheduleConfig({
+      reminderMinutesBefore: 120,
+      reminderTemplate: "antigo",
+      reminders: [{ minutesBefore: UM_DIA, template: "novo" }],
+    });
+    expect(cfg.reminders).toEqual([{ minutesBefore: UM_DIA, template: "novo" }]);
+  });
+
+  it("ordena do mais distante para o mais próximo — a ordem dos disparos", () => {
+    const cfg = parseScheduleConfig({
+      reminders: [
+        { minutesBefore: 120, template: "a" },
+        { minutesBefore: UMA_SEMANA, template: "b" },
+        { minutesBefore: UM_DIA, template: "c" },
+      ],
+    });
+    expect(cfg.reminders.map((r) => r.minutesBefore)).toEqual([UMA_SEMANA, UM_DIA, 120]);
+  });
+
+  it("descarta linha inválida e duplicata sem lançar", () => {
+    const cfg = parseScheduleConfig({
+      reminders: [
+        { minutesBefore: UM_DIA, template: "ok" },
+        { minutesBefore: UM_DIA, template: "duplicado" },
+        { minutesBefore: 0, template: "curto demais" },
+        { minutesBefore: MAX_REMINDER_MINUTES + 1, template: "longe demais" },
+        "lixo",
+      ],
+    });
+    expect(cfg.reminders).toEqual([{ minutesBefore: UM_DIA, template: "ok" }]);
+  });
+
+  it("template vazio cai no texto padrão — lembrete nunca sai em branco", () => {
+    const cfg = parseScheduleConfig({ reminders: [{ minutesBefore: 60, template: "   " }] });
+    expect(cfg.reminders[0].template).toBe(DEFAULT_REMINDER_TEMPLATE);
+  });
+
+  it("sem nenhum lembrete salvo, nasce com um de um dia antes", () => {
+    expect(parseScheduleConfig({}).reminders).toEqual([
+      { minutesBefore: DEFAULT_REMINDER_MINUTES, template: DEFAULT_REMINDER_TEMPLATE },
+    ]);
+    expect(DEFAULT_REMINDER_MINUTES).toBe(UM_DIA);
+  });
+
+  it("o resumo do card conta os lembretes, sem estourar a linha", () => {
+    const um = parseScheduleConfig({ reminderEnabled: true, reminders: [{ minutesBefore: UM_DIA, template: "x" }] });
+    expect(describeSchedule(um)).toContain("lembrete 1 dia antes");
+
+    const varios = parseScheduleConfig({
+      reminderEnabled: true,
+      reminders: [
+        { minutesBefore: UMA_SEMANA, template: "x" },
+        { minutesBefore: UM_DIA, template: "y" },
+        { minutesBefore: 120, template: "z" },
+      ],
+    });
+    expect(describeSchedule(varios)).toContain("3 lembretes (a partir de 1 semana antes)");
+
+    const desligado = parseScheduleConfig({ reminderEnabled: false, reminders: [{ minutesBefore: UM_DIA, template: "x" }] });
+    expect(describeSchedule(desligado)).not.toContain("lembrete");
+  });
+});
+
+describe("Unidades da antecedência (minutos a semanas)", () => {
+  it("reabre o valor na maior unidade inteira", () => {
+    expect(splitReminderLead(UMA_SEMANA)).toEqual({ amount: 1, unit: "weeks" });
+    expect(splitReminderLead(UM_DIA)).toEqual({ amount: 1, unit: "days" });
+    expect(splitReminderLead(120)).toEqual({ amount: 2, unit: "hours" });
+    expect(splitReminderLead(30)).toEqual({ amount: 30, unit: "minutes" });
+    // 90 min não é hora cheia: fica em minutos em vez de virar 1,5h.
+    expect(splitReminderLead(90)).toEqual({ amount: 90, unit: "minutes" });
+  });
+
+  it("escreve a antecedência como gente fala", () => {
+    expect(formatReminderLead(2 * UMA_SEMANA)).toBe("2 semanas");
+    expect(formatReminderLead(UM_DIA)).toBe("1 dia");
+    expect(formatReminderLead(120)).toBe("2 horas");
+    expect(formatReminderLead(30)).toBe("30 minutos");
+  });
+});
+
+describe("Validação da lista (validateReminders)", () => {
+  it("aceita uma lista longa — não há teto de quantidade", () => {
+    // Quantos lembretes o paciente aguenta é decisão de quem conhece a base;
+    // a tela avisa e interrompe com um popup, mas não impede.
+    const muitos = Array.from({ length: 30 }, (_, i) => ({
+      minutesBefore: i + 1,
+      template: "oi",
+    }));
+    expect(validateReminders(muitos)).toBeNull();
+  });
+
+  it("recusa dois lembretes no mesmo momento", () => {
+    // "1 dia" e "24 horas" digitados sem perceber que são a mesma coisa.
+    const erro = validateReminders([
+      { minutesBefore: UM_DIA, template: "a" },
+      { minutesBefore: UM_DIA, template: "b" },
+    ]);
+    expect(erro).toContain("já tem um lembrete");
+  });
+
+  it("recusa texto vazio e antecedência fora da faixa", () => {
+    expect(validateReminders([{ minutesBefore: UM_DIA, template: "  " }])).toContain("mensagem");
+    expect(validateReminders([{ minutesBefore: 0, template: "oi" }])).toContain("1 minuto");
+    expect(validateReminders([{ minutesBefore: MAX_REMINDER_MINUTES + 1, template: "oi" }]))
+      .toContain("máxima");
+  });
+});
+
+describe("Texto do lembrete (renderReminder)", () => {
+  const vars = { nome: "Maria", data: "quinta-feira, 18 de setembro", hora: "15:00" };
+
+  it("troca as quatro variáveis documentadas", () => {
+    const texto = renderReminder("{{nome}} · {{data}} · {{hora}} ·{{local}}", {
+      ...vars,
+      local: "no consultório",
+    });
+    expect(texto).toBe("Maria · quinta-feira, 18 de setembro · 15:00 · no consultório");
+  });
+
+  it("some com {{local}} quando a conta não configurou local", () => {
+    const texto = renderReminder(DEFAULT_REMINDER_TEMPLATE, { ...vars, local: "" });
+    expect(texto).toContain("às 15:00.");
+    expect(texto).not.toContain("  ");
+  });
+
+  it("não deixa espaço nem pontuação órfã com contato sem nome", () => {
+    const texto = renderReminder("Oi {{nome}}! Consulta {{data}}.", { ...vars, nome: "" });
+    expect(texto).toBe("Oi! Consulta quinta-feira, 18 de setembro.");
+  });
+
+  it("apaga token desconhecido em vez de mandá-lo cru ao paciente", () => {
+    const texto = renderReminder("Consulta com {{medico}} {{data}}.", vars);
+    expect(texto).not.toContain("{{");
+  });
+
+  it("o template padrão usa só variáveis que existem", () => {
+    const tokens = DEFAULT_REMINDER_TEMPLATE.match(/\{\{\s*\w+\s*\}\}/g) ?? [];
+    const conhecidos = REMINDER_VARIABLES.map((v) => v.token);
+    for (const token of tokens) expect(conhecidos).toContain(token);
+  });
+});
+
+describe("Lembretes de uma consulta (override)", () => {
+  const doAgente = [{ minutesBefore: UM_DIA, template: "do agente" }];
+
+  it("sem override, a consulta segue o agente", () => {
+    const regras = remindersFor({ reminderOverride: null }, {
+      reminderEnabled: true,
+      reminders: doAgente,
+    });
+    expect(regras).toEqual(doAgente);
+  });
+
+  it("lista vazia é uma escolha: esta consulta não recebe nada", () => {
+    // O ponto central do override. Se `[]` fosse tratado como "não
+    // configurado", a consulta que a clínica marcou para NÃO lembrar
+    // receberia os lembretes do agente assim mesmo.
+    const regras = remindersFor({ reminderOverride: [] }, {
+      reminderEnabled: true,
+      reminders: doAgente,
+    });
+    expect(regras).toEqual([]);
+  });
+
+  it("override com lista substitui o padrão do agente", () => {
+    const regras = remindersFor(
+      { reminderOverride: [{ minutesBefore: 120, template: "só desta" }] },
+      { reminderEnabled: true, reminders: doAgente },
+    );
+    expect(regras).toEqual([{ minutesBefore: 120, template: "só desta" }]);
+  });
+
+  it("com o lembrete desligado no agente, sem override não manda nada", () => {
+    const regras = remindersFor({ reminderOverride: null }, {
+      reminderEnabled: false,
+      reminders: doAgente,
+    });
+    expect(regras).toEqual([]);
+  });
+
+  it("override vale mesmo com o lembrete desligado no agente", () => {
+    // Desligar o padrão não pode apagar a escolha feita para uma consulta
+    // específica: são duas decisões diferentes.
+    const regras = remindersFor(
+      { reminderOverride: [{ minutesBefore: 60, template: "esta sim" }] },
+      { reminderEnabled: false, reminders: doAgente },
+    );
+    expect(regras).toEqual([{ minutesBefore: 60, template: "esta sim" }]);
+  });
+
+  it("override corrompido não derruba a varredura — vira 'segue o agente'", () => {
+    expect(parseReminderOverride("lixo")).toBeNull();
+    expect(parseReminderOverride(undefined)).toBeNull();
+    expect(parseReminderOverride([{ minutesBefore: "amanhã" }])).toEqual([]);
+  });
+
+  it("serializar null limpa o override", () => {
+    expect(serializeReminderOverride(null)).toBeNull();
+    expect(serializeReminderOverride([])).toEqual([]);
+  });
+});
+
+describe("Quais disparos estão vencidos (dueReminders)", () => {
+  const regras = [
+    { minutesBefore: UMA_SEMANA, template: "semana" },
+    { minutesBefore: UM_DIA, template: "dia" },
+    { minutesBefore: 120, template: "duas horas" },
+  ];
+  const consulta = (startsAt: string, over: Partial<{ status: string; remindersSent: number[] }> = {}) => ({
+    status: over.status ?? "scheduled",
+    startsAt: new Date(startsAt),
+    remindersSent: over.remindersSent ?? [],
+  });
+
+  it("dispara só os que já entraram na janela", () => {
+    // Consulta daqui a 20h: a de 1 semana e a de 1 dia venceram, a de 2h não.
+    const due = dueReminders(consulta("2026-09-17T08:00:00.000Z"), regras, AGORA);
+    expect(due.map((r) => r.minutesBefore)).toEqual([UMA_SEMANA, UM_DIA]);
+  });
+
+  it("não repete um disparo já enviado", () => {
+    // O ponto da lista em vez do booleano: o de 1 semana já saiu, o de 1 dia
+    // ainda precisa sair.
+    const due = dueReminders(
+      consulta("2026-09-17T08:00:00.000Z", { remindersSent: [UMA_SEMANA] }),
+      regras,
+      AGORA,
+    );
+    expect(due.map((r) => r.minutesBefore)).toEqual([UM_DIA]);
+  });
+
+  it("não dispara antes da janela abrir", () => {
+    // Daqui a 3 dias: só o de 1 semana venceu.
+    const due = dueReminders(consulta("2026-09-19T12:00:00.000Z"), regras, AGORA);
+    expect(due.map((r) => r.minutesBefore)).toEqual([UMA_SEMANA]);
+  });
+
+  it("não lembra de consulta que já passou", () => {
+    expect(dueReminders(consulta("2026-09-16T09:00:00.000Z"), regras, AGORA)).toEqual([]);
+  });
+
+  it("ignora consulta cancelada ou já realizada", () => {
+    const amanha = "2026-09-17T08:00:00.000Z";
+    expect(dueReminders(consulta(amanha, { status: "canceled" }), regras, AGORA)).toEqual([]);
+    expect(dueReminders(consulta(amanha, { status: "done" }), regras, AGORA)).toEqual([]);
+  });
+
+  it("consulta passada tem seus disparos pendentes fechados (staleReminders)", () => {
+    const pendentes = staleReminders(
+      consulta("2026-09-16T09:00:00.000Z", { remindersSent: [UMA_SEMANA] }),
+      regras,
+      AGORA,
+    );
+    expect(pendentes.map((r) => r.minutesBefore)).toEqual([UM_DIA, 120]);
+  });
+
+  it("consulta futura não tem nada a fechar", () => {
+    expect(staleReminders(consulta("2026-09-17T08:00:00.000Z"), regras, AGORA)).toEqual([]);
+  });
+});
+
+describe("Varredura (scanAndSendReminders)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    db.appointment.update.mockResolvedValue({});
+    db.message.create.mockResolvedValue({});
+    provider.isConfigured.mockReturnValue(true);
+    provider.sendMessage.mockResolvedValue("wamid-1");
+    db.whatsappInstance.findUnique.mockResolvedValue({ externalId: "inst-1", status: "connected" });
+  });
+
+  function acaoConfigurada(over: { enabled?: boolean; reminderEnabled?: boolean; reminders?: unknown } = {}) {
+    db.tenantAction.findMany.mockResolvedValue(
+      (over.enabled ?? true)
+        ? [{
+            agentId: AGENTE,
+            config: {
+              reminderEnabled: over.reminderEnabled ?? true,
+              reminders: over.reminders ?? [
+                { minutesBefore: UMA_SEMANA, template: "Falta uma semana, {{nome}}." },
+                { minutesBefore: UM_DIA, template: "É amanhã, {{nome}}, às {{hora}}." },
+              ],
+              timezone: "America/Sao_Paulo",
+            },
+          }]
+        : [],
+    );
+  }
+
+  /**
+   * O worker faz duas buscas: as consultas que vêm aí e as que já passaram
+   * com disparo pendente. O mock responde pela forma do `where` em vez da
+   * ordem das chamadas — assim o teste não quebra se as duas trocarem de
+   * lugar no código.
+   */
+  function consultas(rows: unknown[], overdue: unknown[] = []) {
+    db.appointment.findMany.mockImplementation((args: { where?: { startsAt?: { lt?: Date } } }) =>
+      Promise.resolve(args?.where?.startsAt && "lt" in args.where.startsAt ? overdue : rows),
+    );
+  }
+
+  const consultaAmanha = (over: Partial<{ remindersSent: number[]; reminderOverride: unknown }> = {}) => ({
+    id: "appt-1",
+    tenantId: "tenant-1",
+    agentId: AGENTE,
+    conversationId: "conv-1",
+    status: "scheduled",
+    startsAt: new Date("2026-09-17T08:00:00.000Z"),
+    remindersSent: over.remindersSent ?? [],
+    reminderOverride: over.reminderOverride ?? null,
+    lead: { phone: "5511999990000", name: "Maria", isTest: false },
+  });
+
+  it("manda o disparo MAIS PRÓXIMO da consulta e fecha os outros vencidos", async () => {
+    // Dois venceram de uma vez (worker parado). Mandar os dois faria chegarem
+    // juntas "falta uma semana" e "é amanhã" — a primeira já mentindo.
+    acaoConfigurada();
+    consultas([consultaAmanha()]);
+
+    const r = await scanAndSendReminders(AGORA);
+
+    expect(r.sent).toBe(1);
+    expect(provider.sendMessage).toHaveBeenCalledTimes(1);
+    const [, , texto] = provider.sendMessage.mock.calls[0];
+    expect(texto).toContain("É amanhã");
+    expect(texto).not.toContain("uma semana");
+    // Os dois ficam marcados: o que saiu e o que perdeu a hora.
+    expect(db.appointment.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ remindersSent: { set: [UMA_SEMANA, UM_DIA] } }),
+      }),
+    );
+  });
+
+  it("um disparo enviado não cala os seguintes", async () => {
+    // O motivo de `remindersSent` ser lista e não booleano.
+    acaoConfigurada();
+    consultas([consultaAmanha({ remindersSent: [UMA_SEMANA] })]);
+
+    const r = await scanAndSendReminders(AGORA);
+
+    expect(r.sent).toBe(1);
+    const [, , texto] = provider.sendMessage.mock.calls[0];
+    expect(texto).toContain("É amanhã");
+  });
+
+  it("não reenvia o que já saiu", async () => {
+    acaoConfigurada();
+    consultas([consultaAmanha({ remindersSent: [UMA_SEMANA, UM_DIA] })]);
+
+    const r = await scanAndSendReminders(AGORA);
+
+    expect(r.sent).toBe(0);
+    expect(provider.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("respeita os lembretes próprios da consulta", async () => {
+    acaoConfigurada();
+    consultas([consultaAmanha({
+      reminderOverride: [{ minutesBefore: UM_DIA, template: "Texto só desta consulta." }],
+    })]);
+
+    await scanAndSendReminders(AGORA);
+
+    const [, , texto] = provider.sendMessage.mock.calls[0];
+    expect(texto).toBe("Texto só desta consulta.");
+  });
+
+  it("consulta marcada para não lembrar não recebe nada", async () => {
+    acaoConfigurada();
+    consultas([consultaAmanha({ reminderOverride: [] })]);
+
+    const r = await scanAndSendReminders(AGORA);
+
+    expect(r.sent).toBe(0);
+    expect(provider.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("grava a mensagem na conversa, para a resposta do paciente ter contexto", async () => {
+    acaoConfigurada();
+    consultas([consultaAmanha()]);
+
+    await scanAndSendReminders(AGORA);
+
+    expect(db.message.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ conversationId: "conv-1", role: "assistant" }),
+      }),
+    );
+  });
+
+  it("não manda nada com a ação de agendamento desligada", async () => {
+    acaoConfigurada({ enabled: false });
+    consultas([consultaAmanha()]);
+
+    const r = await scanAndSendReminders(AGORA);
+
+    expect(r.sent).toBe(0);
+    expect(db.appointment.findMany).not.toHaveBeenCalled();
+  });
+
+  it("não manda nada com a ação ligada mas o lembrete desligado", async () => {
+    acaoConfigurada({ reminderEnabled: false });
+    consultas([consultaAmanha()]);
+
+    const r = await scanAndSendReminders(AGORA);
+
+    expect(r.sent).toBe(0);
+    expect(provider.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("a busca no banco exclui conversa de teste e consulta já passada", async () => {
+    acaoConfigurada();
+    consultas([]);
+
+    await scanAndSendReminders(AGORA);
+
+    expect(db.appointment.findMany).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        where: expect.objectContaining({
+          lead: { isTest: false },
+          status: "scheduled",
+          startsAt: { gte: AGORA },
+        }),
+      }),
+    );
+  });
+
+  it("fecha sem enviar os disparos de uma consulta que já passou", async () => {
+    // Worker parado: a consulta passou com lembrete pendente. Marcar evita
+    // reavaliá-la para sempre; `reminderSentAt` NÃO é gravado, senão a tela
+    // diria "lembrete enviado" sobre algo que nunca saiu.
+    acaoConfigurada();
+    consultas([], [{
+      id: "appt-velha",
+      agentId: AGENTE,
+      status: "scheduled",
+      startsAt: new Date("2026-09-16T09:00:00.000Z"),
+      remindersSent: [],
+      reminderOverride: null,
+    }]);
+
+    const r = await scanAndSendReminders(AGORA);
+
+    expect(r.sent).toBe(0);
+    expect(provider.sendMessage).not.toHaveBeenCalled();
+    const call = db.appointment.update.mock.calls.find(
+      ([arg]) => arg.where.id === "appt-velha",
+    );
+    expect(call?.[0].data.remindersSent).toEqual({ set: [UMA_SEMANA, UM_DIA] });
+    expect(call?.[0].data.reminderSentAt).toBeUndefined();
+  });
+
+  it("WhatsApp desconectado não impede marcar — não repete na varredura seguinte", async () => {
+    acaoConfigurada();
+    consultas([consultaAmanha()]);
+    db.whatsappInstance.findUnique.mockResolvedValue({ externalId: "inst-1", status: "disconnected" });
+
+    const r = await scanAndSendReminders(AGORA);
+
+    expect(provider.sendMessage).not.toHaveBeenCalled();
+    expect(r.sent).toBe(1);
+  });
+});

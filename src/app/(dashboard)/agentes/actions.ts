@@ -11,7 +11,21 @@ import { composeSystemPrompt, type PersonaAnswers } from "@/modules/agent-engine
 import { ACTION_BY_KEY, type ActionKey } from "@/modules/agent-engine/actions";
 import { createAgent, getAgentOwned, getAgentUsage } from "@/modules/agent-engine/agents";
 import { saveScheduleConfig } from "@/modules/scheduling/repository";
-import { isScheduleTime, isScheduleTimezone, validateScheduleBreaks } from "@/modules/scheduling/config";
+import {
+  MAX_DURATIONS,
+  MAX_DURATION_MINUTES,
+  MAX_REMINDER_MINUTES,
+  MIN_DURATION_MINUTES,
+  formatReminderLead,
+  isScheduleTime,
+  isScheduleTimezone,
+  normalizeDurationLabel,
+  validateDurations,
+  validateReminders,
+  validateScheduleBreaks,
+} from "@/modules/scheduling/config";
+import { listClinicorpCategories } from "@/modules/scheduling/clinicorp";
+import { getCalendarFeatures } from "@/modules/scheduling/features";
 import { MAX_FOLLOWUP_DELAY_MINUTES, saveFollowUpConfig } from "@/modules/follow-up/config";
 import { normalizeGroupId, saveHandoffConfig } from "@/modules/agent-engine/handoff";
 import {
@@ -732,7 +746,7 @@ export async function setActionEnabled(
 // ------------------------------------------------- configuração da agenda
 
 const scheduleConfigSchema = z.object({
-  durationMinutes: z.coerce.number().int().min(5).max(480),
+  durationMinutes: z.coerce.number().int().min(MIN_DURATION_MINUTES).max(MAX_DURATION_MINUTES),
   timezone: z.string().trim().refine(isScheduleTimezone, "Fuso horário inválido"),
   startTime: z.string().refine(isScheduleTime, "Horário inválido"),
   endTime: z.string().refine(isScheduleTime, "Horário inválido"),
@@ -746,6 +760,51 @@ const scheduleConfigSchema = z.object({
     startTime: z.string().refine(isScheduleTime, "Início da pausa inválido"),
     endTime: z.string().refine(isScheduleTime, "Fim da pausa inválido"),
   })).max(12, "Cadastre no máximo 12 pausas."),
+  durations: z.array(z.object({
+    label: z.string().trim().min(1, "Toda variação precisa de um nome.").max(60),
+    // `null`/`""` chega de um campo em branco — inclusive dos tipos trazidos do
+    // Clinicorp, que vêm sem duração. Recusado com o nome do tipo na mensagem
+    // (no `superRefine` abaixo), porque `z.coerce.number()` transformaria o
+    // vazio em 0 e a pessoa leria só "a duração vai de 5 a 480".
+    minutes: z.number().int()
+      .min(MIN_DURATION_MINUTES, `A duração de cada variação vai de ${MIN_DURATION_MINUTES} a ${MAX_DURATION_MINUTES} minutos.`)
+      .max(MAX_DURATION_MINUTES, `A duração de cada variação vai de ${MIN_DURATION_MINUTES} a ${MAX_DURATION_MINUTES} minutos.`)
+      .nullable(),
+  })).max(MAX_DURATIONS, `Cadastre no máximo ${MAX_DURATIONS} variações de duração.`),
+  reminderEnabled: z.enum(["true", "false"]).transform((v) => v === "true"),
+  // Sem `.max()` de quantidade: quantos lembretes o paciente aguenta é decisão
+  // de quem conhece a própria base. A tela avisa a partir de
+  // `REMINDER_COUNT_WARNING` (e interrompe com um popup ao passar disso), mas
+  // não impede — ver `ReminderList`.
+  reminders: z.array(z.object({
+    minutesBefore: z.coerce.number().int()
+      .min(1, "A antecedência mínima de um lembrete é 1 minuto.")
+      .max(MAX_REMINDER_MINUTES, `A antecedência máxima de um lembrete é ${formatReminderLead(MAX_REMINDER_MINUTES)}.`),
+    template: z.string().trim().max(500),
+  })),
+}).superRefine((data, ctx) => {
+  // Variação sem duração: acontece sempre que os tipos vêm do Clinicorp, que
+  // não informa quanto tempo cada um leva. A mensagem nomeia o tipo porque
+  // podem ser oito linhas na tela e "preencha a duração" não diria qual.
+  const blank = data.durations.find((d) => d.minutes === null);
+  if (blank) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["durations"],
+      message: `Preencha a duração de "${blank.label.trim()}" em minutos.`,
+    });
+  }
+
+  // Lembrete ligado sem texto mandaria mensagem em branco para o paciente, e
+  // dois no mesmo instante chegariam como duas mensagens coladas. As duas
+  // checagens vêm no `superRefine` (e não num `transform` que desligaria o
+  // lembrete sozinho) pelo mesmo motivo de `addToGroup` sem `groupId`: a tela
+  // diria "salvo" com a opção silenciosamente desligada.
+  if (!data.reminderEnabled) return;
+  const error = validateReminders(data.reminders);
+  if (error) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["reminders"], message: error });
+  }
 });
 
 /**
@@ -770,7 +829,24 @@ export async function saveScheduleConfigAction(
   } catch {
     return { ok: false, error: "Pausas inválidas. Confira os intervalos." };
   }
-  const parsed = scheduleConfigSchema.safeParse({ ...Object.fromEntries(formData), breaks });
+  let durations: unknown;
+  try {
+    durations = JSON.parse(String(formData.get("durations") ?? "[]"));
+  } catch {
+    return { ok: false, error: "Variações de duração inválidas. Confira os tempos." };
+  }
+  let reminders: unknown;
+  try {
+    reminders = JSON.parse(String(formData.get("reminders") ?? "[]"));
+  } catch {
+    return { ok: false, error: "Lembretes inválidos. Confira as antecedências." };
+  }
+  const parsed = scheduleConfigSchema.safeParse({
+    ...Object.fromEntries(formData),
+    breaks,
+    durations,
+    reminders,
+  });
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Dados inválidos" };
   }
@@ -791,11 +867,66 @@ export async function saveScheduleConfigAction(
   }
   const breakError = validateScheduleBreaks(parsed.data);
   if (breakError) return { ok: false, error: breakError };
+  // O `superRefine` já recusou minuto em branco; este filtro é o que convence
+  // o tipo (e garante que um `null` que escape nunca vire duração 0 no banco).
+  const filledDurations = parsed.data.durations.filter(
+    (d): d is { label: string; minutes: number } => d.minutes !== null,
+  );
+  // Nome repetido o Zod não pega: são duas linhas válidas isoladamente.
+  const durationError = validateDurations(filledDurations);
+  if (durationError) return { ok: false, error: durationError };
 
-  await saveScheduleConfig(tenantId, agent.id, { ...parsed.data, workdays });
+  await saveScheduleConfig(tenantId, agent.id, {
+    ...parsed.data,
+    durations: filledDurations,
+    workdays,
+  });
   revalidateAgent(agent.id);
   revalidatePath("/agenda");
   return { ok: true, info: "Configurações de agendamento salvas." };
+}
+
+/**
+ * Categorias de agendamento do Clinicorp, para preencher os NOMES das variações
+ * de duração sem digitar um por um.
+ *
+ * Só os nomes: `/appointment/list_categories` devolve `id`, `Description` e
+ * `Color` — **o Clinicorp não informa a duração de cada categoria** (o único
+ * tempo que a API expõe é o `SlotTime` da clínica inteira, em
+ * `/group/list_subscribers_clinics`). Por isso o minuto volta vazio e quem
+ * conhece a clínica preenche: chutar a duração aqui seria a tela afirmando um
+ * dado que ninguém informou, e o preço do chute é cadeira ocupada errado.
+ *
+ * Buscado sob demanda (no clique), não a cada render da tela de agentes — mesmo
+ * motivo de `loadClinicorpProfessionalsAction`.
+ */
+export async function loadClinicorpDurationNamesAction(): Promise<
+  { ok: true; names: string[] } | { ok: false; error: string }
+> {
+  const { tenantId } = await requireTenant();
+
+  // Habilitado E conectado: a credencial continua salva com o calendário
+  // desabilitado, e nesse caso a conta desligou a integração de propósito.
+  const features = await getCalendarFeatures(tenantId);
+  if (!features.clinicorpEnabled) {
+    return { ok: false, error: "O Clinicorp está desabilitado. Habilite em Integrações › Calendários." };
+  }
+
+  const result = await listClinicorpCategories(tenantId);
+  if (!result.ok) return { ok: false, error: result.error };
+
+  // Nome repetido no Clinicorp não pode virar duas variações: `validateDurations`
+  // recusaria o formulário inteiro depois, sem a pessoa entender por quê.
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const category of result.data) {
+    const key = normalizeDurationLabel(category.name);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    names.push(category.name.slice(0, 60));
+  }
+  if (!names.length) return { ok: false, error: "Nenhuma categoria de agendamento cadastrada no Clinicorp." };
+  return { ok: true, names: names.slice(0, MAX_DURATIONS) };
 }
 
 // --------------------------------------------------- configuração do follow-up

@@ -24,15 +24,24 @@ export function NewAppointmentDialog({
   contacts,
   defaultDate,
   defaultDuration,
+  durations = [],
   requiresContact = false,
 }: {
   contacts: ContactOption[];
   /** Dia aberto no calendário — já vem preenchido para poupar dois cliques. */
   defaultDate: string;
   defaultDuration: number;
+  /**
+   * Durações por tipo de atendimento configuradas na ação. Aqui viram atalhos
+   * que preenchem o campo de minutos, não um select que o substitui: marcar à
+   * mão é a tela do caso fora do comum ("o dentista pediu 20 min para esse"),
+   * e trocar o número livre por uma lista fechada tiraria justamente isso.
+   */
+  durations?: { label: string; minutes: number }[];
   requiresContact?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const durationRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
   const [state, formAction, pending] = useActionState(createManualAppointment, null);
 
@@ -108,6 +117,7 @@ export function NewAppointmentDialog({
             <Field label="Duração (min)" htmlFor="ag-duration">
               <Input
                 {...fieldProps("ag-duration")}
+                ref={durationRef}
                 type="number"
                 name="durationMinutes"
                 min={5}
@@ -116,6 +126,22 @@ export function NewAppointmentDialog({
                 defaultValue={defaultDuration}
                 required
               />
+              {durations.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {durations.map((d) => (
+                    <button
+                      key={d.label}
+                      type="button"
+                      onClick={() => {
+                        if (durationRef.current) durationRef.current.value = String(d.minutes);
+                      }}
+                      className="rounded-control border border-white/15 px-2.5 py-1 text-xs text-white/70 transition-colors hover:border-iris/60 hover:bg-iris/15 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris"
+                    >
+                      {d.label} · {d.minutes} min
+                    </button>
+                  ))}
+                </div>
+              )}
             </Field>
             <Field label="Contato" htmlFor="ag-lead" optional={!requiresContact}
               hint={requiresContact ? "Obrigatório para identificar o paciente no Clinicorp." : undefined}>

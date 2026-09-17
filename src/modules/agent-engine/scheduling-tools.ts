@@ -91,7 +91,14 @@ export async function availableSlotsContext(ctx: Pick<ToolContext, "tenantId">, 
     const weekday = partsInZone(parseLocalDateTime(d, "12:00", cfg.timezone)!, cfg.timezone).weekday;
     return `- ${dayLabel(d, cfg.timezone)} (${d}): ${cfg.workdays.includes(weekday) ? "sem horário livre" : "não atendemos"}`;
   });
-  return `Horários livres (${cfg.durationMinutes} min cada). Ofereça somente estes:\n${lines.join("\n")}`;
+  // A grade é a da duração padrão: calcular uma por variação daria listas
+  // diferentes para o mesmo dia e o agente não teria como escolher entre elas.
+  // Um tipo mais curto cabe em qualquer início destes; um mais longo é recusado
+  // por `schedule_meeting`, que já devolve os livres do dia junto.
+  const note = cfg.durations.length
+    ? ` Um tipo de atendimento mais longo pode não caber em todos eles — a checagem final é de schedule_meeting.`
+    : "";
+  return `Horários livres (grade de ${cfg.durationMinutes} min). Ofereça somente estes:${note}\n${lines.join("\n")}`;
 }
 
 /**

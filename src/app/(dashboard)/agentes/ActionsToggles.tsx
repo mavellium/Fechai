@@ -34,6 +34,7 @@ export function ActionsToggles({
   scheduleConfig,
   followUpConfig,
   handoffConfig,
+  clinicorpConnected = false,
 }: {
   agentId: string;
   enabledKeys: string[];
@@ -41,6 +42,8 @@ export function ActionsToggles({
   scheduleConfig: ScheduleConfig;
   followUpConfig: FollowUpConfig;
   handoffConfig: HandoffConfig;
+  /** Clinicorp habilitado e conectado: libera trazer os tipos de atendimento de lá. */
+  clinicorpConnected?: boolean;
 }) {
   const [enabled, setEnabled] = useState<Set<string>>(
     () => new Set(enabledKeys.filter((k) => AVAILABLE_ACTIONS.some((a) => a.key === k))),
@@ -162,7 +165,7 @@ export function ActionsToggles({
               {showConfig && (
                 <div className="mt-4">
                   {a.key === "schedule_meeting" && (
-                    <ScheduleSettings agentId={agentId} config={scheduleConfig} />
+                    <ScheduleSettings agentId={agentId} config={scheduleConfig} clinicorpConnected={clinicorpConnected} />
                   )}
                   {a.key === "follow_up" && (
                     <FollowUpSettings agentId={agentId} config={followUpConfig} />

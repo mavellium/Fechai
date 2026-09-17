@@ -22,6 +22,7 @@ vi.mock("@/modules/scheduling/repository", () => ({ createAppointment: mocks.cre
 
 import { saveClinicorpSettingsAction } from "@/app/(dashboard)/integracoes/actions";
 import { createManualAppointment } from "@/app/(dashboard)/agenda/actions";
+import { loadClinicorpDurationNamesAction } from "@/app/(dashboard)/agentes/actions";
 
 function form(values: Record<string, string>) {
   const data = new FormData();
@@ -87,5 +88,44 @@ describe("agendamento manual com Clinicorp", () => {
     expect(result).toMatchObject({ ok: true, info: "Compromisso salvo no fechai.", warning: expect.stringContaining("Não crie outro compromisso") });
     expect(mocks.create).toHaveBeenCalledOnce();
     expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ startsAt: new Date("2026-09-14T19:30:00Z"), durationMinutes: 15 }));
+  });
+});
+
+describe("trazer tipos de atendimento do Clinicorp", () => {
+  it("devolve os nomes das categorias — sem duração, que o Clinicorp não informa", async () => {
+    mocks.categories.mockResolvedValue({ ok: true, data: [
+      { id: "1", name: "Avaliação" },
+      { id: "2", name: "Limpeza" },
+    ] });
+    const result = await loadClinicorpDurationNamesAction();
+    // Só nomes: a resposta não tem como carregar minutos, e a tela preenche em branco.
+    expect(result).toEqual({ ok: true, names: ["Avaliação", "Limpeza"] });
+  });
+
+  it("descarta nome repetido, que o agente não teria como escolher", async () => {
+    mocks.categories.mockResolvedValue({ ok: true, data: [
+      { id: "1", name: "Limpeza" },
+      { id: "2", name: "LIMPEZA" },
+      { id: "3", name: "limpeza " },
+    ] });
+    expect(await loadClinicorpDurationNamesAction()).toEqual({ ok: true, names: ["Limpeza"] });
+  });
+
+  it("recusa quando o Clinicorp está desabilitado, mesmo com credencial salva", async () => {
+    mocks.features.mockResolvedValue({ clinicorpEnabled: false });
+    const result = await loadClinicorpDurationNamesAction();
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining("desabilitado") });
+    // Não gasta chamada de rede numa integração que a conta desligou.
+    expect(mocks.categories).not.toHaveBeenCalled();
+  });
+
+  it("repassa o motivo do Clinicorp em vez de um erro genérico", async () => {
+    mocks.categories.mockResolvedValue({ ok: false, error: "Credenciais recusadas (401)." });
+    expect(await loadClinicorpDurationNamesAction()).toEqual({ ok: false, error: "Credenciais recusadas (401)." });
+  });
+
+  it("explica a lista vazia em vez de devolver sucesso sem nada", async () => {
+    mocks.categories.mockResolvedValue({ ok: true, data: [] });
+    expect(await loadClinicorpDurationNamesAction()).toMatchObject({ ok: false, error: expect.stringContaining("Nenhuma categoria") });
   });
 });

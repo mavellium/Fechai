@@ -17,6 +17,16 @@ export type ScheduleConfig = {
   recognizeExisting: boolean;
   /** Duração padrão de cada compromisso, em minutos. */
   durationMinutes: number;
+  /**
+   * Tipos de atendimento com duração própria ("Limpeza · 30 min").
+   *
+   * Vazio é o caso comum: a conta que atende tudo no mesmo bloco continua
+   * mexendo só em `durationMinutes`. Quando há variações, `durationMinutes`
+   * segue sendo o padrão — o que o agente reserva quando o contato não disse
+   * o tipo, e o que a grade de horários usa. Não é uma lista de serviços do
+   * negócio: é só o que muda o tamanho do bloco na agenda.
+   */
+  durations: { label: string; minutes: number }[];
   /** Fuso em que o negócio atende (IANA). */
   timezone: string;
   /** Dias atendidos, domingo = 0. */
@@ -29,7 +39,103 @@ export type ScheduleConfig = {
   location: string;
   /** Antecedência mínima em horas — evita o agente marcar "daqui a 5 minutos". */
   minNoticeHours: number;
+  /**
+   * Manda lembretes ao contato antes da consulta. Nasce desligado: quem
+   * acabou de ligar o agendamento não escolheu mandar mensagem sozinho.
+   */
+  reminderEnabled: boolean;
+  /**
+   * Os lembretes, um por disparo. Uma clínica costuma querer mais de um
+   * ("1 semana antes" para dar tempo de remarcar, "2 horas antes" para quem
+   * já esqueceu), e cada um diz algo diferente — por isso cada linha tem o
+   * texto junto da antecedência, e não um texto só para todos.
+   *
+   * Ordenada por antecedência decrescente na leitura (o mais distante
+   * primeiro), que é a ordem em que os disparos acontecem e a ordem em que a
+   * tela lista.
+   */
+  reminders: ReminderRule[];
 };
+
+export type ReminderRule = {
+  /**
+   * Antecedência em minutos. Guardado em minutos (não horas, dias ou semanas)
+   * pelo mesmo motivo de `FollowUpConfig.delayMinutes`: a clínica que quer
+   * "30 minutos antes" não pode ser arredondada para uma hora. A tela deixa
+   * escolher a unidade; ela é só a forma de digitar.
+   */
+  minutesBefore: number;
+  /** Texto deste disparo, com as variáveis de `REMINDER_VARIABLES`. */
+  template: string;
+};
+
+/**
+ * O que o template do lembrete aceita. Exportado porque a tela lista os
+ * tokens para quem escreve e os testes conferem a mesma lista — duas cópias
+ * divergiriam na primeira variável nova.
+ */
+export const REMINDER_VARIABLES = [
+  { token: "{{nome}}", label: "nome do contato" },
+  { token: "{{data}}", label: "data da consulta" },
+  { token: "{{hora}}", label: "horário" },
+  { token: "{{local}}", label: "local/formato, quando configurado" },
+] as const;
+
+export const DEFAULT_REMINDER_TEMPLATE =
+  "Oi {{nome}}! Passando para lembrar da sua consulta {{data}} às {{hora}}{{local}}. Posso confirmar que você vem?";
+
+/**
+ * Teto da antecedência de um lembrete: 8 semanas. Acima disso não é lembrete
+ * de consulta, é outra campanha — e a consulta provavelmente nem existia
+ * quando o disparo teria de ser agendado.
+ */
+export const MAX_REMINDER_MINUTES = 8 * 7 * 24 * 60;
+
+/** Padrão prometido pela tela ao ligar o lembrete: um dia antes. */
+export const DEFAULT_REMINDER_MINUTES = 24 * 60;
+
+/**
+ * A partir daqui a tela avisa que muitos lembretes podem irritar o paciente.
+ * Não é limite: passar disso é decisão do dono da conta, que é quem conhece a
+ * própria base. Mas quem leva o bloqueio é o número da clínica, e isso
+ * precisa estar escrito antes de acontecer.
+ */
+export const REMINDER_COUNT_WARNING = 10;
+
+/**
+ * Unidades da antecedência. Minutos a semanas: o intervalo real vai de "30
+ * minutos antes" (quem já está a caminho) a "2 semanas antes" (procedimento
+ * que exige preparo).
+ */
+export const REMINDER_UNITS = [
+  { value: "minutes", label: "minutos antes", minutes: 1 },
+  { value: "hours", label: "horas antes", minutes: 60 },
+  { value: "days", label: "dias antes", minutes: 24 * 60 },
+  { value: "weeks", label: "semanas antes", minutes: 7 * 24 * 60 },
+] as const;
+
+export type ReminderUnit = (typeof REMINDER_UNITS)[number]["value"];
+
+/**
+ * A maior unidade em que a antecedência é um número inteiro — 1440 min vira
+ * "1 dia", não "1440 minutos". É como a tela reabre o valor salvo: do jeito
+ * que a pessoa provavelmente digitou.
+ */
+export function splitReminderLead(minutes: number): { amount: number; unit: ReminderUnit } {
+  for (const unit of [...REMINDER_UNITS].reverse()) {
+    if (minutes >= unit.minutes && minutes % unit.minutes === 0) {
+      return { amount: minutes / unit.minutes, unit: unit.value };
+    }
+  }
+  return { amount: minutes, unit: "minutes" };
+}
+
+/** Faixa aceita por qualquer duração — a padrão e as variações. */
+export const MIN_DURATION_MINUTES = 5;
+export const MAX_DURATION_MINUTES = 480;
+
+/** Teto de variações. O agente precisa escolher uma lendo a lista no prompt. */
+export const MAX_DURATIONS = 12;
 
 export const DEFAULT_SCHEDULE_CONFIG: ScheduleConfig = {
   breaks: [],
@@ -37,12 +143,15 @@ export const DEFAULT_SCHEDULE_CONFIG: ScheduleConfig = {
   allowRescheduling: false,
   recognizeExisting: true,
   durationMinutes: 60,
+  durations: [],
   timezone: "America/Sao_Paulo",
   workdays: [1, 2, 3, 4, 5],
   startTime: "09:00",
   endTime: "18:00",
   location: "",
   minNoticeHours: 2,
+  reminderEnabled: false,
+  reminders: [{ minutesBefore: DEFAULT_REMINDER_MINUTES, template: DEFAULT_REMINDER_TEMPLATE }],
 };
 
 const WEEKDAY_LABELS = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
@@ -59,6 +168,60 @@ export function isScheduleTime(v: unknown): v is string {
 function minutesOf(time: string): number {
   const [h, m] = time.split(":").map(Number);
   return h * 60 + m;
+}
+
+/**
+ * Chave de comparação de nome de variação: sem acento, sem caixa, sem espaço
+ * sobrando. O LLM devolve o rótulo copiado do prompt, mas não com fidelidade
+ * garantida — "limpeza" e "Limpeza" têm que cair na mesma linha, senão o
+ * agente reservaria o bloco padrão calado depois de combinar outro.
+ */
+export function normalizeDurationLabel(label: string): string {
+  return label.normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLowerCase();
+}
+
+/**
+ * Minutos que o agendamento vai ocupar, dado o tipo escolhido na conversa.
+ *
+ * Nome desconhecido (ou ausente) cai na duração padrão em vez de recusar: um
+ * bloco do tamanho errado é corrigível pela clínica, um agendamento não feito
+ * é um lead perdido. Quem precisa avisar o LLM sobre a escolha usa o `label`
+ * devolvido — `null` quer dizer "usei o padrão".
+ */
+export function resolveDuration(
+  cfg: ScheduleConfig,
+  requested?: string | null,
+): { minutes: number; label: string | null; matched: boolean } {
+  const wanted = typeof requested === "string" ? normalizeDurationLabel(requested) : "";
+  if (!wanted) return { minutes: cfg.durationMinutes, label: null, matched: false };
+  const found = cfg.durations.find((d) => normalizeDurationLabel(d.label) === wanted);
+  return found
+    ? { minutes: found.minutes, label: found.label, matched: true }
+    : { minutes: cfg.durationMinutes, label: null, matched: false };
+}
+
+/** "Limpeza (30 min), Avaliação (60 min)" — usado no prompt e nos resumos. */
+export function describeDurations(cfg: ScheduleConfig): string {
+  return cfg.durations.map((d) => `${d.label} (${d.minutes} min)`).join(", ");
+}
+
+/**
+ * Validação compartilhada pelo formulário e pelo servidor. Devolve a primeira
+ * mensagem de erro, no mesmo formato de `validateScheduleBreaks`.
+ */
+export function validateDurations(durations: { label: string; minutes: number }[]): string | null {
+  if (durations.length > MAX_DURATIONS) return `Cadastre no máximo ${MAX_DURATIONS} variações de duração.`;
+  const seen = new Set<string>();
+  for (const d of durations) {
+    if (!d.label.trim()) return "Toda variação precisa de um nome.";
+    if (!Number.isInteger(d.minutes) || d.minutes < MIN_DURATION_MINUTES || d.minutes > MAX_DURATION_MINUTES) {
+      return `A duração de cada variação vai de ${MIN_DURATION_MINUTES} a ${MAX_DURATION_MINUTES} minutos.`;
+    }
+    const key = normalizeDurationLabel(d.label);
+    if (seen.has(key)) return `Há duas variações chamadas "${d.label.trim()}". Use nomes diferentes.`;
+    seen.add(key);
+  }
+  return null;
 }
 
 export function isScheduleTimezone(value: unknown): value is string {
@@ -109,13 +272,33 @@ export function parseScheduleConfig(raw: unknown): ScheduleConfig {
     return [{ label: typeof b.label === "string" ? b.label.slice(0, 60) : "Pausa", startTime: b.startTime, endTime: b.endTime }];
   }) : [];
 
+  // Variação sem nome ou com duração fora da faixa é descartada, não corrigida:
+  // uma linha pela metade viraria "sem nome · 60 min" no prompt, e o agente
+  // ofereceria ao contato um tipo de atendimento que ninguém cadastrou.
+  const seen = new Set<string>();
+  const durations = Array.isArray(c.durations) ? c.durations.flatMap((raw) => {
+    if (!raw || typeof raw !== "object") return [];
+    const d = raw as Record<string, unknown>;
+    const label = typeof d.label === "string" ? d.label.trim().slice(0, 60) : "";
+    const minutes = typeof d.minutes === "number" && Number.isFinite(d.minutes) ? Math.round(d.minutes) : 0;
+    if (!label || minutes < MIN_DURATION_MINUTES || minutes > MAX_DURATION_MINUTES) return [];
+    // Nome repetido não tem como ser escolhido sem ambiguidade pelo agente.
+    const key = normalizeDurationLabel(label);
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [{ label, minutes }];
+  }).slice(0, MAX_DURATIONS) : [];
+
   return {
     breaks,
+    durations,
     allowCancellation: c.allowCancellation === true,
     allowRescheduling: c.allowRescheduling === true,
     recognizeExisting: c.recognizeExisting !== false,
     durationMinutes:
-      typeof c.durationMinutes === "number" && c.durationMinutes >= 5 && c.durationMinutes <= 480
+      typeof c.durationMinutes === "number"
+        && c.durationMinutes >= MIN_DURATION_MINUTES
+        && c.durationMinutes <= MAX_DURATION_MINUTES
         ? Math.round(c.durationMinutes)
         : DEFAULT_SCHEDULE_CONFIG.durationMinutes,
     timezone: isScheduleTimezone(c.timezone) ? c.timezone : DEFAULT_SCHEDULE_CONFIG.timezone,
@@ -129,13 +312,173 @@ export function parseScheduleConfig(raw: unknown): ScheduleConfig {
       typeof c.minNoticeHours === "number" && c.minNoticeHours >= 0 && c.minNoticeHours <= 168
         ? Math.round(c.minNoticeHours)
         : DEFAULT_SCHEDULE_CONFIG.minNoticeHours,
+    // Config antiga (sem estes campos) não liga o lembrete sozinho: mandar
+    // mensagem para a base de pacientes de uma conta é decisão do dono, não
+    // efeito colateral de uma atualização do produto.
+    reminderEnabled: c.reminderEnabled === true,
+    reminders: parseReminders(c),
   };
+}
+
+/**
+ * Lê a lista de lembretes.
+ *
+ * Aceita os dois formatos: `reminders` (atual) e, para configs salvas quando
+ * o lembrete ainda era um só, `reminderMinutesBefore` + `reminderTemplate` —
+ * convertidos na leitura, para nenhuma conta perder o lembrete que já tinha
+ * configurado. Mesma lição do `delayHours` do follow-up: **não remova este
+ * fallback** sem migrar as linhas, senão todo lembrete já escolhido volta
+ * para o padrão em silêncio.
+ *
+ * Nunca lança: a linha pode ser null, de outra versão do formato ou editada à
+ * mão, e uma agenda quebrada não pode derrubar o atendimento.
+ */
+function parseReminders(c: Record<string, unknown>): ReminderRule[] {
+  const fromList = Array.isArray(c.reminders)
+    ? c.reminders.flatMap((raw): ReminderRule[] => {
+        if (!raw || typeof raw !== "object") return [];
+        const r = raw as Record<string, unknown>;
+        const minutes = typeof r.minutesBefore === "number" && Number.isFinite(r.minutesBefore)
+          ? Math.round(r.minutesBefore)
+          : null;
+        if (minutes === null || minutes < 1 || minutes > MAX_REMINDER_MINUTES) return [];
+        return [{
+          minutesBefore: minutes,
+          template: typeof r.template === "string" && r.template.trim()
+            ? r.template.trim().slice(0, 500)
+            : DEFAULT_REMINDER_TEMPLATE,
+        }];
+      })
+    : null;
+
+  // Formato antigo: um lembrete só, em campos soltos.
+  const legacy = (() => {
+    if (fromList && fromList.length > 0) return null;
+    if (c.reminderMinutesBefore === undefined && c.reminderTemplate === undefined) return null;
+    const minutes = typeof c.reminderMinutesBefore === "number"
+      && Number.isFinite(c.reminderMinutesBefore)
+      && c.reminderMinutesBefore >= 1
+      && c.reminderMinutesBefore <= MAX_REMINDER_MINUTES
+      ? Math.round(c.reminderMinutesBefore)
+      : DEFAULT_REMINDER_MINUTES;
+    const template = typeof c.reminderTemplate === "string" && c.reminderTemplate.trim()
+      ? c.reminderTemplate.trim().slice(0, 500)
+      : DEFAULT_REMINDER_TEMPLATE;
+    return [{ minutesBefore: minutes, template }];
+  })();
+
+  const list = (fromList && fromList.length > 0 ? fromList : legacy)
+    ?? DEFAULT_SCHEDULE_CONFIG.reminders;
+
+  // Um disparo por momento: dois lembretes no mesmo instante são duas
+  // mensagens coladas para o paciente. A escrita também recusa, mas a leitura
+  // não pode confiar numa linha que pode ter sido editada à mão.
+  const seen = new Set<number>();
+  return list
+    .filter((r) => (seen.has(r.minutesBefore) ? false : seen.add(r.minutesBefore) && true))
+    // Do mais distante para o mais próximo: a ordem dos disparos, e a ordem
+    // em que a tela lista.
+    .sort((a, b) => b.minutesBefore - a.minutesBefore);
+}
+
+/**
+ * "1 dia", "2 horas", "90 minutos" — a antecedência escrita como gente fala.
+ * Usada no resumo do card, no eco embaixo do campo e no texto de ajuda.
+ */
+export function formatReminderLead(minutes: number): string {
+  const { amount, unit } = splitReminderLead(minutes);
+  const NOUN: Record<ReminderUnit, string> = {
+    minutes: "minuto",
+    hours: "hora",
+    days: "dia",
+    weeks: "semana",
+  };
+  return `${amount} ${NOUN[unit]}${amount === 1 ? "" : "s"}`;
+}
+
+/**
+ * Validação da lista de lembretes, compartilhada pelo formulário e pelo
+ * servidor. Devolve a primeira mensagem de erro, ou null.
+ *
+ * Não há teto de quantidade de propósito: quantos lembretes o paciente
+ * aguenta é decisão de quem conhece a própria base. A tela avisa a partir de
+ * `REMINDER_COUNT_WARNING`, mas não impede.
+ */
+export function validateReminders(reminders: ReminderRule[]): string | null {
+  const seen = new Set<number>();
+  for (const r of reminders) {
+    if (!Number.isFinite(r.minutesBefore) || r.minutesBefore < 1) {
+      return "Cada lembrete precisa de uma antecedência de pelo menos 1 minuto.";
+    }
+    if (r.minutesBefore > MAX_REMINDER_MINUTES) {
+      return `A antecedência máxima de um lembrete é ${formatReminderLead(MAX_REMINDER_MINUTES)}.`;
+    }
+    if (!r.template.trim()) {
+      return "Escreva a mensagem de cada lembrete.";
+    }
+    // Dois disparos no mesmo instante são duas mensagens coladas — quase
+    // sempre "1 dia" e "24 horas" digitados sem perceber que são o mesmo.
+    if (seen.has(r.minutesBefore)) {
+      return `Você já tem um lembrete ${formatReminderLead(r.minutesBefore)} antes. Escolha outro momento.`;
+    }
+    seen.add(r.minutesBefore);
+  }
+  return null;
+}
+
+/**
+ * Preenche o template do lembrete.
+ *
+ * Duas regras que não são óbvias:
+ *
+ * - **`{{local}}` já vem com a preposição** (" no salão"), e vira string vazia
+ *   quando a conta não configurou local. O template padrão escreve
+ *   "às {{hora}}{{local}}." justamente por isso: com o token solto, uma conta
+ *   sem local receberia "às 15:00 em ." na mensagem.
+ * - **Token desconhecido é apagado, não impresso cru.** Quem digitar
+ *   "{{médico}}" achando que existe recebe uma frase com um buraco, que é
+ *   ruim — mas melhor do que mandar "{{médico}}" para o paciente.
+ *
+ * A limpeza no fim existe porque contato sem nome cadastrado é comum (o
+ * WhatsApp nem sempre entrega um): "Oi {{nome}}!" viraria "Oi !", com o espaço
+ * e a pontuação órfãos. Some o espaço antes da pontuação, o espaço duplo e a
+ * linha que ficou vazia.
+ */
+export function renderReminder(
+  template: string,
+  vars: { nome: string; data: string; hora: string; local?: string },
+): string {
+  const values: Record<string, string> = {
+    nome: vars.nome.trim(),
+    data: vars.data,
+    hora: vars.hora,
+    // Já vem com a preposição: ver a regra do `{{local}}` acima.
+    local: vars.local?.trim() ? ` ${vars.local.trim()}` : "",
+  };
+  return template
+    .replace(/\{\{\s*(\w+)\s*\}\}/g, (_, key: string) => values[key.toLowerCase()] ?? "")
+    .replace(/[ \t]+([,.!?;:])/g, "$1")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/[ \t]+$/gm, "")
+    .trim();
+}
+
+/**
+ * O trecho dos lembretes no resumo de uma linha. Um lembrete escreve o
+ * momento ("lembrete 1 dia antes"); vários escrevem a contagem e o primeiro
+ * disparo, porque listar cinco antecedências estouraria a linha do card.
+ */
+function describeReminders(cfg: ScheduleConfig): string {
+  if (!cfg.reminderEnabled || cfg.reminders.length === 0) return "";
+  const [first] = cfg.reminders;
+  if (cfg.reminders.length === 1) return ` · lembrete ${formatReminderLead(first.minutesBefore)} antes`;
+  return ` · ${cfg.reminders.length} lembretes (a partir de ${formatReminderLead(first.minutesBefore)} antes)`;
 }
 
 /** Resumo em uma linha — usado nos cards da configuração e da agenda. */
 export function describeSchedule(cfg: ScheduleConfig): string {
   const days = cfg.workdays.map((d) => WEEKDAY_SHORT[d]).join(", ");
-  return `${days} · ${cfg.startTime}–${cfg.endTime} · blocos de ${cfg.durationMinutes} min${cfg.breaks.length ? ` · ${cfg.breaks.length} pausa(s)` : ""}`;
+  return `${days} · ${cfg.startTime}–${cfg.endTime} · blocos de ${cfg.durationMinutes} min${cfg.durations.length ? ` (+${cfg.durations.length} variação(ões))` : ""}${cfg.breaks.length ? ` · ${cfg.breaks.length} pausa(s)` : ""}${describeReminders(cfg)}`;
 }
 
 /**
@@ -152,7 +495,16 @@ export function scheduleSystemContext(cfg: ScheduleConfig, now = new Date()): st
     "Agendamento:",
     `- Hoje é ${today} (${WEEKDAY_LABELS[p.weekday]}), ${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")} no fuso ${cfg.timezone}.`,
     `- Atendemos ${days}, das ${cfg.startTime} às ${cfg.endTime}.`,
-    `- Cada horário dura ${cfg.durationMinutes} minutos.`,
+    `- Cada horário dura ${cfg.durationMinutes} minutos por padrão.`,
+    // Sem a instrução de repassar o nome exato, o LLM parafraseia ("limpeza
+    // dental") e a variação não é encontrada — o bloco sai do tamanho padrão
+    // sem ninguém perceber.
+    ...(cfg.durations.length
+      ? [
+          `- Tipos de atendimento com duração própria: ${describeDurations(cfg)}.`,
+          "- Se o contato disser o que precisa, passe o nome EXATO do tipo em tipoAtendimento ao chamar schedule_meeting. Se não der para saber, pergunte antes de marcar; em último caso marque sem o tipo e o horário fica com a duração padrão.",
+        ]
+      : []),
     ...cfg.breaks.map((b) => `- Pausa${b.label ? ` (${b.label})` : ""}: ${b.startTime}–${b.endTime}. Não ofereça nem marque horários que atravessem esse intervalo.`),
     cfg.minNoticeHours > 0
       ? `- Só marque com pelo menos ${cfg.minNoticeHours}h de antecedência.`

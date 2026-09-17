@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
@@ -12,6 +13,12 @@ import {
   hasConflictAnywhere,
   markAppointmentDone,
 } from "@/modules/scheduling/repository";
+import {
+  MAX_REMINDER_MINUTES,
+  formatReminderLead,
+  validateReminders,
+} from "@/modules/scheduling/config";
+import { serializeReminderOverride } from "@/modules/scheduling/reminder-override";
 import { parseLocalDateTime } from "@/modules/scheduling/time";
 import { getClinicorpStatus } from "@/modules/scheduling/clinicorp";
 import { getCalendarFeatures } from "@/modules/scheduling/features";
@@ -131,4 +138,59 @@ export async function completeAppointmentAction(id: string): Promise<Result> {
   if (!ok) return { ok: false, error: "Compromisso não encontrado." };
   revalidateAgenda();
   return { ok: true, info: "Marcado como realizado." };
+}
+
+// --------------------------------------------- lembretes de uma consulta
+
+const reminderRuleSchema = z.object({
+  minutesBefore: z.coerce.number().int()
+    .min(1, "A antecedência mínima de um lembrete é 1 minuto.")
+    .max(MAX_REMINDER_MINUTES, `A antecedência máxima de um lembrete é ${formatReminderLead(MAX_REMINDER_MINUTES)}.`),
+  template: z.string().trim().max(500),
+});
+
+/**
+ * Lembretes só desta consulta, sobrescrevendo os do agente.
+ *
+ * Existe porque o padrão do agente serve ao caso comum, não a toda consulta:
+ * um procedimento que exige preparo pede um aviso que a consulta de rotina
+ * não pede. `reminders: null` devolve a consulta ao padrão do agente; uma
+ * lista vazia é a escolha "esta não recebe lembrete", que é diferente — ver
+ * `modules/scheduling/reminder-override.ts`.
+ */
+export async function saveAppointmentRemindersAction(
+  id: string,
+  reminders: { minutesBefore: number; template: string }[] | null,
+): Promise<Result> {
+  const { tenantId } = await requireTenant();
+
+  if (reminders !== null) {
+    const parsed = z.array(reminderRuleSchema).safeParse(reminders);
+    if (!parsed.success) {
+      return { ok: false, error: parsed.error.issues[0]?.message ?? "Lembretes inválidos." };
+    }
+    const error = validateReminders(parsed.data);
+    if (error) return { ok: false, error };
+  }
+
+  // `updateMany` com o tenant no WHERE: o id vem do cliente, e sem essa
+  // checagem trocar o id na requisição alcançaria a agenda de outra conta.
+  const updated = await prisma.appointment.updateMany({
+    where: { id, tenantId },
+    data: {
+      reminderOverride: serializeReminderOverride(reminders) ?? Prisma.DbNull,
+      // Os disparos já enviados continuam marcados: mudar a régua não pode
+      // fazer o paciente receber de novo um aviso que já recebeu. Os que
+      // ainda não saíram passam a seguir a lista nova.
+    },
+  });
+  if (updated.count === 0) return { ok: false, error: "Compromisso não encontrado." };
+
+  revalidateAgenda();
+  return {
+    ok: true,
+    info: reminders === null
+      ? "Esta consulta voltou a seguir os lembretes do agente."
+      : "Lembretes desta consulta salvos.",
+  };
 }
