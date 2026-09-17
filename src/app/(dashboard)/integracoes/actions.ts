@@ -51,7 +51,31 @@ export async function connectWhatsapp(): Promise<ConnectResult> {
     //
     // Só quando NÃO está conectada: deslogar um número que está atendendo
     // derruba o atendimento para gerar um QR que ninguém pediu.
-    if (existing?.externalId && existing.status !== "connected") {
+    //
+    // A condição olha o estado VIVO, não `existing.status`: aquele campo é a
+    // lembrança do dia da conexão e continua "connected" mesmo com a sessão
+    // morta há dias. Guardar o logout atrás dele significava justamente pular
+    // a limpeza no caso em que ela era necessária — e o contador de QR seguia
+    // subindo até a instância recusar toda leitura.
+    //
+    // O `?.` e o catch cobrem provedor que não implemente a checagem: ela é um
+    // upgrade do diagnóstico, e conectar o WhatsApp não pode depender dela —
+    // sem QR a pessoa fica sem saída nenhuma nesta tela.
+    const liveState = existing?.externalId
+      ? await provider
+          .getConnectionState?.(existing.externalId)
+          .catch(() => null)
+          .then((s) => s ?? null)
+      : null;
+    const realmenteConectado = liveState?.reachable === true && liveState.status === "connected";
+
+    // Sem estado vivo (provedor sem a checagem, ou ela falhou), cai no
+    // critério antigo — `status` do banco — em vez de decidir no escuro.
+    const pulaLogout = liveState
+      ? realmenteConectado || liveState.exists === false
+      : existing?.status === "connected";
+
+    if (existing?.externalId && !pulaLogout) {
       try {
         await provider.disconnect(existing.externalId);
       } catch (err) {
@@ -62,10 +86,21 @@ export async function connectWhatsapp(): Promise<ConnectResult> {
       }
     }
 
+    // A instância pode ter sumido do provedor (apagada por fora, limpeza, ou
+    // um container recriado) enquanto o nosso banco ainda diz "connected".
+    // Nesse caso pedir QR para ela devolve 404 e a tela trava sem saída: o
+    // botão "Conectar" falha justamente quando é a única coisa que resolveria.
+    // Checar antes é barato e transforma o beco sem saída em criar de novo.
+    let externalId = existing?.externalId ?? null;
+    if (externalId && liveState?.reachable && !liveState.exists) {
+      console.warn(`[whatsapp] instância ${externalId} não existe mais — recriando`);
+      externalId = null;
+    }
+
     // Instância já criada: só atualiza o QR. Recriar com o mesmo nome devolve
     // 403 da Evolution (instância em uso) e quebrava a tela na 2ª visita.
-    const res = existing?.externalId
-      ? { externalId: existing.externalId, ...(await provider.getQrCode(existing.externalId)) }
+    const res = externalId
+      ? { externalId, ...(await provider.getQrCode(externalId)) }
       : await provider.createInstance(tenantId);
 
     // Reaponta o webhook a cada conexão, não só ao criar: instâncias criadas
@@ -142,8 +177,25 @@ export async function disconnectWhatsapp(): Promise<WhatsappControlResult> {
   try {
     await provider.disconnect(instance.externalId);
   } catch (err) {
+    const message = err instanceof Error ? err.message : "";
     console.error("[whatsapp] falha ao desconectar na Evolution", err);
-    return { ok: false, error: err instanceof Error ? err.message : "Falha ao desconectar" };
+
+    // A sessão já ter caído NÃO é erro para quem clicou: a pessoa queria o
+    // número fora do ar, e ele está. Antes a tela devolvia o erro cru do
+    // provedor ("Evolution logout falhou (404)"), que fala de uma API que o
+    // dono da clínica não conhece e sugere que a ação falhou — quando na
+    // verdade não havia nada para desligar. 404 = instância não existe mais,
+    // 400/500 = o provedor acha que já está fechada. Nos três, o resultado
+    // que o usuário pediu já é verdade: seguimos e marcamos desconectado.
+    const jaEstavaFora = /\((400|404|500)\)/.test(message);
+    if (!jaEstavaFora) {
+      return {
+        ok: false,
+        error:
+          "Não foi possível desconectar agora. Tente de novo em alguns minutos — " +
+          "se continuar, conecte o número de novo em \"Conectar outro número\".",
+      };
+    }
   }
 
   await prisma.whatsappInstance.update({

@@ -97,6 +97,36 @@ export class EvolutionProvider implements WhatsAppProvider {
     return { status: connected ? "connected" : qrCode ? "pending_qr" : "disconnected", qrCode };
   }
 
+  async getConnectionState(
+    externalId: string,
+  ): Promise<{ status: WhatsAppStatus; exists: boolean; reachable: boolean }> {
+    // GET /instance/connectionState — só LÊ o estado. O `/instance/connect` do
+    // `getQrCode` geraria um QR a cada chamada (ver a doc de
+    // `getConnectionState` na interface).
+    try {
+      const res = await fetch(`${this.baseUrl}/instance/connectionState/${externalId}`, {
+        headers: this.headers(),
+      });
+      // 404 = a instância não existe mais no provedor. Acontece quando ela é
+      // apagada por fora (limpeza, recriação do container): o nosso banco
+      // segue dizendo "connected" e a tela mente até alguém reconectar.
+      if (res.status === 404) return { status: "disconnected", exists: false, reachable: true };
+      if (!res.ok) return { status: "disconnected", exists: true, reachable: false };
+      const data = (await res.json()) as { instance?: { state?: string }; state?: string };
+      const state = data?.instance?.state ?? data?.state;
+      return {
+        status: state === "open" ? "connected" : state === "connecting" ? "pending_qr" : "disconnected",
+        exists: true,
+        reachable: true,
+      };
+    } catch {
+      // Evolution fora do ar: `reachable: false` para o chamador não confundir
+      // "não consegui perguntar" com "o número caiu" — e não alarmar o cliente
+      // por um problema que é nosso.
+      return { status: "disconnected", exists: true, reachable: false };
+    }
+  }
+
   async sendMessage(externalId: string, toPhone: string, text: string): Promise<string | null> {
     const res = await fetch(`${this.baseUrl}/message/sendText/${externalId}`, {
       method: "POST",

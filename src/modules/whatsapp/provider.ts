@@ -31,6 +31,21 @@ export interface WhatsAppProvider {
   isConfigured(): boolean;
   createInstance(tenantId: string): Promise<CreateInstanceResult>;
   getQrCode(externalId: string): Promise<{ status: WhatsAppStatus; qrCode?: string }>;
+  /**
+   * Lê o estado da conexão SEM gerar QR. Existe separado de `getQrCode` porque
+   * aquele chama `/instance/connect`, que CRIA um QR a cada chamada e gasta o
+   * `QRCODE_LIMIT` da Evolution (30): usá-lo para monitorar em laço queimaria
+   * a cota e deixaria a instância `refused`, recusando a leitura justamente
+   * quando alguém fosse religar o número.
+   *
+   * `exists: false` distingue "instância apagada no provedor" de "existe mas
+   * está fora do ar" — a primeira só volta criando de novo, a segunda pode
+   * voltar sozinha. Nunca lança: monitoramento que derruba o worker não
+   * monitora nada.
+   */
+  getConnectionState?(
+    externalId: string,
+  ): Promise<{ status: WhatsAppStatus; exists: boolean; reachable: boolean }>;
   /** Envia e devolve o key.id da mensagem no WhatsApp (null se o provedor não o expuser). */
   sendMessage(externalId: string, toPhone: string, text: string): Promise<string | null>;
   /**

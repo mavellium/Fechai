@@ -9,13 +9,15 @@ Conecta o número de WhatsApp do tenant e troca mensagens, atrás de uma interfa
 - `provider.ts` — interface `WhatsAppProvider` (`createInstance`, `getQrCode`, `sendMessage`, `parseWebhook`) e tipos (`IncomingMessage`, `WhatsAppStatus`).
 - `evolution.ts` — `EvolutionProvider`: chama a Evolution API v2 (`/instance/create`, `/instance/connect`, `/message/sendText`) e faz parse do evento `messages.upsert`. `isConfigured()` = tem URL+key.
 - `index.ts` — `getWhatsAppProvider()` (factory). Trocar de provedor acontece só aqui.
+- `health.ts` — detecta número fora do ar (`checkTenantWhatsapp`, `scanWhatsappHealth`, `diagnose`) e sincroniza `WhatsappInstance.status` com a realidade.
 
 ## Contratos expostos
 
 ```ts
 getWhatsAppProvider(): WhatsAppProvider
 createInstance(tenantId) -> { externalId, status, qrCode? }
-getQrCode(externalId) -> { status, qrCode? }
+getQrCode(externalId) -> { status, qrCode? }        // GERA um QR (gasta QRCODE_LIMIT)
+getConnectionState(externalId) -> { status, exists, reachable }  // só LÊ, nunca gera
 sendMessage(externalId, toPhone, text)
 disconnect(externalId)
 ensureWebhook(externalId) -> boolean   // false = sem URL/segredo para apontar
@@ -89,6 +91,51 @@ parece "instância não existe" — foi o que produzia `Evolution logout falhou
 | `/chat/getBase64FromMediaMessage/{id}` | POST |
 | `/group/updateParticipant/{id}?groupJid=` | POST |
 | `/webhook/set/{id}` | POST |
+| `/instance/connectionState/{id}` | GET |
+
+## Status conectado é uma PERGUNTA, não uma lembrança
+
+`WhatsappInstance.status` era gravado no momento da conexão e nunca mais
+revisitado. Quando a sessão morria, ninguém reescrevia o campo: o painel seguia
+mostrando "Seu número está atendendo · conectado" por dias, o cliente achava que
+estava sendo atendido e os leads caíam no vácuo. Um incidente real só foi
+descoberto porque um humano estranhou o silêncio — **horas** depois, com
+mensagens perdidas (a Evolution nem chegou a recebê-las: não há o que
+reprocessar).
+
+`health.ts` conserta isso em duas frentes, e **as duas são necessárias**:
+
+1. **Estado no provedor** (`getConnectionState`) — pega a sessão derrubada, que
+   é o caso comum, e sincroniza o campo do banco.
+2. **Silêncio** (`Conversation.lastInboundAt`) — pega o caso que o estado não
+   pega. No incidente, a Evolution respondeu `state: "open"` enquanto o
+   `logout` da mesma instância, no mesmo segundo, devolvia `"Connection
+   Closed"`. **O provedor mente**; o fluxo de mensagens, não. Número
+   "conectado" mudo há 6h+ em horário comercial é suspeito até prova em
+   contrário.
+
+Três cuidados que o código protege (e os testes travam):
+
+- **`reachable: false` nunca vira alerta.** Evolution fora do ar é problema
+  nosso — avisar "seu número caiu" nesse caso é mentir para o cliente e ainda
+  provocar uma reconexão desnecessária.
+- **Alarme falso corrói o alerta verdadeiro.** Por isso o silêncio só conta em
+  horário comercial, com folga de 6h, e há cooldown de 12h por conta
+  (`Tenant.whatsappHealthAlertAt`) — sem ele, cada varredura do worker mandaria
+  outro e-mail até alguém reconectar.
+- **`getConnectionState` nunca gera QR.** `getQrCode` chama
+  `/instance/connect`, que **cria um QR a cada chamada** e gasta o
+  `QRCODE_LIMIT` (30); usá-lo para monitorar em laço deixaria a instância
+  `refused`, recusando a leitura justamente quando alguém fosse religar.
+
+A varredura roda no worker (`workers/follow-up-worker`), junto com follow-up e
+lembretes: precisa acontecer mesmo quando **ninguém abre o painel** — o modo de
+falha que ela existe para pegar é exatamente o silêncio que ninguém vê.
+
+`connectWhatsapp()` também consulta o estado vivo antes de decidir: instância
+apagada no provedor (`exists: false`) é **recriada** em vez de receber um pedido
+de QR que devolveria 404 — antes, o botão "Conectar" falhava justamente quando
+era a única coisa que resolveria.
 
 ## O que NÃO faz
 
