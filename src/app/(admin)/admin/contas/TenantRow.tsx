@@ -13,6 +13,7 @@ import {
   suspendTenant,
   changePlan,
   setTenantUsageLimit,
+  setTenantPriceOverride,
   setTenantTrial,
   impersonateUser,
   deleteTenantAccount,
@@ -26,6 +27,7 @@ type Props = {
   whatsappStatus: string;
   /** Cota de mensagens/mês fixada fora do padrão do plano (null = usa o plano). */
   messageLimitOverride: number | null;
+  priceCentsOverride: number | null;
   /** Fim do período de teste (ISO); null = sem teste em andamento. */
   trialEndsAt: string | null;
   /** O plano da conta é de teste por tempo (hoje só o grátis). */
@@ -63,6 +65,23 @@ const WHATSAPP_DOT: Record<string, string> = {
  * O estado de edição (plano e cota digitados) vive aqui, não no painel, para
  * não se perder caso o painel feche — e é reposto ao abrir.
  */
+/** Centavos → "199,00" para o campo de edição. */
+function centsToInput(cents: number): string {
+  return (cents / 100).toFixed(2).replace(".", ",");
+}
+
+/**
+ * "199", "199,90" ou "1.234,56" → centavos. `null` = inválido (o chamador
+ * mostra o erro). Zero é válido: conta cortesia existe.
+ */
+function inputToCents(raw: string): number | null {
+  const cleaned = raw.trim().replace(/\./g, "").replace(",", ".");
+  if (!/^\d+(\.\d{1,2})?$/.test(cleaned)) return null;
+  const value = Number(cleaned);
+  if (!Number.isFinite(value) || value < 0) return null;
+  return Math.round(value * 100);
+}
+
 export function TenantRow(t: Props) {
   const [pending, start] = useTransition();
   const [panelOpen, setPanelOpen] = useState(false);
@@ -72,6 +91,11 @@ export function TenantRow(t: Props) {
   );
   const suspended = t.status === "suspended";
   const planDirty = plan !== t.planKey;
+  // Em reais com vírgula, como o admin digita. A conversão para centavos é na
+  // hora de salvar — guardar centavos aqui obrigaria a formatar a cada tecla.
+  const [priceInput, setPriceInput] = useState<string>(() =>
+    centsToInput(t.priceCentsOverride ?? planOf(t.planKey).priceCents),
+  );
   const [impError, setImpError] = useState<string | null>(null);
 
   // Exclusão definitiva: diálogo próprio (em vez de ConfirmButton) porque aqui
@@ -123,6 +147,18 @@ export function TenantRow(t: Props) {
     ? Math.ceil((trialUntil!.getTime() - new Date().getTime()) / 86_400_000)
     : 0;
 
+  const planPriceCents = planOf(t.planKey).priceCents;
+  const priceCents = inputToCents(priceInput);
+  const priceInvalid = priceCents === null;
+  const priceDirty = priceInvalid || priceCents !== (t.priceCentsOverride ?? planPriceCents);
+
+  function savePrice() {
+    if (priceCents === null) return;
+    // Igual ao preço de tabela não vira override — volta a seguir o plano,
+    // e assim um reajuste futuro do plano alcança a conta sozinho.
+    start(() => setTenantPriceOverride(t.id, priceCents === planPriceCents ? null : priceCents));
+  }
+
   function saveLimits() {
     if (limitInvalid) return;
     // Valor igual ao padrão do plano não precisa virar override — volta a seguir o plano.
@@ -134,6 +170,7 @@ export function TenantRow(t: Props) {
   function openPanel() {
     setPlan(t.planKey);
     setLimitInput(String(t.messageLimitOverride ?? planDefault));
+    setPriceInput(centsToInput(t.priceCentsOverride ?? planOf(t.planKey).priceCents));
     setImpError(null);
     setPanelOpen(true);
   }
@@ -161,7 +198,17 @@ export function TenantRow(t: Props) {
         </p>
       </td>
 
-      <td className="px-4 py-2.5 text-white/80">{planOf(t.planKey).name}</td>
+      {/* Preço personalizado aparece sob o plano: quem varre a lista precisa
+          ver que o valor daquela conta não é o de tabela, senão o ROI do
+          relatório dela parece errado sem explicação. */}
+      <td className="px-4 py-2.5 text-white/80">
+        {planOf(t.planKey).name}
+        {t.priceCentsOverride != null && (
+          <span className="mt-0.5 block font-mono text-micro uppercase tracking-wide text-signal">
+            R$ {centsToInput(t.priceCentsOverride)}/mês
+          </span>
+        )}
+      </td>
 
       {/* Cota em texto: o override é a exceção, e só ele merece destaque. */}
       <td className="px-4 py-2.5">
@@ -445,6 +492,82 @@ export function TenantRow(t: Props) {
                   className="mt-2 font-mono text-micro uppercase tracking-wide text-white/55 underline underline-offset-2 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris"
                 >
                   restaurar padrão do plano
+                </button>
+              )}
+            </section>
+
+            {/* Preço cobrado: override só do VALOR. Serve para desconto
+                negociado ou cortesia sem ter de mexer no plano (que mudaria a
+                cota junto). Só afeta o "Investido"/ROI de /relatorios. */}
+            <section className="border-t border-white/10 pt-5">
+              <label
+                htmlFor={`${t.id}-preco`}
+                className="font-mono text-micro uppercase tracking-wide text-white/55"
+              >
+                Preço cobrado
+              </label>
+              <p className="mt-1 text-sm text-white/50">
+                O que esta conta paga por mês. O padrão do plano{" "}
+                {planOf(t.planKey).name} é {planOf(t.planKey).priceLabel}. Muda só o
+                relatório financeiro do cliente — a cota continua vindo do plano.
+              </p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <span className="font-mono text-micro uppercase tracking-wide text-white/55">
+                  R$
+                </span>
+                <input
+                  id={`${t.id}-preco`}
+                  type="text"
+                  inputMode="decimal"
+                  value={priceInput}
+                  disabled={pending}
+                  aria-invalid={priceInvalid || undefined}
+                  onChange={(e) => setPriceInput(e.target.value)}
+                  className="w-28 rounded-control border border-white/10 bg-white/5 px-2 py-1.5 font-mono text-xs text-white focus:border-iris focus:outline-none focus-visible:ring-2 focus-visible:ring-iris aria-invalid:border-danger"
+                />
+                <span className="font-mono text-micro uppercase tracking-wide text-white/55">
+                  /mês
+                </span>
+
+                {priceDirty && (
+                  <>
+                    <Button
+                      size="sm"
+                      loading={pending}
+                      loadingLabel="Salvando preço"
+                      disabled={priceInvalid}
+                      onClick={savePrice}
+                    >
+                      Salvar
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={pending}
+                      onClick={() =>
+                        setPriceInput(centsToInput(t.priceCentsOverride ?? planPriceCents))
+                      }
+                    >
+                      Desfazer
+                    </Button>
+                  </>
+                )}
+              </div>
+
+              {priceInvalid && (
+                <p role="alert" className="mt-2 text-sm text-danger">
+                  Informe um valor como 199 ou 149,90.
+                </p>
+              )}
+
+              {t.priceCentsOverride != null && !priceDirty && (
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => start(() => setTenantPriceOverride(t.id, null))}
+                  className="mt-2 font-mono text-micro uppercase tracking-wide text-white/55 underline underline-offset-2 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris"
+                >
+                  restaurar preço do plano
                 </button>
               )}
             </section>

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { CalendarPlus, X } from "lucide-react";
 import posthog from "posthog-js";
 import { Button } from "@/components/ui/button";
+import { UnsavedForm, useUnsavedNavigation } from "@/components/ui/unsaved-changes";
 import { Field, fieldProps } from "@/components/ui/field";
 import { Alert, FormFeedback } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
@@ -41,6 +42,8 @@ export function NewAppointmentDialog({
   requiresContact?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const confirmNavigation = useUnsavedNavigation();
+  const close = () => confirmNavigation(() => ref.current?.close(), ref.current);
   const durationRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
   const [state, formAction, pending] = useActionState(createManualAppointment, null);
@@ -63,6 +66,7 @@ export function NewAppointmentDialog({
 
       <dialog
         ref={ref}
+        onCancel={(event) => { event.preventDefault(); close(); }}
         aria-labelledby="novo-agendamento-title"
         className="m-auto w-[calc(100%-2rem)] max-w-lg rounded-surface border border-white/15 bg-ink p-6 text-white backdrop:bg-ink/70"
       >
@@ -78,7 +82,7 @@ export function NewAppointmentDialog({
           </div>
           <button
             type="button"
-            onClick={() => ref.current?.close()}
+            onClick={close}
             aria-label="Fechar"
             className="shrink-0 rounded-control p-1 text-white/60 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris"
           >
@@ -86,7 +90,7 @@ export function NewAppointmentDialog({
           </button>
         </div>
 
-        <form
+        <UnsavedForm label="Novo agendamento" result={state} resetOnSuccess
           action={formAction}
           className="space-y-5"
           onSubmit={() => posthog.capture("appointment_creation_submitted")}
@@ -169,14 +173,14 @@ export function NewAppointmentDialog({
           <FormFeedback error={state?.error} />
 
           <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={() => ref.current?.close()}>
+            <Button type="button" variant="ghost" onClick={close}>
               Cancelar
             </Button>
             <Button type="submit" loading={pending} loadingLabel="Marcando">
               Marcar
             </Button>
           </div>
-        </form>
+        </UnsavedForm>
       </dialog>
     </>
   );

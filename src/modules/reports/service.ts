@@ -2,6 +2,10 @@ import { prisma } from "@/lib/prisma";
 import { dateLabel } from "@/lib/format";
 import { planOf } from "@/modules/billing/plans";
 import { partsInZone, zonedTimeToUtc } from "@/modules/scheduling/time";
+import {
+  costPerLeadCents as costPerLeadManual,
+  reasonLabel,
+} from "@/modules/agent-engine/disqualify";
 
 /**
  * Fuso do painel para todo agrupamento por dia/hora/mês de /relatorios. Sem
@@ -777,6 +781,33 @@ export type AgentReturnPoint = { name: string; returnCents: number; closedLeads:
 /** Retorno − investido de um mês fechado (para o gráfico divergente). */
 export type MonthlyReturnPoint = { key: string; label: string; netCents: number };
 
+/** Um motivo de desqualificação com sua contagem no período. */
+export type TriageReasonPoint = { reason: string; label: string; count: number };
+
+/**
+ * Triagem: o que o agente filtrou antes de chegar numa pessoa.
+ *
+ * `screened` é o número duro (contatos carimbados por `disqualify_lead` no
+ * período). Tempo e dinheiro são DERIVADOS dele pelo custo que a clínica
+ * declarou — sem custo declarado os dois vêm `null` e a UI mostra o convite
+ * para definir, nunca zero (zero leria como "não economizou nada").
+ */
+export type TriageSummary = {
+  /** Contatos desqualificados pelo agente no período. */
+  screened: number;
+  /** Mesma contagem na janela anterior — para o delta. */
+  previousScreened: number;
+  /** Quebra por motivo, maiores primeiro. */
+  byReason: TriageReasonPoint[];
+  /** Custo declarado em vigor no início da janela. `null` = nunca definido. */
+  minutesPerLead: number | null;
+  hourlyCostCents: number | null;
+  /** `screened × minutesPerLead`. `null` sem custo declarado. */
+  minutesSaved: number | null;
+  /** `screened × custo de um atendimento`. `null` sem custo declarado. */
+  savedCents: number | null;
+};
+
 export type FinancialSummary = {
   /** Agendamentos EFETIVADOS (scheduled/done) criados no período — alinhado ao KPI "Agendamentos". */
   closedLeads: number;
@@ -808,6 +839,8 @@ export type FinancialSummary = {
   monthly: MonthlyReturnPoint[] | null;
   /** `investedCents / closedLeads`. `null` sem fechamento no período. */
   costPerLeadCents: number | null;
+  /** Triagem do agente no período (contatos filtrados + economia estimada). */
+  triage: TriageSummary;
 };
 
 /**
@@ -823,7 +856,7 @@ export async function computeFinancialSummary(
 ): Promise<FinancialSummary> {
   const toExcl = new Date(range.to.getTime() + 1);
 
-  const [closedAppts, tenant, values] = await Promise.all([
+  const [closedAppts, tenant, values, screenedLeads, previousScreened, costs] = await Promise.all([
     // Mesmo corte do gráfico "closed" do Operacional: só efetivados (scheduled/done).
     prisma.appointment.findMany({
       where: {
@@ -835,27 +868,71 @@ export async function computeFinancialSummary(
     }),
     prisma.tenant.findUnique({
       where: { id: tenantId },
-      select: { planKey: true, createdAt: true },
+      select: { planKey: true, createdAt: true, priceCentsOverride: true },
     }),
     prisma.tenantLeadValue.findMany({
       where: { tenantId },
       orderBy: { startsAt: "asc" },
       select: { valueCents: true, startsAt: true },
     }),
+    // Triagem: contatos que o agente marcou como fora do perfil no período.
+    // `isTest: false` como toda métrica de negócio — o sandbox não filtra
+    // ninguém de verdade.
+    prisma.lead.findMany({
+      where: {
+        tenantId,
+        isTest: false,
+        disqualifiedAt: { gte: range.from ?? undefined, lt: toExcl },
+      },
+      select: { disqualifiedReason: true },
+    }),
+    // Só a contagem da janela anterior (para o delta). `prevFrom` é null em
+    // "tudo" — não existe período antes do início da conta, então o delta
+    // também não existe e a contagem fica em 0.
+    range.prevFrom
+      ? prisma.lead.count({
+          where: {
+            tenantId,
+            isTest: false,
+            // `prevTo` é inclusivo (from − 1ms): o `lt` usa +1ms para não
+            // perder um carimbo que caia exatamente no último milissegundo.
+            disqualifiedAt: {
+              gte: range.prevFrom,
+              lt: range.prevTo ? new Date(range.prevTo.getTime() + 1) : toExcl,
+            },
+          },
+        })
+      : Promise.resolve(0),
+    prisma.tenantAttendanceCost.findMany({
+      where: { tenantId },
+      orderBy: { startsAt: "asc" },
+      select: { minutesPerLead: true, hourlyCostCents: true, startsAt: true },
+    }),
   ]);
   const closedLeads = closedAppts.length;
 
   const plan = planOf(tenant?.planKey);
+  // Preço realmente cobrado: o override do admin (valor negociado) vence o
+  // preço de tabela. Só o dinheiro muda — cota e limites seguem no plano.
+  const priceCents = tenant?.priceCentsOverride ?? plan.priceCents;
 
-  // "tudo" não tem `from`: ancora os meses na criação da conta.
-  const anchor = range.from ?? tenant?.createdAt ?? range.to;
+  // Meses cobrados = meses de calendário tocados pela janela, MAS nunca antes
+  // da conta existir. Sem esse corte, "últimos 30 dias" numa conta de 8 dias
+  // criada dia 09 toca agosto e setembro e cobra 2 meses de quem pagou 1 —
+  // o "Investido" ficava maior que a fatura e o ROI, menor que a realidade.
+  //
+  // Mês tocado conta inteiro (não proporcional aos dias) de propósito: é o que
+  // a pessoa de fato pagou. Ratear daria um ROI mais bonito do que o extrato.
+  const createdAt = tenant?.createdAt ?? null;
+  let anchor = range.from ?? createdAt ?? range.to;
+  if (createdAt && anchor.getTime() < createdAt.getTime()) anchor = createdAt;
   const anchorParts = partsInZone(anchor, PANEL_TIME_ZONE);
   const toParts = partsInZone(range.to, PANEL_TIME_ZONE);
   const months = Math.max(
     1,
     (toParts.year - anchorParts.year) * 12 + (toParts.month - anchorParts.month) + 1,
   );
-  const investedCents = plan.priceCents * months;
+  const investedCents = priceCents * months;
 
   let effective: { valueCents: number; startsAt: Date } | null = null;
   if (values.length > 0) {
@@ -952,6 +1029,46 @@ export async function computeFinancialSummary(
 
   const costPerLeadCents = closedLeads > 0 ? Math.round(investedCents / closedLeads) : null;
 
+  // ── triagem ────────────────────────────────────────────────────────────
+  // Custo em vigor no início da janela, mesma regra do valor por lead: mudar o
+  // custo hoje não reescreve o que já foi relatado.
+  let cost: { minutesPerLead: number; hourlyCostCents: number } | null = null;
+  if (costs.length > 0) {
+    if (!range.from) {
+      cost = costs[costs.length - 1];
+    } else {
+      const fromTs = range.from.getTime();
+      let last = -1;
+      for (let i = 0; i < costs.length; i++) {
+        if (costs[i].startsAt.getTime() <= fromTs) last = i;
+        else break;
+      }
+      // Nenhum vigente até o início da janela: usa o mais antigo, para uma
+      // janela curta que começou antes do custo ser definido ainda mostrar algo.
+      cost = last >= 0 ? costs[last] : costs[0];
+    }
+  }
+
+  const reasonCounts = new Map<string, number>();
+  for (const lead of screenedLeads) {
+    const key = lead.disqualifiedReason ?? "outro";
+    reasonCounts.set(key, (reasonCounts.get(key) ?? 0) + 1);
+  }
+  const byReason: TriageReasonPoint[] = [...reasonCounts]
+    .map(([reason, count]) => ({ reason, label: reasonLabel(reason), count }))
+    .sort((a, b) => b.count - a.count);
+
+  const screened = screenedLeads.length;
+  const triage: TriageSummary = {
+    screened,
+    previousScreened,
+    byReason,
+    minutesPerLead: cost?.minutesPerLead ?? null,
+    hourlyCostCents: cost?.hourlyCostCents ?? null,
+    minutesSaved: cost ? screened * cost.minutesPerLead : null,
+    savedCents: cost ? screened * costPerLeadManual(cost) : null,
+  };
+
   return {
     closedLeads,
     months,
@@ -967,5 +1084,6 @@ export async function computeFinancialSummary(
     breakEvenLeads,
     monthly,
     costPerLeadCents,
+    triage,
   };
 }

@@ -6,7 +6,8 @@ export type ActionKey =
   | "mark_hot_lead"
   | "schedule_meeting"
   | "follow_up"
-  | "handoff_human";
+  | "handoff_human"
+  | "disqualify_lead";
 
 export type ActionDef = {
   key: ActionKey;
@@ -50,6 +51,14 @@ export const ACTION_CATALOG: ActionDef[] = [
     outcome: "O agente manda uma mensagem sozinho se o contato sumir.",
     status: "ready",
     configurable: true,
+  },
+  {
+    key: "disqualify_lead",
+    label: "Triagem de contatos",
+    description:
+      "O agente encerra educadamente quem não é cliente em potencial (vendedor, trote, fora da sua área) em vez de passar para você.",
+    outcome: "O contato sai da sua fila e entra no relatório de triagem.",
+    status: "ready",
   },
   {
     key: "handoff_human",

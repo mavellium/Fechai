@@ -38,6 +38,13 @@ model Tenant {
   // mensagem porque é a resposta da IA que consome LLM, não a conversa.)
   messageLimitOverride Int?
 
+  // Preço realmente cobrado desta conta, em centavos. null = usa o preço de
+  // tabela do plano (`Plan.priceCents`). Preenchido pelo superadmin em
+  // /admin/contas quando o valor foi negociado (desconto, cortesia, contrato
+  // antigo). Só muda o "Investido" da visão Financeira de /relatorios — cota,
+  // limite de agentes e ações continuam vindo do plano, como antes.
+  priceCentsOverride Int?
+
   // Fim do período de teste do plano grátis. O FREE é um trial por tempo: a
   // conta responde até `messagesPerMonth` do plano E até esta data — o que
   // vier primeiro. Passou da data, a IA cala e só volta assinando um plano
@@ -101,6 +108,7 @@ model Tenant {
   clinicorp        ClinicorpIntegration?
   calendarFeatures CalendarFeatures?
   leadValues       TenantLeadValue[]
+  attendanceCosts  TenantAttendanceCost[]
   referral         Referral?
   auditLogs        AuditLog[]
 }
@@ -173,16 +181,16 @@ model Feedback {
 /// agentes da mesma conta atendem contextos diferentes e não podem se
 /// contaminar (o de vendas respondendo com documento do suporte).
 model Agent {
-  id             String    @id @default(cuid())
-  tenantId       String
-  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  name           String    @default("Meu agente")
-  systemPrompt   String    @default("")
-  objective      String    @default("")
-  personaDraft   Json? // respostas cruas do wizard, para reeditar
+  id              String    @id @default(cuid())
+  tenantId        String
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name            String    @default("Meu agente")
+  systemPrompt    String    @default("")
+  objective       String    @default("")
+  personaDraft    Json? // respostas cruas do wizard, para reeditar
   /// Agente que atende o número de WhatsApp da conta. Enquanto o WhatsApp for
   /// um por conta (ver CHANGELOG), exatamente um agente é o principal.
-  isPrimary      Boolean   @default(false)
+  isPrimary       Boolean   @default(false)
   /// Chave geral do agente. `false` = ele para de responder aos CLIENTES
   /// (WhatsApp e widget do site) sem perder persona, base nem ações. Existe
   /// porque a única forma de calar um agente era excluí-lo ou desligar o
@@ -191,27 +199,27 @@ model Agent {
   /// O chat de teste ignora a chave (`skipEnabledCheck` em `runAgentTurn`):
   /// desligar é o que se faz para mexer no agente, e um sandbox mudo obrigava
   /// a religar — voltando a atender cliente de verdade — só para conferir.
-  enabled        Boolean   @default(true)
+  enabled         Boolean   @default(true)
   /// Ouve mensagens de voz do WhatsApp: o áudio é transcrito e o agente
   /// responde como se fosse texto. Desligado, áudios são ignorados.
-  listenAudio    Boolean   @default(true)
+  listenAudio     Boolean   @default(true)
   /// Cliente reage com um emoji ou manda só um emoji: a conversa encerra e o
   /// agente para de responder nela (mesmo mecanismo de quando um humano assume
   /// — `agentPaused`). O dono devolve a conversa em /conversas para retomar.
-  stopOnEmoji    Boolean   @default(true)
+  stopOnEmoji     Boolean   @default(true)
   /// Responde em áudio, na voz gravada pelo dono da conta (`voiceId`), quando o
   /// cliente mandou áudio — o espelho de `listenAudio`. Nasce DESLIGADO: falar
   /// exige uma voz clonada, e a conta só tem uma depois de gravar em /agentes.
   /// Ligado sem `voiceId`, ou com a Fish Audio fora do ar, a resposta sai em
   /// texto: voz é forma de entrega, nunca condição para o contato ser atendido.
-  speakReplies   Boolean   @default(false)
+  speakReplies    Boolean   @default(false)
   /// Id do modelo de voz na Fish Audio (`reference_id` do POST /v1/tts), criado
   /// a partir da amostra que o dono gravou. Não é segredo — é um identificador
   /// opaco, inútil sem a chave da plataforma —, por isso fica em claro, ao
   /// contrário das credenciais de terceiros (ver `lib/crypto.ts`).
-  voiceId        String?
+  voiceId         String?
   /// Nome que o dono deu à voz, só para a tela dizer qual voz está no ar.
-  voiceLabel     String?
+  voiceLabel      String?
   /// De onde veio a voz: "recorded" (clonada da gravação do dono) ou "catalog"
   /// (uma das vozes prontas, ver `modules/voice/catalog.ts`). Null nas contas
   /// anteriores a este campo, que só podiam ter voz gravada.
@@ -220,9 +228,9 @@ model Agent {
   /// Audio e precisa ser apagada lá junto (senão fica a voz de um cliente
   /// órfã na conta da plataforma); uma voz do catálogo é compartilhada e
   /// apagá-la derrubaria a voz de todas as outras contas que a escolheram.
-  voiceSource    String?
+  voiceSource     String?
   /// Quando a voz foi gravada — a tela usa para mostrar "gravada em ...".
-  voiceCreatedAt DateTime?
+  voiceCreatedAt  DateTime?
   /// Como a voz se comporta ao falar: "neutra" (padrão), "calorosa" ou
   /// "animada" — ver `modules/voice/style.ts`, que guarda os números da Fish
   /// por trás de cada uma. Nasce neutra: uma voz que improvisa (e por isso ri
@@ -242,9 +250,9 @@ model Agent {
   /// catálogo, é comportamento do agente — mesmo lugar de `speakReplies` e
   /// `voiceId`.
   speechBlocklist String    @default("")
-  archived       Boolean   @default(false)
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  archived        Boolean   @default(false)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   knowledgeDocs KnowledgeDocument[]
   actions       TenantAction[]
@@ -323,23 +331,38 @@ model WhatsappInstance {
 }
 
 model Lead {
-  id           String        @id @default(cuid())
-  tenantId     String
-  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  name         String?
-  phone        String
-  status       String        @default("new") // new | warm | hot | scheduled | lost
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String?
+  phone     String
+  status    String   @default("new") // new | warm | hot | scheduled | lost
   /// Contato criado pelo chat de teste (sandbox), não por um cliente real.
   /// Fica no banco com histórico permanente (aparece em Conversas, na aba
   /// "Testes"), mas contagem de negócio (contatos, relatórios, home) filtra
   /// `isTest: false` — antes o sandbox inflava o número de leads da conta.
-  isTest       Boolean       @default(false)
-  createdAt    DateTime      @default(now())
+  isTest    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  /// Quando o agente concluiu que este contato não é cliente em potencial
+  /// (tool `disqualify_lead`). Distinto de `status: "lost"`, que é "era
+  /// cliente e não fechou" — aqui nunca foi. É o que sustenta a métrica de
+  /// triagem em /relatorios: sem este carimbo o número seria chute.
+  /// null = nunca desqualificado.
+  disqualifiedAt     DateTime?
+  /// Motivo da desqualificação, do conjunto fechado de `DISQUALIFY_REASONS`
+  /// (`src/modules/agent-engine/disqualify.ts`). String e não enum porque o
+  /// conjunto ainda deve crescer com o que aparecer no campo, e um enum no
+  /// Postgres exige migration para cada valor novo.
+  disqualifiedReason String?
+
   conversation Conversation?
   appointments Appointment[]
 
   @@index([tenantId])
   @@index([tenantId, isTest])
+  /// Suporta a contagem por período da triagem (relatórios) sem varrer a tabela.
+  @@index([tenantId, disqualifiedAt])
 }
 
 model Conversation {
@@ -440,8 +463,8 @@ model Appointment {
   notes                  String?
   startsAt               DateTime
   endsAt                 DateTime
-  status                 String   @default("scheduled") // scheduled | done | canceled
-  source                 String   @default("agent") // agent | manual
+  status                 String    @default("scheduled") // scheduled | done | canceled
+  source                 String    @default("agent") // agent | manual
   /// Id do evento espelhado no Google Agenda, quando a conta está integrada.
   /// Null = só existe aqui (integração desligada ou sincronização falhou).
   googleEventId          String?
@@ -700,6 +723,33 @@ model TenantLeadValue {
   @@index([tenantId, startsAt])
 }
 
+/// Quanto custa à clínica atender um contato à mão — a base da métrica de
+/// triagem ("o que o agente evitou") na visão Financeira de /relatorios.
+///
+/// Segue o mesmo contrato de `TenantLeadValue` (e existe separado dele porque
+/// responde outra pergunta: o valor do lead é receita, isto é custo): cada
+/// alteração cria uma entrada com vigência, e períodos já iniciados mantêm o
+/// valor em vigor no início deles.
+///
+/// Os dois campos juntos são o que permite converter triagem em dinheiro:
+/// `minutesPerLead` × `hourlyCostCents / 60`. Enquanto não houver nenhuma
+/// entrada, o relatório mostra estado vazio com a chamada para definir —
+/// nunca um número médio inventado, que o cliente conferiria e não bateria.
+model TenantAttendanceCost {
+  id              String   @id @default(cuid())
+  tenantId        String
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// Minutos que um atendente humano gastaria com um contato (triagem + resposta).
+  minutesPerLead  Int
+  /// Custo da hora do atendente, em centavos (mesma unidade de `Plan.priceCents`).
+  hourlyCostCents Int
+  /// Entra em vigor a partir desta data/hora.
+  startsAt        DateTime
+  createdAt       DateTime @default(now())
+
+  @@index([tenantId, startsAt])
+}
+
 /// Token de "esqueci minha senha". Guardamos só o SHA-256 do token — o valor
 /// que vai no link do e-mail nunca toca o banco, então um dump vazado não
 /// permite redefinir a senha de ninguém.
@@ -786,8 +836,8 @@ model BlockedIp {
   /// Contexto do momento do bloqueio, para a lista não virar uma coluna de
   /// números soltos: último e-mail tentado desse IP e quantas tentativas ele
   /// tinha. Congelados — descrevem o que o admin viu ao decidir.
-  lastEmail     String?
-  attemptsAtBlock Int    @default(0)
+  lastEmail       String?
+  attemptsAtBlock Int     @default(0)
 
   createdAt DateTime @default(now())
 
@@ -825,18 +875,18 @@ model AuditLog {
   /// e nas linhas cuja conta já foi excluída — `SetNull`, não `Cascade`: o
   /// registro de uma exclusão não pode sumir junto com o que foi excluído,
   /// senão a trilha apaga justamente o evento mais grave que ela guarda.
-  tenantId String?
-  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  tenantId   String?
+  tenant     Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
   /// Nome da conta no momento do evento. Redundante de propósito: sobrevive à
   /// exclusão do tenant, quando `tenantId` vira null e o join não devolve nada.
   tenantName String?
 
   /// Quem fez. Também `SetNull` + cópia do e-mail, pela mesma razão.
-  actorId    String?
-  actorEmail String?
+  actorId      String?
+  actorEmail   String?
   /// OWNER | SUPERADMIN | SYSTEM — papel de quem agiu, congelado na linha.
   /// "SYSTEM" é o que a plataforma faz sozinha (webhook, worker, cron).
-  actorRole String @default("OWNER")
+  actorRole    String  @default("OWNER")
   /// O admin agiu personificando o cliente (ver lib/impersonation). Sem isto a
   /// trilha mostraria o dono da conta fazendo o que o suporte fez por ele.
   impersonated Boolean @default(false)
@@ -847,13 +897,13 @@ model AuditLog {
   event String
   /// create | update | delete | auth | access — para filtrar e para decidir
   /// como reverter (update regrava `before`; delete recria a linha).
-  kind String
+  kind  String
 
   /// O que foi afetado: modelo do Prisma (`Agent`, `Tenant`, `Lead`…) e id.
   /// Sem `@relation` — a linha aponta para tabelas diferentes conforme o
   /// evento, e o alvo pode nem existir mais.
-  targetType String?
-  targetId   String?
+  targetType  String?
+  targetId    String?
   /// Rótulo legível do alvo no momento do evento ("Agente de vendas"). A tela
   /// mostra isto; sem ele, um log de exclusão viraria um cuid sem sentido.
   targetLabel String?
@@ -886,7 +936,7 @@ model AuditLog {
   revertedByEmail String?
   /// Log gerado PELA reversão. Desfazer é uma ação como outra qualquer e vira
   /// linha nova — a trilha nunca é editada para esconder o que aconteceu.
-  revertLogId String?
+  revertLogId     String?
 
   createdAt DateTime @default(now())
 

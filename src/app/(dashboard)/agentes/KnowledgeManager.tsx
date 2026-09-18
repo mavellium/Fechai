@@ -26,9 +26,6 @@ type Doc = {
   fileName: string | null;
 };
 
-// Mesmo teto de agentes/actions.ts (MAX_KB_FILE_BYTES) — checar aqui evita que
-// o usuário só descubra o limite depois de esperar o upload falhar.
-
 const STATUS: Record<string, { label: string; tone: "success" | "warn" | "danger" | "neutral" }> = {
   ready: { label: "Pronto", tone: "success" },
   pending: { label: "Processando", tone: "neutral" },

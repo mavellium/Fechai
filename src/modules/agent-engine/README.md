@@ -13,6 +13,7 @@ Cérebro do produto: recebe uma mensagem, monta o contexto (persona + RAG + hist
 - `conversation.ts` — `getOrCreateConversation`, `appendMessage`, `getRecentMessages`, `startFreshTestConversation`, `sendManualReply`.
 - `orchestrator.ts` — `runAgentTurn({tenantId, conversationId, leadId, userMessage})`: loop de tools (máx 3), RAG via `searchSimilarChunks`, persiste mensagens.
 - `summary.ts` — `summarizeConversation(tenantId, conversationId)`: resumo em texto da conversa, sob demanda, com cache no banco. Ver seção abaixo.
+- `disqualify.ts` — motivos da triagem (`DISQUALIFY_REASONS`), rótulos e o custo do atendimento manual que converte triagem em dinheiro. Ver seção abaixo.
 - `handoff.ts` — config da ação "Transferir para humano" e `addLeadToHandoffGroup`: põe o contato num grupo do WhatsApp ao passar para atendimento. Ver seção abaixo.
 
 ## Contratos expostos
@@ -244,8 +245,45 @@ ativa não há de onde convidar. O WhatsApp também recusa o convite direto quan
 a pessoa restringe quem pode adicioná-la a grupos — nesse caso a Evolution
 devolve erro, ele fica no log e a transferência segue normal.
 
+### Triagem de contatos (`disqualify.ts`, tool `disqualify_lead`)
+
+A ação **"Triagem de contatos"** deixa o agente encerrar sozinho quem não é
+cliente em potencial — vendedor, parceria, currículo, trote, engano, fora da
+área atendida. Sem ela, todo contato desses ou vira fila para uma pessoa ou
+some sem registro.
+
+**Desqualificado não é perdido.** `Lead.disqualifiedAt` é "nunca foi cliente";
+`Lead.status: "lost"` é "era cliente e não fechou" (quis, sumiu, escolheu
+outro). Contar os dois juntos apagaria exatamente o que a clínica quer ver.
+Por isso o carimbo é um campo próprio e não um status novo.
+
+**O carimbo é sempre explícito**, nunca inferido do texto da conversa: ele vira
+dinheiro na visão Financeira de /relatorios, e um palpite ali é um número que
+o cliente confere contra a própria folha de pagamento e não bate.
+
+Três detalhes do handler que não são acidentais:
+
+- **`updateMany` com `tenantId` no filtro**, não `update` por id cru — o id vem
+  do contexto do turno, e escrever por id sem o tenant é o tipo de caminho em
+  que um id trocado atravessa conta sem ninguém perceber.
+- **`disqualifiedAt: null` no filtro**: mantém o PRIMEIRO carimbo. O contato que
+  volta e é desqualificado de novo não pode entrar no relatório de dois meses.
+- **Não marca `needsHuman` e não encerra a conversa.** O ponto da triagem é
+  justamente não ocupar uma pessoa; e se o contato responder de novo, o agente
+  segue atendendo normalmente.
+
+O motivo (`parseReason`) **nunca recusa** a desqualificação: valor fora da lista
+vira `"outro"`. O valor está no carimbo, o motivo é o detalhe — perder a triagem
+inteira porque o LLM inventou uma string seria trocar o dado pelo enfeite.
+
+A conversão para tempo/dinheiro mora em `TenantAttendanceCost` (minutos por
+atendimento × custo da hora), declarado pela clínica em /relatorios. Sem isso,
+o relatório mostra só a contagem e convida a definir — nunca uma média do
+sistema apresentada como fato.
+
 ## O que NÃO faz
 
 - Não fala com o WhatsApp — quem envia é o `whatsapp` provider (chamado pelo webhook, ou por `sendManualMessage` numa resposta manual).
 - Não dispara follow-up no tempo — isso é o worker (Milestone 6); a tool só sinaliza.
 - Não resume conversa sozinho: `summarizeConversation` só roda quando alguém pede pela interface (ver seção acima).
+- Não decide sozinho quanto vale o tempo economizado pela triagem: a régua (minutos e custo/hora) é declarada pelo dono da conta em /relatorios.

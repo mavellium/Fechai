@@ -109,7 +109,17 @@ export async function listTenants(filters: TenantFilters = {}) {
     include: {
       whatsappInstance: { select: { status: true } },
       users: { select: { id: true, email: true, role: true } },
-      _count: { select: { users: true, leads: true, conversations: true } },
+      // `isTest: false` aqui pelo mesmo motivo do resto do produto: o sandbox
+      // não é negócio. Sem o filtro, o admin mostrava um total de leads maior
+      // que o de /relatorios para a mesma conta e não havia como saber qual
+      // dos dois estava certo.
+      _count: {
+        select: {
+          users: true,
+          leads: { where: { isTest: false } },
+          conversations: { where: { isTest: false } },
+        },
+      },
     },
   });
 }
@@ -120,7 +130,14 @@ export async function getTenantDetail(tenantId: string) {
     include: {
       users: { select: { email: true, role: true, createdAt: true } },
       whatsappInstance: { select: { status: true } },
-      _count: { select: { leads: true, conversations: true, knowledgeDocs: true, feedbacks: true } },
+      _count: {
+        select: {
+          leads: { where: { isTest: false } },
+          conversations: { where: { isTest: false } },
+          knowledgeDocs: true,
+          feedbacks: true,
+        },
+      },
     },
   });
 }
@@ -142,6 +159,24 @@ export async function adminSetUsageLimit(tenantId: string, limit: number | null)
   await prisma.tenant.update({
     where: { id: tenantId },
     data: { messageLimitOverride: limit },
+  });
+}
+
+/**
+ * Fixa (ou remove, com `null`) o preço realmente cobrado desta conta.
+ *
+ * Existe porque o preço de tabela nem sempre é o preço da fatura: desconto
+ * negociado, cortesia, contrato antigo mantido. Sem isto, a visão Financeira
+ * de /relatorios mostrava um "Investido" que o cliente sabia estar errado, e
+ * a saída seria trocar o plano — o que mexeria na cota junto.
+ *
+ * Mesmo desenho de `messageLimitOverride`: é override do VALOR, não do plano.
+ * Cota, limite de agentes e ações continuam vindo de `planKey`.
+ */
+export async function adminSetPriceOverride(tenantId: string, priceCents: number | null) {
+  await prisma.tenant.update({
+    where: { id: tenantId },
+    data: { priceCentsOverride: priceCents },
   });
 }
 

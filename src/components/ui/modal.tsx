@@ -51,11 +51,9 @@ export function Modal({
     <dialog
       ref={ref}
       aria-labelledby={titleId}
-      // `close` cobre todos os caminhos de fechamento — Esc, `el.close()` do
-      // efeito acima e o botão — e mantém o estado de quem chama em dia. Nada
-      // de `onCancel` junto: no Esc o navegador dispara `cancel` e depois
-      // `close`, e os dois ligados chamariam `onClose` em dobro.
-      onClose={onClose}
+      // O pai decide se pode fechar (inclusive quando há rascunho). Impedir
+      // o fechamento nativo no Esc mantém o diálogo aberto se ele recusar.
+      onCancel={(event) => { event.preventDefault(); onClose(); }}
       // Clique no overlay fecha. O alvo é o próprio <dialog> (o backdrop é
       // pseudo-elemento dele), nunca o conteúdo — daí a comparação.
       onClick={(e) => {

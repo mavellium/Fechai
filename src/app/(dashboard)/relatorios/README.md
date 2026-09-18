@@ -7,7 +7,7 @@ Guia para qualquer agente/pessoa dar prosseguimento nesta seção. Cobre **o que
 `/relatorios` tem **duas visões**, trocadas por um toggle no topo (querystring `?visao=`):
 
 - **Operacional** (padrão): KPIs com delta vs. período anterior, gráficos (fluxo, resultados, atendimento IA×humano, leads fechados IA×humano, donut por agente, leads por status, funil de conversão, resolução autônoma, recuperação por follow-up, horários de pico, tempo até a primeira resposta, comparecimento/no-show) e exportação CSV.
-- **Financeiro**: retorno financeiro **estimado** do investimento no projeto — KPIs (Retorno, Investido, ROI, Ponto de equilíbrio), gráfico de retorno acumulado × investido, retorno por agente, retorno mês a mês e custo por lead fechado. O valor por lead é definido manualmente pelo dono da conta; sem ele, os gráficos que dependem desse valor mostram um estado vazio com a chamada para definir, nunca uma série de zeros.
+- **Financeiro**: retorno financeiro **estimado** do investimento no projeto — KPIs (Retorno, Investido, ROI, Ponto de equilíbrio), gráfico de retorno acumulado × investido, retorno por agente, retorno mês a mês e custo por lead fechado. O valor por lead é definido manualmente pelo dono da conta; sem ele, os gráficos que dependem desse valor mostram um estado vazio com a chamada para definir, nunca uma série de zeros. No fim da visão fica **"O que o agente filtrou"** (triagem): contatos que o agente encerrou por não serem clientes em potencial, e o tempo/dinheiro que isso poupou.
 
 Tudo começa na `page.tsx`, que resolve a janela (`?periodo=`/`?de=&ate=`), computa os dados no servidor e entrega a props serializáveis aos componentes client.
 
@@ -19,7 +19,8 @@ Tudo começa na `page.tsx`, que resolve a janela (`?periodo=`/`?de=&ate=`), comp
 4. **A visão Financeira é estimativa**: valor por lead é subjetivo e o investido presume o **plano atual** por todo o período. A UI usa as palavras "estimado"/"aproximado" — nunca prometer exatidão.
 5. **Cor nunca é o único indicador** (design-ui skill §4): selo de ROI carrega texto (`ROI +128%`), não só verde/vermelho; o meter de resolução autônoma sempre mostra o `%` em texto.
 6. **Todo bucketing usa o fuso do painel** (`America/Sao_Paulo`, constante `PANEL_TIME_ZONE` em `service.ts`). Nunca `new Date(y, m, d)`/`getFullYear()`/`Intl.DateTimeFormat` sem `timeZone` — isso é hora do SERVIDOR, que em produção é UTC. Use `partsInZone`/`zonedTimeToUtc` de `src/modules/scheduling/time.ts`.
-7. **Paleta categórica só de `src/components/charts/palette.ts`** (`chartColor(index)`, variáveis CSS `--chart-1..5`). Nunca um hex novo solto num gráfico — a ordem atual foi validada com o script do skill dataviz; um hex fora dela pode reprovar CVD sem ninguém notar.
+7. **Número que vira dinheiro precisa de régua declarada pelo cliente.** Valor por lead (`TenantLeadValue`) e custo do atendimento (`TenantAttendanceCost`) são definidos pelo dono da conta. Sem a régua, a métrica derivada é `null` e a UI mostra o convite para definir — **nunca** uma média do sistema apresentada como fato. O cliente confere esse número contra a própria folha de pagamento.
+8. **Paleta categórica só de `src/components/charts/palette.ts`** (`chartColor(index)`, variáveis CSS `--chart-1..5`). Nunca um hex novo solto num gráfico — a ordem atual foi validada com o script do skill dataviz; um hex fora dela pode reprovar CVD sem ninguém notar.
 
 ## Arquivos (mapa)
 
@@ -31,8 +32,9 @@ Tudo começa na `page.tsx`, que resolve a janela (`?periodo=`/`?de=&ate=`), comp
 | `src/modules/scheduling/time.ts` | `partsInZone`, `zonedTimeToUtc` — base de todo o bucketing com fuso correto (ver regra 6). |
 | `src/modules/billing/plans.ts` | `PLANS` e `planOf(planKey)` — fonte do "investido" (preço do plano). |
 | `src/lib/format.ts` | `formatBRL(cents)` (e `dateLabel`, `relativeTime`, etc.). |
-| `prisma/schema.prisma` | Modelo `TenantLeadValue` (valor por lead com vigência). |
-| `src/app/(dashboard)/relatorios/actions.ts` | Server action `saveLeadValue` (salva/altera valor por lead). |
+| `prisma/schema.prisma` | Modelos `TenantLeadValue` (valor por lead) e `TenantAttendanceCost` (custo do atendimento manual), ambos com vigência. `Lead.disqualifiedAt`/`disqualifiedReason` (carimbo da triagem). `Tenant.priceCentsOverride` (preço negociado). |
+| `src/modules/agent-engine/disqualify.ts` | `DISQUALIFY_REASONS`, `reasonLabel`, `costPerLeadCents` e os tetos de sanidade do custo. Fonte única dos motivos de triagem. |
+| `src/app/(dashboard)/relatorios/actions.ts` | Server actions `saveLeadValue` (valor por lead) e `saveAttendanceCost` (minutos + custo/hora do atendimento). |
 
 ### Página e componentes (UI)
 
@@ -41,6 +43,7 @@ Tudo começa na `page.tsx`, que resolve a janela (`?periodo=`/`?de=&ate=`), comp
 | `page.tsx` | Server Component: lê `?periodo/de/ate/visao`, `resolveRange`, computa sob demanda, toggle `FilterTabs`, estado vazio, renderiza Operacional **ou** Financeiro. |
 | `RangePicker.tsx` | `<details>` com presets de período + intervalo custom; **preserva `?visao=`** nos links e no form (hidden input). |
 | `FinancialView.tsx` | "use client": linha de KPIs, card "Retorno estimado" + "Valor do lead" com `<dialog>` (campo com máscara `CurrencyInput`), delega os gráficos a `FinancialCharts.tsx`. |
+| `TriagePanel.tsx` | "use client": KPIs da triagem (filtrados / tempo / economia), quebra por motivo e `<dialog>` do custo do atendimento. |
 | `FinancialCharts.tsx` | "use client": retorno acumulado × investido, retorno por agente, retorno mês a mês, custo por lead. Só renderizado com valor por lead definido. |
 | `ChartPanel.tsx` | "use client": moldura de card para os gráficos Operacionais, com `ChartActions` (Ampliar / Como é calculado) e tabela de dados. |
 | `BarsChart.tsx` / `DonutChart.tsx` / `FlowChart.tsx` / `SeriesChart.tsx` | Gráficos em SVG/divs (sem lib). `SeriesChart` é o genérico de 2 séries (agora com eixo Y, crosshair/tooltip e rótulo de pico); `FlowChart` é um wrapper dele. |
@@ -51,7 +54,7 @@ Tudo começa na `page.tsx`, que resolve a janela (`?periodo=`/`?de=&ate=`), comp
 
 | Arquivo | Papel |
 | --- | --- |
-| `palette.ts` | Paleta categórica validada (skill dataviz) + `chartColor(index)`. **Fonte única de cor categórica** — ver regra 7. |
+| `palette.ts` | Paleta categórica validada (skill dataviz) + `chartColor(index)`. **Fonte única de cor categórica** — ver regra 8. |
 | `ChartActions.tsx` | Botões "Ampliar" e "Como é calculado" + dialogs. |
 | `ChartTable.tsx` | Tabela de dados do gráfico (tela cheia). |
 | `ChartTooltip.tsx` | `ChartTooltip`, `ChartCrosshair`, `ChartHoverLayer` — hover/foco de teclado compartilhado entre os gráficos de série e barra. |
@@ -92,7 +95,8 @@ Tudo começa na `page.tsx`, que resolve a janela (`?periodo=`/`?de=&ate=`), comp
 
 - **`closedLeads`**: agendamentos **efetivados** (`status in ["scheduled","done"]`) criados no período — mesma base do gráfico `closed` do Operacional.
 - **`months`**: meses de calendário (fuso do painel) tocados pela janela, mínimo 1. "Hoje"/"7"/"30" dentro do mesmo mês → 1. Para `"tudo"`, ancora na **criação da conta** (`Tenant.createdAt`).
-- **`investedCents`**: `planOf(tenant.planKey).priceCents × months`.
+- **`investedCents`**: `priceCents × months`, onde `priceCents` é `Tenant.priceCentsOverride ?? planOf(tenant.planKey).priceCents` — o admin pode fixar o preço negociado da conta sem mexer no plano (que mudaria a cota junto).
+- **`months` nunca começa antes da conta existir**: o início da janela é clampado em `Tenant.createdAt`. Sem esse corte, "últimos 30 dias" numa conta criada dia 09/09 tocava agosto E setembro e cobrava 2 meses de quem pagou 1 — o "Investido" ficava maior que a fatura e o ROI, menor que a realidade. Mês tocado conta **inteiro**, não proporcional aos dias: é o que a pessoa de fato pagou; ratear daria um ROI mais bonito que o extrato.
 - **Valor por lead** (`TenantLeadValue`): entradas com vigência (`startsAt`). O valor usado é o **em vigor no início da janela** (`maior startsAt ≤ from`); sem nenhum até lá, usa o mais antigo (valor definido no meio de uma janela curta). `"tudo"` usa o valor **atual** (mais recente). **Mudar o valor não recalcula períodos que já começaram** — é o contrato do "histórico por período".
 - **`returnCents`**: `closedLeads × valuePerLeadCents` (null enquanto não há valor definido).
 - **`roiPercent`**: `(retorno − investido) / investido × 100`, arredondado. `null` se `investedCents = 0` (Plano Grátis) ou sem valor definido.
@@ -101,6 +105,7 @@ Tudo começa na `page.tsx`, que resolve a janela (`?periodo=`/`?de=&ate=`), comp
 - **`breakEvenLeads`** (`null` sem valor por lead): `ceil(investedCents / valuePerLeadCents)`.
 - **`monthly`** (`null` sem valor por lead): um ponto por mês de calendário tocado pela janela, `retorno do mês − investido do mês` (investido também dividido em partes iguais pelos meses).
 - **`costPerLeadCents`**: `investedCents / closedLeads`, `null` sem fechamento no período.
+- **`triage`** (bloco "O que o agente filtrou"): `screened` = leads com `disqualifiedAt` no período (`isTest: false`), carimbados pela tool `disqualify_lead`. `previousScreened` é a mesma contagem na janela anterior (delta). `byReason` agrupa por `disqualifiedReason`, maiores primeiro. `minutesSaved`/`savedCents` derivam de `TenantAttendanceCost` (vigência igual à do valor por lead: o custo em vigor no início da janela) e são `null` enquanto a clínica não declarar o custo — ver regra de ouro 7.
 
 ### Selo de ROI (FinancialView)
 
@@ -115,7 +120,9 @@ Tudo começa na `page.tsx`, que resolve a janela (`?periodo=`/`?de=&ate=`), comp
 5. **Mudança de schema**: o projeto usa `prisma db push` (sem migrations). Tabela nova = adicionar ao schema + push. Para mudanças destrutivas que precisam preservar dados, há precedente em `prisma/manual/001-multi-agente.sql`.
 6. **Gráficos**: SVG puro/divs, sem biblioteca. `SeriesChart` usa `preserveAspectRatio="none"` + `non-scaling-stroke`; hover/foco vêm de `ChartTooltip`/`ChartHoverLayer` (o `<title>` nativo continua como reforço, não como única via).
 7. **Fuso**: se um número de bucket parecer deslocado (ex.: "hoje" começando ontem à noite), é quase sempre um `new Date(y, m, d)`/`getFullYear()`/`Intl.DateTimeFormat` sem `timeZone` que voltou a usar hora do servidor — ver regra de ouro 6. Isso já aconteceu uma vez nesta seção; o server local é America/Sao_Paulo, então o bug só aparece em produção (UTC).
-8. **Paleta**: nunca reordenar `CHART_LIGHT`/`CHART_DARK`/as variáveis `--chart-N` sem rodar `node scripts/validate_palette.js "<hex,...>" --mode light/dark` do skill dataviz de novo — a ordem atual (iris, warn, success, signal, violeta) foi escolhida especificamente para separar dois tons que ficavam indistinguíveis (ΔE abaixo do piso) na ordem antiga.
+8. **Desqualificado ≠ perdido**: `Lead.disqualifiedAt` é "nunca foi cliente" (vendedor, trote, fora da área); `Lead.status: "lost"` é "era cliente e não fechou". Somar os dois apagaria justamente o que a triagem mede. O carimbo é sempre explícito (tool), nunca inferido do texto da conversa — a métrica vira dinheiro e um palpite ali é um número que o cliente confere e não bate.
+9. **Contagem de leads**: toda contagem de negócio filtra `isTest: false`. O admin (`src/modules/admin/service.ts`) mostrava o total SEM esse filtro e divergia de /relatorios para a mesma conta; hoje o `_count` leva `where`. Se dois lugares mostrarem números diferentes, compare primeiro **janela** (a home usa 7/30 dias, o admin é histórico total) e depois `isTest`.
+10. **Paleta**: nunca reordenar `CHART_LIGHT`/`CHART_DARK`/as variáveis `--chart-N` sem rodar `node scripts/validate_palette.js "<hex,...>" --mode light/dark` do skill dataviz de novo — a ordem atual (iris, warn, success, signal, violeta) foi escolhida especificamente para separar dois tons que ficavam indistinguíveis (ΔE abaixo do piso) na ordem antiga.
 
 ## Como estender
 
@@ -125,7 +132,7 @@ Tudo começa na `page.tsx`, que resolve a janela (`?periodo=`/`?de=&ate=`), comp
 2. Variante em `ChartPanel.tsx`: incluir em `Variant`, `DESCRIPTIONS`, `chart()`, `table()` e `sources()`.
 3. (Opcional) seção nova no CSV em `export/route.ts`.
 4. Posicionar o `ChartPanel` na `page.tsx`.
-5. Se o gráfico usa cor categórica (mais de 2 séries por identidade, não por polaridade), usar `chartColor(index)` de `palette.ts` — nunca um hex novo.
+5. Se o gráfico usa cor categórica (mais de 2 séries por identidade, não por polaridade), usar `chartColor(index)` de `palette.ts` — nunca um hex novo (regra 8).
 
 ### Nova métrica Financeira
 

@@ -144,11 +144,17 @@ export function useUnsavedChanges(dirty: boolean, label: string, element?: RefOb
   useEffect(() => context?.register(id, { label, isDirty: () => dirty, element: () => element?.current ?? null }), [context, dirty, element, id, label]);
 }
 
+/** Registra também envios automáticos que não passam pelo submit nativo. */
+export function trackFormSubmission(form: HTMLFormElement) {
+  form.dispatchEvent(new Event("unsaved-form-submit"));
+}
+
 /** Só avança a referência salva no sucesso; falhas mantêm o rascunho protegido. */
-export function UnsavedForm({ result, label, action, onSubmit, ref: suppliedRef, ...props }: Omit<FormHTMLAttributes<HTMLFormElement>, "action"> & {
+export function UnsavedForm({ result, label, action, onSubmit, resetOnSuccess = false, ref: suppliedRef, ...props }: Omit<FormHTMLAttributes<HTMLFormElement>, "action"> & {
   result?: { ok?: boolean | string } | null;
   label: string;
   action?: (data: FormData) => void;
+  resetOnSuccess?: boolean;
   ref?: RefObject<HTMLFormElement | null>;
 }) {
   const localRef = useRef<HTMLFormElement>(null);
@@ -157,6 +163,12 @@ export function UnsavedForm({ result, label, action, onSubmit, ref: suppliedRef,
   const submitted = useRef<string | null>(null);
   const context = useContext(Context);
   const id = useId();
+  useEffect(() => {
+    const form = formRef.current;
+    const capture = () => { submitted.current = snapshotForm(form); };
+    form?.addEventListener("unsaved-form-submit", capture);
+    return () => form?.removeEventListener("unsaved-form-submit", capture);
+  }, [formRef]);
   useEffect(() => {
     baseline.current = snapshotForm(formRef.current);
     return context?.register(id, {
@@ -171,10 +183,11 @@ export function UnsavedForm({ result, label, action, onSubmit, ref: suppliedRef,
   }, [context, formRef, id, label]);
   useEffect(() => {
     if (result?.ok && submitted.current !== null) {
-      baseline.current = submitted.current;
+      if (resetOnSuccess) formRef.current?.reset();
+      baseline.current = resetOnSuccess ? snapshotForm(formRef.current) : submitted.current;
       submitted.current = null;
     }
-  }, [result]);
+  }, [result, resetOnSuccess, formRef]);
   return <form {...props} ref={formRef} onSubmit={(event) => {
     submitted.current = snapshotForm(event.currentTarget);
     if (onSubmit) onSubmit(event);

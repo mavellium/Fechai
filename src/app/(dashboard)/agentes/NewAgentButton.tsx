@@ -4,6 +4,7 @@ import { useActionState, useRef } from "react";
 import { Plus } from "lucide-react";
 import posthog from "posthog-js";
 import { Button } from "@/components/ui/button";
+import { UnsavedForm, useUnsavedNavigation } from "@/components/ui/unsaved-changes";
 import { Field, fieldProps } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { FormFeedback } from "@/components/ui/alert";
@@ -17,6 +18,8 @@ import { createAgentAction } from "./actions";
  */
 export function NewAgentButton({ usage }: { usage: AgentUsage }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const confirmNavigation = useUnsavedNavigation();
+  const close = () => confirmNavigation(() => ref.current?.close(), ref.current);
   const [state, formAction, pending] = useActionState(createAgentAction, null);
 
   if (!usage.canCreate) {
@@ -43,6 +46,7 @@ export function NewAgentButton({ usage }: { usage: AgentUsage }) {
 
       <dialog
         ref={ref}
+        onCancel={(event) => { event.preventDefault(); close(); }}
         aria-labelledby="novo-agente-titulo"
         className="m-auto w-[min(28rem,92vw)] rounded-surface border border-white/10 bg-ink p-6 text-white backdrop:bg-ink/70"
       >
@@ -53,7 +57,7 @@ export function NewAgentButton({ usage }: { usage: AgentUsage }) {
           Dê um nome que diga o que ele faz — “Vendas”, “Suporte”, “Unidade Centro”.
         </p>
 
-        <form
+        <UnsavedForm label="Novo agente" result={state}
           action={formAction}
           className="mt-5 space-y-4"
           onSubmit={() => posthog.capture("agent_creation_submitted")}
@@ -76,7 +80,7 @@ export function NewAgentButton({ usage }: { usage: AgentUsage }) {
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => ref.current?.close()}
+              onClick={close}
               disabled={pending}
             >
               Cancelar
@@ -85,7 +89,7 @@ export function NewAgentButton({ usage }: { usage: AgentUsage }) {
               Criar e configurar
             </Button>
           </div>
-        </form>
+        </UnsavedForm>
       </dialog>
     </>
   );

@@ -20,6 +20,7 @@ import { getAffiliateOverview } from "@/modules/affiliates/stats";
 import { AfiliadoView } from "./AfiliadoView";
 import { ChartPanel } from "./ChartPanel";
 import { FinancialView } from "./FinancialView";
+import { TriagePanel } from "./TriagePanel";
 import { RangePicker } from "./RangePicker";
 import { StatusBreakdown } from "./StatusBreakdown";
 
@@ -301,7 +302,24 @@ export default async function RelatoriosPage({
         </>
       ) : view === "financeiro" && financial ? (
         <FadeIn>
-          <FinancialView summary={financial} />
+          <div className="space-y-8">
+            <FinancialView summary={financial} />
+            {/* Triagem fica na visão Financeira, e não na Operacional, porque a
+                pergunta que ela responde é de dinheiro ("o que deixei de
+                gastar"), do mesmo tipo do ROI logo acima. */}
+            <section className="space-y-4">
+              <div>
+                <h2 className="font-display text-lg font-semibold text-ink panel:text-white">
+                  O que o agente filtrou
+                </h2>
+                <p className="mt-1 max-w-prose text-sm text-neutral panel:text-white/55">
+                  Contatos que não eram clientes em potencial e o agente
+                  encerrou sozinho — sem ocupar ninguém da equipe.
+                </p>
+              </div>
+              <TriagePanel triage={financial.triage} />
+            </section>
+          </div>
         </FadeIn>
       ) : view === "afiliados" && affiliateOverview ? (
         <AfiliadoView overview={affiliateOverview} />

@@ -217,6 +217,12 @@ export const AUDIT_EVENTS = {
     group: "admin",
     revertible: true,
   },
+  "admin.price_override_changed": {
+    label: "Alterou o preço cobrado da conta",
+    kind: "update",
+    group: "admin",
+    revertible: true,
+  },
   "admin.trial_changed": {
     label: "Alterou o período de teste",
     kind: "update",

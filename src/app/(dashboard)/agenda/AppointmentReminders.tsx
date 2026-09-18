@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { BellRing } from "lucide-react";
 import {
@@ -16,6 +16,7 @@ import {
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
+import { useUnsavedChanges, useUnsavedNavigation } from "@/components/ui/unsaved-changes";
 import { saveAppointmentRemindersAction } from "./actions";
 
 /**
@@ -61,6 +62,13 @@ export function AppointmentReminders({
   const [drafts, setDrafts] = useState<ReminderDraft[]>(() =>
     toDrafts(override ?? agentReminders),
   );
+  const contentRef = useRef<HTMLFieldSetElement>(null);
+  const [saved, setSaved] = useState(() => JSON.stringify({ custom: override !== null, drafts: toDrafts(override ?? agentReminders) }));
+  const confirmNavigation = useUnsavedNavigation();
+  useUnsavedChanges(open && (pending || JSON.stringify({ custom, drafts }) !== saved), "Lembretes da consulta", contentRef);
+  function close() {
+    if (!pending) confirmNavigation(() => setOpen(false), contentRef.current);
+  }
 
   function save(next: ReminderDraft[] | null) {
     setError(null);
@@ -73,6 +81,7 @@ export function AppointmentReminders({
         setError(res.error ?? "Não foi possível salvar os lembretes.");
         return;
       }
+      setSaved(JSON.stringify({ custom: next !== null, drafts: next ?? toDrafts(agentReminders) }));
       setOpen(false);
       router.refresh();
     });
@@ -82,14 +91,21 @@ export function AppointmentReminders({
 
   return (
     <>
-      <Button type="button" variant="outline" size="sm" onClick={() => setOpen(true)}>
+      <Button type="button" variant="outline" size="sm" onClick={() => {
+        const next = toDrafts(override ?? agentReminders);
+        setCustom(override !== null);
+        setDrafts(next);
+        setSaved(JSON.stringify({ custom: override !== null, drafts: next }));
+        setError(null);
+        setOpen(true);
+      }}>
         <BellRing size={14} aria-hidden />
         Lembretes
       </Button>
 
       <Modal
         open={open}
-        onClose={() => setOpen(false)}
+        onClose={close}
         title={`Lembretes — ${title}`}
         description={
           custom
@@ -97,7 +113,7 @@ export function AppointmentReminders({
             : "Esta consulta segue os lembretes configurados no agente."
         }
       >
-        <div className="space-y-4">
+        <fieldset ref={contentRef} disabled={pending} className="min-w-0 space-y-4">
           {sentCount > 0 && (
             <Alert tone="info">
               {sentCount === 1 ? "1 lembrete já foi enviado" : `${sentCount} lembretes já foram enviados`}{" "}
@@ -164,7 +180,7 @@ export function AppointmentReminders({
           {error && <Alert tone="danger">{error}</Alert>}
 
           <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={() => setOpen(false)}>
+            <Button type="button" variant="ghost" onClick={close}>
               Fechar
             </Button>
             <Button
@@ -183,7 +199,7 @@ export function AppointmentReminders({
               Sem nenhum lembrete na lista, este contato não receberá aviso desta consulta.
             </p>
           )}
-        </div>
+        </fieldset>
       </Modal>
     </>
   );

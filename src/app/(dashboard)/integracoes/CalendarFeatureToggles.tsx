@@ -7,6 +7,7 @@ import { CalendarCheck2, Stethoscope } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Card } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
+import { useUnsavedNavigation } from "@/components/ui/unsaved-changes";
 import { setCalendarFeatureAction } from "./actions";
 import type { CalendarFeatureKey } from "@/modules/scheduling/features";
 
@@ -56,6 +57,7 @@ export function CalendarFeatureToggles({
   panels?: Partial<Record<CalendarFeatureKey, React.ReactNode>>;
 }) {
   const router = useRouter();
+  const confirmNavigation = useUnsavedNavigation();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<CalendarFeatureKey | null>(null);
   const [, startTransition] = useTransition();
@@ -123,7 +125,7 @@ export function CalendarFeatureToggles({
                   loading={busy === item.key}
                   label={`${item.name}: ${item.enabled ? "habilitado" : "desabilitado"}`}
                   describedBy={descId}
-                  onCheckedChange={(next) => toggle(item.key, next)}
+                  onCheckedChange={(next) => confirmNavigation(() => toggle(item.key, next))}
                 />
               )}
             </div>

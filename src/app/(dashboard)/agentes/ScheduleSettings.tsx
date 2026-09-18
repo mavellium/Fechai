@@ -20,7 +20,7 @@ import { SelectMenu } from "@/components/ui/select-menu";
 import { Switch } from "@/components/ui/switch";
 import { Download } from "lucide-react";
 import { loadClinicorpDurationNamesAction, saveScheduleConfigAction } from "./actions";
-import { UnsavedForm } from "@/components/ui/unsaved-changes";
+import { trackFormSubmission, UnsavedForm } from "@/components/ui/unsaved-changes";
 
 const WEEKDAYS = [0, 1, 2, 3, 4, 5, 6];
 
@@ -155,6 +155,11 @@ export function ScheduleSettings({
     if (!form) return;
     const data = new FormData(form);
     data.set(key, String(checked));
+    // O envio automático também precisa atualizar a referência do aviso.
+    // O React ainda não renderizou o hidden com o novo valor neste clique.
+    const input = form.elements.namedItem(key);
+    if (input instanceof HTMLInputElement) input.value = String(checked);
+    trackFormSubmission(form);
     startTransition(() => formAction(data));
   }
 

@@ -2,6 +2,40 @@
 
 Uma linha por milestone concluído (mais recente no topo).
 
+## Triagem de contatos, investido correto e preço por conta — 2026-09-17
+
+O agente passou a encerrar sozinho quem não é cliente em potencial, e o
+relatório financeiro passou a mostrar o que a conta de fato pagou.
+
+- **Triagem (`disqualify_lead`)**: nova habilidade do agente. Vendedor, trote,
+  currículo ou contato fora da área atendida são encerrados com educação, sem
+  entrar na fila de ninguém. O carimbo mora em `Lead.disqualifiedAt` +
+  `disqualifiedReason`, **não** em `status: "lost"` — "nunca foi cliente" e "era
+  cliente e não fechou" são perguntas diferentes, e somá-las apagaria justamente
+  o que a triagem mede. O handler mantém o primeiro carimbo (contato que volta
+  não entra no relatório de dois meses) e não marca `needsHuman`, que seria o
+  oposto do objetivo.
+- **Economia estimada** em /relatorios (visão Financeira): contatos filtrados ×
+  custo do atendimento manual, declarado pela clínica em `TenantAttendanceCost`
+  (minutos + custo/hora, com vigência, igual ao valor por lead). Sem a régua
+  declarada, tempo e dinheiro vêm `null` e a UI convida a definir — nunca uma
+  média do sistema apresentada como fato, porque o cliente confere esse número
+  contra a própria folha de pagamento.
+- **"Investido" corrigido**: os meses cobrados agora são clampados em
+  `Tenant.createdAt`. Uma conta criada em 09/09, vista em 17/09 na janela de 30
+  dias (que começa em 19/08), cobrava 2 meses de plano de quem tinha 8 dias de
+  vida — R$ 398,00 em vez de R$ 199,00, inflando o investido e afundando o ROI
+  do cliente. Mês tocado segue contando inteiro (é o que se paga); ratear daria
+  um ROI mais bonito que o extrato.
+- **Preço por conta** (`Tenant.priceCentsOverride`, editável em /admin/contas):
+  override só do VALOR, para desconto negociado ou cortesia, sem trocar o plano
+  (que mudaria a cota junto). Mesmo desenho de `messageLimitOverride`. Zero é
+  cortesia legítima, por isso a resolução usa `??` e não `||`.
+- **Contagem de leads unificada**: o admin contava leads e conversas **sem**
+  filtrar `isTest`, e divergia de /relatorios para a mesma conta (108 × 90) sem
+  que desse para saber qual estava certo. O `_count` agora leva `where`. A
+  diferença que resta entre home e relatórios é só de janela (7 × 30 dias).
+
 ## Programa de afiliados: comissão progressiva e papéis da conta — 2026-08-30
 
 Programa de indicação completo, com landing pública, painel próprio e comissão

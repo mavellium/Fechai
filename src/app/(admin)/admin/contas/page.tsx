@@ -164,6 +164,7 @@ export default async function ContasPage({
                   status={t.status}
                   whatsappStatus={t.whatsappInstance?.status ?? "—"}
                   messageLimitOverride={t.messageLimitOverride}
+                  priceCentsOverride={t.priceCentsOverride}
                   trialEndsAt={t.trialEndsAt ? t.trialEndsAt.toISOString() : null}
                   planIsTrial={planOf(t.planKey).trialDays != null}
                   isAdminAccount={t.users.some((u) => u.role === "SUPERADMIN")}

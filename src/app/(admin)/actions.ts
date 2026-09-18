@@ -12,6 +12,7 @@ import {
   setTenantStatus,
   adminSetPlan,
   adminSetUsageLimit,
+  adminSetPriceOverride,
   adminSetTrialEndsAt,
   adminCreateAccount,
   deleteTenant,
@@ -204,6 +205,41 @@ export async function setTenantUsageLimit(tenantId: string, limit: number | null
 
   revalidatePath("/admin/contas");
   revalidatePath("/admin/logs");
+}
+
+/**
+ * Altera o preço cobrado da conta (null = volta ao preço de tabela do plano).
+ *
+ * Só afeta o "Investido"/ROI da visão Financeira de /relatorios. A cota e os
+ * limites continuam no plano — para mudar aqueles, muda-se o plano.
+ */
+export async function setTenantPriceOverride(tenantId: string, priceCents: number | null) {
+  await requireSuperadmin();
+
+  // Preço negativo inverteria o sinal do ROI do cliente; zero é legítimo
+  // (cortesia), então o piso é 0 e não 1.
+  if (priceCents !== null && (!Number.isInteger(priceCents) || priceCents < 0)) return;
+
+  const before = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { name: true, priceCentsOverride: true },
+  });
+  if (!before) return;
+
+  await adminSetPriceOverride(tenantId, priceCents);
+
+  await recordChange({
+    event: "admin.price_override_changed",
+    target: { type: "Tenant", id: tenantId, label: before.name },
+    before: { priceCentsOverride: before.priceCentsOverride },
+    after: { priceCentsOverride: priceCents },
+    tenantId,
+  });
+
+  revalidatePath("/admin/contas");
+  revalidatePath("/admin/logs");
+  // O relatório do cliente mostra o valor novo sem esperar o cache expirar.
+  revalidatePath("/relatorios");
 }
 
 /**

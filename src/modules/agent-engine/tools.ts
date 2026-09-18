@@ -9,6 +9,7 @@ import {
   listUpcomingLeadAppointments,
 } from "@/modules/scheduling/repository";
 import { formatInZone, parseLocalDateTime } from "@/modules/scheduling/time";
+import { DISQUALIFY_REASONS, parseReason } from "./disqualify";
 import { addLeadToHandoffGroup } from "./handoff";
 import { ACTION_BY_KEY, type ActionKey } from "./actions";
 import { freeSlotsHint, runSchedulingTool, SCHEDULING_TOOLS, schedulingToolAllowed } from "./scheduling-tools";
@@ -273,6 +274,45 @@ const TOOLS: Record<ActionKey, ToolDef> = {
       }
 
       return "Conversa marcada como 'precisa atenção' de um humano.";
+    },
+  },
+
+  disqualify_lead: {
+    schema: {
+      name: "disqualify_lead",
+      description:
+        "Marca o contato como fora do perfil de cliente quando ficou claro que ele não procura atendimento (vendedor, parceria, currículo, trote, engano) ou está fora da área atendida. Não use para quem procura atendimento mas está indeciso, achou caro ou quer pensar — esses continuam sendo clientes em potencial.",
+      parameters: {
+        type: "object",
+        properties: {
+          reason: {
+            type: "string",
+            enum: DISQUALIFY_REASONS.map((r) => r.key),
+            description: DISQUALIFY_REASONS.map((r) => `${r.key}: ${r.hint}`).join(" | "),
+          },
+        },
+        required: ["reason"],
+      },
+    },
+    handler: async (ctx, args) => {
+      const reason = parseReason(args.reason);
+
+      // `updateMany` com o tenant no filtro: o id do lead vem do contexto do
+      // turno, mas escrever por id cru numa tool é o tipo de caminho em que um
+      // id trocado atravessa tenant sem ninguém perceber.
+      //
+      // `disqualifiedAt: null` no filtro mantém o PRIMEIRO carimbo: se o
+      // contato voltar e o agente desqualificar de novo, a data original é a
+      // que conta — senão o mesmo contato entraria no relatório de dois meses.
+      await prisma.lead.updateMany({
+        where: { id: ctx.leadId, tenantId: ctx.tenantId, disqualifiedAt: null },
+        data: { disqualifiedAt: new Date(), disqualifiedReason: reason },
+      });
+
+      // A conversa NÃO é marcada como `needsHuman` — o ponto da triagem é
+      // exatamente não ocupar uma pessoa. Também não encerramos a conversa: se
+      // o contato responder de novo, o agente segue atendendo normalmente.
+      return "Contato registrado como fora do perfil. Encerre a conversa com educação, sem prometer retorno.";
     },
   },
 };

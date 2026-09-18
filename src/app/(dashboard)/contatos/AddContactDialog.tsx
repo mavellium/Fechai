@@ -5,6 +5,7 @@ import { useActionState } from "react";
 import { Plus, X } from "lucide-react";
 import posthog from "posthog-js";
 import { Button } from "@/components/ui/button";
+import { UnsavedForm, useUnsavedNavigation } from "@/components/ui/unsaved-changes";
 import { Field, fieldProps } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { FormFeedback } from "@/components/ui/alert";
@@ -16,6 +17,8 @@ import { addContact } from "./actions";
  */
 export function AddContactDialog({ label = "Novo contato" }: { label?: string }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const confirmNavigation = useUnsavedNavigation();
+  const close = () => confirmNavigation(() => ref.current?.close(), ref.current);
   const [state, formAction, pending] = useActionState(addContact, null);
 
   useEffect(() => {
@@ -31,6 +34,7 @@ export function AddContactDialog({ label = "Novo contato" }: { label?: string })
 
       <dialog
         ref={ref}
+        onCancel={(event) => { event.preventDefault(); close(); }}
         aria-labelledby="novo-contato-titulo"
         className="m-auto w-[min(28rem,92vw)] rounded-surface border border-white/15 bg-ink p-6 text-white backdrop:bg-ink/70"
       >
@@ -45,7 +49,7 @@ export function AddContactDialog({ label = "Novo contato" }: { label?: string })
           </div>
           <button
             type="button"
-            onClick={() => ref.current?.close()}
+            onClick={close}
             aria-label="Fechar"
             className="shrink-0 rounded-control p-1 text-white/60 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris"
           >
@@ -53,7 +57,7 @@ export function AddContactDialog({ label = "Novo contato" }: { label?: string })
           </button>
         </div>
 
-        <form
+        <UnsavedForm label="Novo contato" result={state} resetOnSuccess
           action={formAction}
           className="space-y-4"
           onSubmit={() => posthog.capture("contact_creation_submitted")}
@@ -86,7 +90,7 @@ export function AddContactDialog({ label = "Novo contato" }: { label?: string })
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => ref.current?.close()}
+              onClick={close}
               disabled={pending}
             >
               Cancelar
@@ -95,7 +99,7 @@ export function AddContactDialog({ label = "Novo contato" }: { label?: string })
               Adicionar
             </Button>
           </div>
-        </form>
+        </UnsavedForm>
       </dialog>
     </>
   );

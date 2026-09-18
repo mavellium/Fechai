@@ -50,7 +50,7 @@ type RevertibleModel = {
 const REVERTIBLE_MODELS: Record<string, RevertibleModel> = {
   Tenant: {
     delegate: "tenant",
-    fields: ["status", "planKey", "messageLimitOverride", "trialEndsAt"],
+    fields: ["status", "planKey", "messageLimitOverride", "priceCentsOverride", "trialEndsAt"],
     restorable: false,
     label: "conta",
     gender: "f",
