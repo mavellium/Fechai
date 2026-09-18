@@ -21,6 +21,7 @@ import { isEncryptionConfigured } from "@/lib/crypto";
 import { CalendarFeatureToggles } from "./CalendarFeatureToggles";
 import { GoogleCalendarCard, type GoogleState } from "./GoogleCalendarCard";
 import { ClinicorpCard, type ClinicorpState } from "./ClinicorpCard";
+import { listBlockedNumbers } from "@/modules/whatsapp/blocklist";
 import { WhatsappConnect } from "./WhatsappConnect";
 import { SnippetBox } from "./SnippetBox";
 
@@ -47,7 +48,7 @@ export default async function IntegracoesPage({
   const tab = TABS.some((t) => t.key === aba) ? (aba as (typeof TABS)[number]["key"]) : "canais";
 
   const since = new Date(new Date().getTime() - 7 * 86_400_000);
-  const [instance, inboundLast7, tenant, agent] = await Promise.all([
+  const [instance, inboundLast7, tenant, agent, blocked] = await Promise.all([
     prisma.whatsappInstance.findUnique({ where: { tenantId } }),
     prisma.message.count({
       where: { role: "user", createdAt: { gte: since }, conversation: { tenantId } },
@@ -71,6 +72,7 @@ export default async function IntegracoesPage({
       orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }],
       select: { name: true, enabled: true },
     }),
+    listBlockedNumbers(tenantId),
   ]);
 
   // Publica o widget.js do tenant na CDN na primeira visita — sem comando
@@ -249,6 +251,7 @@ export default async function IntegracoesPage({
           agentName={agent?.name ?? "Agente"}
           agentEnabled={agent?.enabled ?? false}
           ignoreGroups={tenant?.whatsappIgnoreGroups ?? true}
+          blocked={blocked}
         />
       </Card>
 

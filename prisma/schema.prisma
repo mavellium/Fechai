@@ -100,6 +100,7 @@ model Tenant {
   knowledgeDocs    KnowledgeDocument[]
   actions          TenantAction[]
   whatsappInstance WhatsappInstance?
+  whatsappBlocked  WhatsappBlockedNumber[]
   leads            Lead[]
   conversations    Conversation[]
   feedbacks        Feedback[]
@@ -1078,4 +1079,26 @@ model AffiliateCommission {
   @@index([affiliateId, status])
   @@index([affiliateId, periodMonth])
   @@index([createdAt])
+}
+
+/// Números que o agente ignora neste WhatsApp. Uma linha por (tenant, número) —
+/// tabela e não coluna Json no Tenant porque o webhook consulta isto a cada
+/// mensagem que entra: com índice único dá um lookup por chave, enquanto um
+/// array em Json obrigaria a carregar e varrer a lista inteira sempre.
+///
+/// `phone` guarda a forma CANÔNICA (só dígitos, ver `canonicalPhone()` em
+/// src/modules/whatsapp/blocklist.ts): o dono digita "(11) 98765-4321" e o
+/// WhatsApp entrega "5511987654321". Comparar o que foi digitado nunca casaria.
+/// `label` é a anotação livre de quem bloqueou ("ex-fornecedor", "spam") — o
+/// número sozinho não lembra o motivo seis meses depois.
+model WhatsappBlockedNumber {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  phone     String
+  label     String?
+  createdAt DateTime @default(now())
+
+  @@unique([tenantId, phone])
+  @@index([tenantId])
 }

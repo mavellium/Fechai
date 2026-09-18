@@ -6,6 +6,12 @@ import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { payloadTooLarge } from "@/lib/rate-limit";
 import { getWhatsAppProvider } from "@/modules/whatsapp";
+import {
+  MAX_BLOCKED_NUMBERS,
+  canonicalPhone,
+  formatBlockedPhone,
+  isBlockablePhone,
+} from "@/modules/whatsapp/blocklist";
 import { deployTenantWidget, WIDGET_CONFIG_SELECT } from "@/lib/widget/deploy";
 import { uploadToBunny } from "@/lib/bunny";
 import { setCalendarFeature, type CalendarFeatureKey } from "@/modules/scheduling/features";
@@ -249,6 +255,66 @@ export async function setWhatsappIgnoreGroups(ignore: boolean): Promise<Whatsapp
     ok: true,
     info: ignore ? "O agente ignora mensagens de grupos." : "O agente passa a responder em grupos.",
   };
+}
+
+/**
+ * Bloqueia um número: o agente passa a ignorar tudo que vier dele.
+ *
+ * Guarda a forma canônica (`canonicalPhone`) e não o que foi digitado — é o
+ * que permite casar com o JID que o WhatsApp entrega. Bloquear duas vezes o
+ * mesmo número (digitado com e sem o 55, por exemplo) não é erro: cai na mesma
+ * chave e a tela só confirma que já está lá.
+ */
+export async function blockWhatsappNumber(
+  phone: string,
+  label: string,
+): Promise<WhatsappControlResult> {
+  const { tenantId } = await requireTenant();
+
+  if (!isBlockablePhone(phone)) {
+    return { ok: false, error: "Número incompleto — informe DDD e o número." };
+  }
+  const canonical = canonicalPhone(phone);
+  const trimmedLabel = label.trim().slice(0, 60);
+
+  const existing = await prisma.whatsappBlockedNumber.findUnique({
+    where: { tenantId_phone: { tenantId, phone: canonical } },
+    select: { id: true },
+  });
+  if (existing) {
+    return { ok: true, info: `${formatBlockedPhone(canonical)} já estava bloqueado.` };
+  }
+
+  // Teto conferido só quando vai mesmo inserir: quem reenvia um número que já
+  // está na lista não pode tomar "lista cheia" por uma linha que não criaria.
+  const count = await prisma.whatsappBlockedNumber.count({ where: { tenantId } });
+  if (count >= MAX_BLOCKED_NUMBERS) {
+    return {
+      ok: false,
+      error: `Limite de ${MAX_BLOCKED_NUMBERS} números bloqueados. Para calar o agente em massa, pause o agente ou ignore grupos.`,
+    };
+  }
+
+  await prisma.whatsappBlockedNumber.create({
+    data: { tenantId, phone: canonical, label: trimmedLabel || null },
+  });
+
+  revalidatePath("/integracoes");
+  return { ok: true, info: `${formatBlockedPhone(canonical)} bloqueado. O agente vai ignorá-lo.` };
+}
+
+/** Desbloqueia (remove da lista). O histórico anterior ao bloqueio continua
+ *  em Conversas — bloquear nunca apagou nada. */
+export async function unblockWhatsappNumber(id: string): Promise<WhatsappControlResult> {
+  const { tenantId } = await requireTenant();
+
+  // deleteMany com o tenantId no where: um id de outra conta apaga 0 linhas em
+  // vez de apagar a linha alheia.
+  const { count } = await prisma.whatsappBlockedNumber.deleteMany({ where: { id, tenantId } });
+  if (!count) return { ok: false, error: "Esse número não está na lista." };
+
+  revalidatePath("/integracoes");
+  return { ok: true, info: "Número desbloqueado. O agente volta a responder." };
 }
 
 // --------------------------------------------------------- widget do site

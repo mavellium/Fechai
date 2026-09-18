@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { isEmojiOnly } from "@/lib/emoji";
 import { rateLimit } from "@/lib/rate-limit";
 import { getWhatsAppProvider } from "@/modules/whatsapp";
+import { isPhoneBlocked } from "@/modules/whatsapp/blocklist";
 import {
   appendMessage,
   getOrCreateConversation,
@@ -91,6 +92,23 @@ export async function POST(req: Request) {
   }
 
   const tenantId = instance.tenantId;
+
+  /**
+   * Números bloqueados: o agente ignora e pronto.
+   *
+   * Vem antes de tudo que custa ou grava — download/transcrição de áudio,
+   * lead, conversa, turno de LLM. Bloquear alguém que continuasse aparecendo
+   * em Conversas e consumindo a cota seria um bloqueio de mentira.
+   *
+   * Vale também para `isFromMe`: se o dono responder à mão num chat bloqueado,
+   * o eco não pode ressuscitar a conversa que o bloqueio existe para não ter.
+   * Grupo tem dono próprio (`whatsappIgnoreGroups`) e o JID de grupo não é um
+   * telefone — não passa por aqui.
+   */
+  if (!incoming.isGroup && (await isPhoneBlocked(tenantId, incoming.fromPhone))) {
+    return NextResponse.json({ ignored: "número bloqueado" });
+  }
+
   const agent = await resolveAgent(tenantId);
 
   // Opção "ouvir áudio": mensagem de voz é transcrita e entra como texto.

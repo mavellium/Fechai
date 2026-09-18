@@ -9,6 +9,8 @@ Conecta o número de WhatsApp do tenant e troca mensagens, atrás de uma interfa
 - `provider.ts` — interface `WhatsAppProvider` (`createInstance`, `getQrCode`, `sendMessage`, `parseWebhook`) e tipos (`IncomingMessage`, `WhatsAppStatus`).
 - `evolution.ts` — `EvolutionProvider`: chama a Evolution API v2 (`/instance/create`, `/instance/connect`, `/message/sendText`) e faz parse do evento `messages.upsert`. `isConfigured()` = tem URL+key.
 - `index.ts` — `getWhatsAppProvider()` (factory). Trocar de provedor acontece só aqui.
+- `blocklist.ts` — números que o agente ignora (`isPhoneBlocked`,
+  `canonicalPhone`, `listBlockedNumbers`). Ver abaixo.
 - `health.ts` — detecta número fora do ar (`checkTenantWhatsapp`, `scanWhatsappHealth`, `diagnose`) e sincroniza `WhatsappInstance.status` com a realidade.
 
 ## Contratos expostos
@@ -75,6 +77,46 @@ código de aparência perfeita:
    número que está atendendo derruba o atendimento para gerar um QR que ninguém
    pediu. O logout falhando não impede o QR: sessão já limpa devolve erro, e é
    exatamente o estado que queríamos.
+
+## Bloqueio de número: comparar é o problema, não a lista
+
+Guardar uma lista de telefones é fácil; **casar duas escritas do mesmo número**
+é onde isso quebra. O dono digita `(11) 98765-4321` na tela e o WhatsApp
+entrega `5511987654321` no `remoteJid` — e o mesmo aparelho ainda chega como
+`551187654321` quando a origem não traz o nono dígito. Comparar string com
+string daria o pior resultado possível: a tela listando "bloqueado" com o
+agente respondendo normalmente, e ninguém desconfiando de um bloqueio que a
+própria tela confirma.
+
+Por isso tudo passa por `canonicalPhone()`: só dígitos, sem o `55` e **sem o
+nono dígito** — DDD + 8 últimos. As três formas colidem de propósito. Número
+estrangeiro passa inteiro: sem saber o país não dá para cortar sem risco de
+bloquear outra pessoa. É a forma canônica que vai para a coluna
+`WhatsappBlockedNumber.phone` (única por tenant), então a consulta do webhook é
+um lookup por chave.
+
+Tabela e não coluna Json no Tenant porque isso roda **a cada mensagem que
+entra**; e não uma flag no `Lead` porque o caso comum é bloquear quem ainda
+**não** escreveu (o ex-fornecedor, o número de spam que já incomodou o
+vizinho) — esperar virar lead chegaria sempre tarde.
+
+No webhook a checagem vem **antes** de tudo que custa ou grava: download e
+transcrição de áudio, lead, conversa, turno de LLM. Um bloqueado que
+continuasse aparecendo em Conversas e queimando cota seria um bloqueio de
+mentira. Vale também para `isFromMe` — o dono respondendo à mão num chat
+bloqueado não pode ressuscitar a conversa que o bloqueio existe para não ter.
+Grupo não passa por aqui: tem dono próprio (`whatsappIgnoreGroups`) e JID de
+grupo não é telefone.
+
+Duas regras que os testes travam:
+
+- **Ignorar é silêncio total.** Nada é respondido — nem um "não posso falar".
+  Um aviso automático transformaria o bloqueio num convite a insistir.
+- **`isPhoneBlocked` nunca lança e, na dúvida, deixa passar.** Banco fora do ar
+  no webhook viraria 500 e a Evolution reentregaria em laço; e engolir a
+  mensagem de um cliente real por causa de uma falha de leitura custa a venda,
+  enquanto deixar passar um bloqueado é só incômodo.
+
 
 ## Verbos HTTP da Evolution v2
 
