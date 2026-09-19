@@ -11,65 +11,90 @@ import { attachReferralToTenant, ensureAffiliate } from "@/modules/affiliates/se
 import { isValidPlan } from "@/modules/billing/service";
 import {
   onlyDigits,
-  isValidCpfCnpj,
+  isValidCnpj,
   isValidPhone,
-  GENDER_OPTIONS,
+  isValidCep,
   BRAZILIAN_STATES,
   BUSINESS_SEGMENTS,
   REFERRAL_SOURCES,
+  OTHER_VALUE,
+  OTHER_DETAIL_MAX,
 } from "@/lib/br-lead";
 import { strongPassword } from "@/lib/password-schema";
 
-// Idade mínima exigida no cadastro — alinhado com a maioridade civil, já que
-// é quem assina a conta (responsável pelo negócio), não um lead qualquer.
-const MIN_AGE_YEARS = 18;
+/**
+ * Texto livre que acompanha a opção "Outro" de segmento e de origem. Opcional
+ * no schema e exigido pelo `superRefine` abaixo só quando a escolha foi
+ * "outro" — a obrigatoriedade depende de outro campo, coisa que `z.string()`
+ * sozinho não sabe expressar.
+ */
+const otherDetail = z.string().trim().max(OTHER_DETAIL_MAX).optional();
 
-const schema = z.object({
-  email: z.string().email(),
-  // A política inteira (tamanho, classes de caractere, sequências) mora em
-  // lib/password — o formulário usa exatamente a mesma função.
-  password: strongPassword(),
-  name: z.string().trim().optional(),
-  document: z
-    .string()
-    .refine(isValidCpfCnpj, "CPF ou CNPJ inválido — confira os números."),
-  phone: z.string().refine(isValidPhone, "Telefone inválido — inclua o DDD."),
-  phoneSecondary: z
-    .string()
-    .optional()
-    .refine((v) => !v || isValidPhone(v), "Telefone secundário inválido — inclua o DDD."),
-  birthDate: z
-    .string()
-    .refine((v) => !Number.isNaN(Date.parse(v)), "Data de nascimento inválida.")
-    .refine((v) => {
-      const date = new Date(v);
-      const age = (Date.now() - date.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
-      return age >= MIN_AGE_YEARS && age < 130;
-    }, `É preciso ter pelo menos ${MIN_AGE_YEARS} anos para criar uma conta.`),
-  gender: z.enum(GENDER_OPTIONS.map((g) => g.value) as [string, ...string[]], {
-    message: "Selecione um gênero.",
-  }),
-  city: z.string().trim().min(1, "Informe a cidade"),
-  state: z.enum(BRAZILIAN_STATES, { message: "Selecione um estado." }),
-  businessSegment: z.enum(BUSINESS_SEGMENTS.map((s) => s.value) as [string, ...string[]], {
-    message: "Selecione o segmento do seu negócio.",
-  }),
-  referralSource: z.enum(REFERRAL_SOURCES.map((r) => r.value) as [string, ...string[]], {
-    message: "Selecione como conheceu o fechai.",
-  }),
-  /**
-   * Papéis escolhidos no cadastro. "cliente" = usa o agente; "afiliado" = ganha
-   * comissão indicando. Não são exclusivos: a mesma pessoa pode ser os dois, e
-   * é justamente o caso mais comum (quem usa e gosta é quem melhor indica).
-   *
-   * A conta (tenant) nasce sempre — o painel, os planos e o próprio login
-   * dependem dela. Marcar "afiliado" apenas ACRESCENTA o cadastro no programa.
-   */
-  roles: z
-    .array(z.enum(["cliente", "afiliado"]))
-    .min(1, "Escolha como você vai usar o fechai.")
-    .default(["cliente"]),
-});
+const schema = z
+  .object({
+    email: z.string().email(),
+    // A política inteira (tamanho, classes de caractere, sequências) mora em
+    // lib/password — o formulário usa exatamente a mesma função.
+    password: strongPassword(),
+    name: z.string().trim().optional(),
+    // Só empresas se cadastram no fechai: o documento é CNPJ, e CPF é
+    // recusado aqui do mesmo jeito que o formulário nem oferece o caminho.
+    document: z.string().refine(isValidCnpj, "CNPJ inválido — confira os números."),
+    phone: z.string().refine(isValidPhone, "Telefone inválido — inclua o DDD."),
+    phoneSecondary: z
+      .string()
+      .optional()
+      .refine((v) => !v || isValidPhone(v), "Telefone secundário inválido — inclua o DDD."),
+    // Endereço do negócio. O CEP chega validado só no formato: quem diz se ele
+    // existe é o ViaCEP, no cliente, e um cadastro não é recusado aqui porque
+    // um serviço de terceiro não conhece um CEP novo.
+    zipCode: z.string().refine(isValidCep, "CEP inválido — são 8 dígitos."),
+    street: z.string().trim().min(1, "Informe o logradouro."),
+    addressNumber: z.string().trim().min(1, "Informe o número."),
+    complement: z.string().trim().max(120).optional(),
+    neighborhood: z.string().trim().min(1, "Informe o bairro."),
+    city: z.string().trim().min(1, "Informe a cidade"),
+    state: z.enum(BRAZILIAN_STATES, { message: "Selecione um estado." }),
+    businessSegment: z.enum(BUSINESS_SEGMENTS.map((s) => s.value) as [string, ...string[]], {
+      message: "Selecione o segmento do seu negócio.",
+    }),
+    businessSegmentOther: otherDetail,
+    referralSource: z.enum(REFERRAL_SOURCES.map((r) => r.value) as [string, ...string[]], {
+      message: "Selecione como conheceu o fechai.",
+    }),
+    referralSourceOther: otherDetail,
+    /**
+     * Papéis escolhidos no cadastro. "cliente" = usa o agente; "afiliado" = ganha
+     * comissão indicando. Não são exclusivos: a mesma pessoa pode ser os dois, e
+     * é justamente o caso mais comum (quem usa e gosta é quem melhor indica).
+     *
+     * A conta (tenant) nasce sempre — o painel, os planos e o próprio login
+     * dependem dela. Marcar "afiliado" apenas ACRESCENTA o cadastro no programa.
+     */
+    roles: z
+      .array(z.enum(["cliente", "afiliado"]))
+      .min(1, "Escolha como você vai usar o fechai.")
+      .default(["cliente"]),
+  })
+  .superRefine((data, ctx) => {
+    // "Outro" sem o detalhe é um dado que não qualifica ninguém — a mesma
+    // regra que o formulário aplica, repetida aqui porque o cliente não é
+    // quem decide o que entra no banco.
+    if (data.businessSegment === OTHER_VALUE && !data.businessSegmentOther) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["businessSegmentOther"],
+        message: "Conte qual é o segmento.",
+      });
+    }
+    if (data.referralSource === OTHER_VALUE && !data.referralSourceOther) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["referralSourceOther"],
+        message: "Conte como você conheceu o fechai.",
+      });
+    }
+  });
 
 /**
  * Freio por IP no cadastro.
@@ -121,8 +146,26 @@ export async function POST(req: Request) {
     );
   }
 
-  const { email, password, name, document, phone, phoneSecondary, birthDate, gender, city, state, businessSegment, referralSource, roles } =
-    parsed.data;
+  const {
+    email,
+    password,
+    name,
+    document,
+    phone,
+    phoneSecondary,
+    zipCode,
+    street,
+    addressNumber,
+    complement,
+    neighborhood,
+    city,
+    state,
+    businessSegment,
+    businessSegmentOther,
+    referralSource,
+    referralSourceOther,
+    roles,
+  } = parsed.data;
 
   const existing = await prisma.user.findUnique({ where: { email } });
   if (existing) {
@@ -141,12 +184,21 @@ export async function POST(req: Request) {
       document: onlyDigits(document),
       phone: onlyDigits(phone),
       phoneSecondary: phoneSecondary ? onlyDigits(phoneSecondary) : undefined,
-      birthDate: new Date(birthDate),
-      gender,
+      zipCode: onlyDigits(zipCode),
+      street: street.trim(),
+      addressNumber: addressNumber.trim(),
+      complement: complement?.trim() || undefined,
+      neighborhood: neighborhood.trim(),
       city: city.trim(),
       state,
       businessSegment,
+      // O detalhe só acompanha a opção "Outro": guardá-lo junto de um segmento
+      // nomeado deixaria no banco um texto que a tela nunca mostra.
+      businessSegmentOther:
+        businessSegment === OTHER_VALUE ? businessSegmentOther?.trim() : undefined,
       referralSource,
+      referralSourceOther:
+        referralSource === OTHER_VALUE ? referralSourceOther?.trim() : undefined,
     },
   });
 

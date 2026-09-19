@@ -7,7 +7,7 @@ import {
   listClinicorpBusyBlocks,
   pushAppointmentToClinicorp,
 } from "./clinicorp";
-import { dayKeyInZone, monthRangeUtc, parseLocalDateTime } from "./time";
+import { dayKeyInZone, monthRangeUtc, parseLocalDateTime, partsInZone, zonedTimeToUtc } from "./time";
 
 /**
  * Leitura e escrita da agenda. Toda query filtra por tenantId (regra do
@@ -122,11 +122,14 @@ export async function listFreeSlots(
   const valid = (at: Date) =>
     at.getTime() >= earliest && dayKeyInZone(at, cfg.timezone) === date && isWithinBusinessHours(at, cfg);
 
-  const grid = slotStartTimes(cfg)
+  const noon = parseLocalDateTime(date, "12:00", cfg.timezone);
+  if (!noon) return [];
+  const localDay = partsInZone(noon, cfg.timezone);
+  const grid = slotStartTimes(cfg, localDay.weekday)
     .map((time) => parseLocalDateTime(date, time, cfg.timezone))
     .filter((at): at is Date => at !== null && valid(at));
-  const dayStart = parseLocalDateTime(date, cfg.startTime, cfg.timezone);
-  const dayEnd = parseLocalDateTime(date, cfg.endTime, cfg.timezone);
+  const dayStart = zonedTimeToUtc(localDay.year, localDay.month, localDay.day, 0, 0, cfg.timezone);
+  const dayEnd = zonedTimeToUtc(localDay.year, localDay.month, localDay.day + 1, 0, 0, cfg.timezone);
   if (!dayStart || !dayEnd || !grid.length) return [];
 
   const [local, clinicorp] = await Promise.all([

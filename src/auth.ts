@@ -181,7 +181,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   callbacks: {
     /**
      * O Google aqui **não cria conta**: é outra porta para uma conta que já
-     * existe. O /cadastro exige CPF/CNPJ, telefone, nascimento e segmento —
+     * existe. O /cadastro exige CNPJ, telefone, endereço e segmento —
      * dados que o Google não fornece — então um tenant criado por aqui nasceria
      * pela metade. Quem ainda não tem conta é mandado para o cadastro.
      */

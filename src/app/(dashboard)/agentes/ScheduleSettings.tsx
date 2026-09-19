@@ -7,7 +7,6 @@ import {
   MAX_DURATION_MINUTES,
   MIN_DURATION_MINUTES,
   normalizeDurationLabel,
-  weekdayLabel,
 } from "@/modules/scheduling/config";
 import { ReminderList, fromDrafts, toDrafts, type ReminderDraft } from "./ReminderList";
 import { TIMEZONES } from "@/modules/scheduling/time";
@@ -22,7 +21,9 @@ import { Download } from "lucide-react";
 import { loadClinicorpDurationNamesAction, saveScheduleConfigAction } from "./actions";
 import { trackFormSubmission, UnsavedForm } from "@/components/ui/unsaved-changes";
 
-const WEEKDAYS = [0, 1, 2, 3, 4, 5, 6];
+import { WeeklyAvailabilityGrid } from "./WeeklyAvailabilityGrid";
+import { BlockedDatesList } from "./BlockedDatesList";
+import { getWeeklyAvailability } from "@/modules/scheduling/weekly-availability";
 
 /**
  * Uma variação em edição. `minutes: null` = campo em branco: o formulário
@@ -55,7 +56,7 @@ export function ScheduleSettings({
   clinicorpConnected?: boolean;
 }) {
   const [state, formAction, pending] = useActionState(saveScheduleConfigAction, null);
-  const [breaks, setBreaks] = useState(config.breaks);
+  const [weeklyAvailability, setWeeklyAvailability] = useState(() => getWeeklyAvailability(config));
   // `minutes: null` é a linha em branco: existe enquanto a pessoa digita e é o
   // estado em que cada tipo importado do Clinicorp nasce (a API não diz a
   // duração). O `required` do campo é o que impede salvar assim.
@@ -75,6 +76,7 @@ export function ScheduleSettings({
   // lista; quem grava é o botão do rodapé.
   const [reminderEnabled, setReminderEnabled] = useState(config.reminderEnabled);
   const [reminders, setReminders] = useState<ReminderDraft[]>(() => toDrafts(config.reminders));
+  const [blockedDates, setBlockedDates] = useState(() => config.blockedDates);
 
   const formRef = useRef<HTMLFormElement>(null);
 
@@ -189,60 +191,23 @@ export function ScheduleSettings({
         ))}
       </div>
 
-      <fieldset className="min-w-0">
-        <legend className="flex items-center gap-1.5 text-sm font-medium text-white/85">
-          Dias de atendimento
-          <InfoHint label="dias de atendimento">
-            O agente só marca horários dentro do que estiver aqui. Fora disso, ele oferece outra
-            data em vez de aceitar.
-          </InfoHint>
-        </legend>
-        <div className="mt-2 flex flex-wrap gap-2">
-          {WEEKDAYS.map((day) => {
-            const id = `workday-${day}`;
-            const label = weekdayLabel(day);
-            return (
-              <label
-                key={day}
-                htmlFor={id}
-                className="inline-flex cursor-pointer items-center gap-2 rounded-control border border-white/15 px-3 py-2 text-sm text-white/80 transition-colors has-[:checked]:border-iris/60 has-[:checked]:bg-iris/15 has-[:checked]:text-white"
-              >
-                <input
-                  id={id}
-                  type="checkbox"
-                  name="workdays"
-                  value={day}
-                  defaultChecked={config.workdays.includes(day)}
-                  className="h-4 w-4 accent-iris"
-                />
-                {label.slice(0, 3)}
-              </label>
-            );
-          })}
-        </div>
+      <WeeklyAvailabilityGrid value={weeklyAvailability} onChange={setWeeklyAvailability} disabled={pending} />
+      <input type="hidden" name="startTime" value={config.startTime} />
+      <input type="hidden" name="endTime" value={config.endTime} />
+      <input type="hidden" name="breaks" value="[]" />
+
+      {/* Logo depois da grade porque é a exceção dela: a grade diz que quarta
+          é dia de atendimento, isto diz que ESTA quarta não é. */}
+      <fieldset className="space-y-3">
+        <legend className="text-sm font-medium text-white/85">Dias sem atendimento</legend>
+        <p className="text-sm text-white/60">
+          Feriados, recesso ou qualquer data em que o agente não deve marcar — mesmo caindo num
+          dia liberado na grade acima.
+        </p>
+        <BlockedDatesList value={blockedDates} onChange={setBlockedDates} disabled={pending} />
       </fieldset>
 
       <div className="grid gap-5 sm:grid-cols-2">
-        <Field label="Abre às" htmlFor="schedule-start">
-          <Input
-            {...fieldProps("schedule-start")}
-            type="time"
-            name="startTime"
-            defaultValue={config.startTime}
-            required
-          />
-        </Field>
-
-        <Field label="Fecha às" htmlFor="schedule-end">
-          <Input
-            {...fieldProps("schedule-end")}
-            type="time"
-            name="endTime"
-            defaultValue={config.endTime}
-            required
-          />
-        </Field>
-
         <Field
           label="Duração padrão"
           htmlFor="schedule-duration"
@@ -359,35 +324,6 @@ export function ScheduleSettings({
             </Button>
           )}
         </div>
-      </fieldset>
-
-      <fieldset className="min-w-0 space-y-3">
-        <legend className="text-sm font-medium text-white/85">Pausas durante o expediente</legend>
-        <p className="text-sm text-white/60">Almoço, café ou outros intervalos. Repetem-se nos dias de atendimento e bloqueiam todo o período.</p>
-        <input type="hidden" name="breaks" value={JSON.stringify(breaks)} />
-        {breaks.length === 0 && <p className="text-sm text-white/50">Nenhuma pausa cadastrada.</p>}
-        {breaks.map((pause, index) => (
-          <div key={index} className="grid items-end gap-3 rounded-control border border-white/10 p-3 sm:grid-cols-[1fr_1fr_1fr_auto]">
-            <Field label="Nome da pausa" htmlFor={`pause-label-${index}`}>
-              <Input id={`pause-label-${index}`} placeholder="Ex: almoço" maxLength={60} value={pause.label}
-                onChange={(e) => setBreaks((current) => current.map((b, i) => i === index ? { ...b, label: e.target.value } : b))} />
-            </Field>
-            <Field label="Começa às" htmlFor={`pause-start-${index}`}>
-              <Input id={`pause-start-${index}`} type="time" required value={pause.startTime}
-                onChange={(e) => setBreaks((current) => current.map((b, i) => i === index ? { ...b, startTime: e.target.value } : b))} />
-            </Field>
-            <Field label="Termina às" htmlFor={`pause-end-${index}`}>
-              <Input id={`pause-end-${index}`} type="time" required value={pause.endTime}
-                onChange={(e) => setBreaks((current) => current.map((b, i) => i === index ? { ...b, endTime: e.target.value } : b))} />
-            </Field>
-            <Button type="button" variant="ghost" aria-label={`Remover pausa ${pause.label || index + 1}`}
-              onClick={() => setBreaks((current) => current.filter((_, i) => i !== index))}>Remover</Button>
-          </div>
-        ))}
-        <Button type="button" variant="outline" disabled={breaks.length >= 12}
-          onClick={() => setBreaks((current) => [...current, { label: "", startTime: "", endTime: "" }])}>
-          Adicionar pausa
-        </Button>
       </fieldset>
 
       <fieldset className="min-w-0 space-y-4 border-t border-white/10 pt-5">

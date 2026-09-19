@@ -1,4 +1,5 @@
 import { partsInZone } from "./time";
+import { describeRanges, getWeeklyAvailability, mergeRanges, minuteLabel, parseWeeklyAvailability, type WeeklyAvailability } from "./weekly-availability";
 
 /**
  * Configuração da ação "Agendar horário", guardada em `TenantAction.config`
@@ -10,6 +11,8 @@ import { partsInZone } from "./time";
  * até agora nenhuma ação usava.
  */
 export type ScheduleConfig = {
+  /** Grade por dia. Ausente somente no formato antigo; semana vazia = fechado. */
+  weeklyAvailability?: WeeklyAvailability;
   /** Pausas recorrentes em todos os dias de atendimento. */
   breaks: { label: string; startTime: string; endTime: string }[];
   allowCancellation: boolean;
@@ -40,6 +43,24 @@ export type ScheduleConfig = {
   /** Antecedência mínima em horas — evita o agente marcar "daqui a 5 minutos". */
   minNoticeHours: number;
   /**
+   * Datas em que o negócio não atende, mesmo caindo num dia da semana liberado
+   * na grade: feriado, recesso, congresso, reforma.
+   *
+   * Existe porque a grade só conhece DIA DA SEMANA — para ela, 25/12 numa
+   * quarta é só mais uma quarta, e sem isto o agente marcaria consulta no
+   * Natal. É uma lista manual de propósito: feriado nacional nem sempre é
+   * feriado para a clínica (muitas atendem), feriado municipal não cabe numa
+   * tabela nossa, e recesso não é feriado nenhum — quem sabe o que fecha é o
+   * dono, e uma lista automática erraria dos dois lados.
+   *
+   * Cada item é `YYYY-MM-DD` no fuso do negócio (`timezone`), não um instante:
+   * "25 de dezembro" é um dia do calendário de quem atende, e guardar UTC faria
+   * o bloqueio escorregar para o dia 24 ou 26 dependendo do fuso.
+   *
+   * Ordenada e sem repetição na leitura. Vazia é o caso comum.
+   */
+  blockedDates: BlockedDate[];
+  /**
    * Manda lembretes ao contato antes da consulta. Nasce desligado: quem
    * acabou de ligar o agendamento não escolheu mandar mensagem sozinho.
    */
@@ -55,6 +76,17 @@ export type ScheduleConfig = {
    * tela lista.
    */
   reminders: ReminderRule[];
+};
+
+export type BlockedDate = {
+  /** Dia do calendário no fuso do negócio, `YYYY-MM-DD`. */
+  date: string;
+  /**
+   * Por que fecha ("Natal", "Recesso"). Só para a pessoa se reconhecer na
+   * lista meses depois — o agente não precisa do motivo para não oferecer o
+   * dia, então uma data sem rótulo continua valendo.
+   */
+  label: string;
 };
 
 export type ReminderRule = {
@@ -137,6 +169,29 @@ export const MAX_DURATION_MINUTES = 480;
 /** Teto de variações. O agente precisa escolher uma lendo a lista no prompt. */
 export const MAX_DURATIONS = 12;
 
+/**
+ * Teto de datas bloqueadas. Alto porque cabe um ano inteiro de feriados mais o
+ * recesso, e baixo o bastante para a lista não crescer sem fim dentro de um
+ * Json que é lido a cada turno do agente.
+ */
+export const MAX_BLOCKED_DATES = 120;
+
+/**
+ * Quantas datas bloqueadas entram no prompt do agente. A lista inteira pode
+ * ter um ano de feriados; o contato marca para as próximas semanas, e cada
+ * linha aqui é token gasto em todo turno da conversa.
+ */
+export const MAX_BLOCKED_DATES_IN_PROMPT = 12;
+
+/** `YYYY-MM-DD` que existe de verdade no calendário (recusa 31/02). */
+export function isCalendarDate(v: unknown): v is string {
+  if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  const [year, month, day] = v.split("-").map(Number);
+  if (month < 1 || month > 12 || day < 1) return false;
+  // Dia 0 do mês seguinte = último dia deste mês; cobre bissexto sem tabela.
+  return day <= new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
 export const DEFAULT_SCHEDULE_CONFIG: ScheduleConfig = {
   breaks: [],
   allowCancellation: false,
@@ -150,6 +205,7 @@ export const DEFAULT_SCHEDULE_CONFIG: ScheduleConfig = {
   endTime: "18:00",
   location: "",
   minNoticeHours: 2,
+  blockedDates: [],
   reminderEnabled: false,
   reminders: [{ minutesBefore: DEFAULT_REMINDER_MINUTES, template: DEFAULT_REMINDER_TEMPLATE }],
 };
@@ -290,6 +346,7 @@ export function parseScheduleConfig(raw: unknown): ScheduleConfig {
   }).slice(0, MAX_DURATIONS) : [];
 
   return {
+    ...(c.weeklyAvailability !== undefined ? { weeklyAvailability: parseWeeklyAvailability(c.weeklyAvailability) } : {}),
     breaks,
     durations,
     allowCancellation: c.allowCancellation === true,
@@ -312,6 +369,9 @@ export function parseScheduleConfig(raw: unknown): ScheduleConfig {
       typeof c.minNoticeHours === "number" && c.minNoticeHours >= 0 && c.minNoticeHours <= 168
         ? Math.round(c.minNoticeHours)
         : DEFAULT_SCHEDULE_CONFIG.minNoticeHours,
+    // Config antiga não tem o campo: lista vazia, que é "não bloqueia nada" —
+    // o comportamento que essas contas já tinham.
+    blockedDates: parseBlockedDates(c.blockedDates),
     // Config antiga (sem estes campos) não liga o lembrete sozinho: mandar
     // mensagem para a base de pacientes de uma conta é decisão do dono, não
     // efeito colateral de uma atualização do produto.
@@ -477,6 +537,12 @@ function describeReminders(cfg: ScheduleConfig): string {
 
 /** Resumo em uma linha — usado nos cards da configuração e da agenda. */
 export function describeSchedule(cfg: ScheduleConfig): string {
+  if (cfg.weeklyAvailability !== undefined) {
+    const week = getWeeklyAvailability(cfg);
+    const days = week.flatMap((ranges, day) => ranges.length ? [WEEKDAY_SHORT[day]] : []);
+    const hours = week.flat().reduce((sum, r) => sum + r.end - r.start, 0) / 60;
+    return `${days.length ? `${days.join(", ")} · ${Number(hours.toFixed(2)).toLocaleString("pt-BR")}h por semana` : "Sem horários disponíveis"} · blocos de ${cfg.durationMinutes} min${describeReminders(cfg)}`;
+  }
   const days = cfg.workdays.map((d) => WEEKDAY_SHORT[d]).join(", ");
   return `${days} · ${cfg.startTime}–${cfg.endTime} · blocos de ${cfg.durationMinutes} min${cfg.durations.length ? ` (+${cfg.durations.length} variação(ões))` : ""}${cfg.breaks.length ? ` · ${cfg.breaks.length} pausa(s)` : ""}${describeReminders(cfg)}`;
 }
@@ -494,7 +560,9 @@ export function scheduleSystemContext(cfg: ScheduleConfig, now = new Date()): st
   return [
     "Agendamento:",
     `- Hoje é ${today} (${WEEKDAY_LABELS[p.weekday]}), ${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")} no fuso ${cfg.timezone}.`,
-    `- Atendemos ${days}, das ${cfg.startTime} às ${cfg.endTime}.`,
+    ...(cfg.weeklyAvailability !== undefined
+      ? getWeeklyAvailability(cfg).map((ranges, day) => `- ${WEEKDAY_LABELS[day]}: ${describeRanges(ranges)}.`)
+      : [`- Atendemos ${days}, das ${cfg.startTime} às ${cfg.endTime}.`]),
     `- Cada horário dura ${cfg.durationMinutes} minutos por padrão.`,
     // Sem a instrução de repassar o nome exato, o LLM parafraseia ("limpeza
     // dental") e a variação não é encontrada — o bloco sai do tamanho padrão
@@ -505,7 +573,17 @@ export function scheduleSystemContext(cfg: ScheduleConfig, now = new Date()): st
           "- Se o contato disser o que precisa, passe o nome EXATO do tipo em tipoAtendimento ao chamar schedule_meeting. Se não der para saber, pergunte antes de marcar; em último caso marque sem o tipo e o horário fica com a duração padrão.",
         ]
       : []),
-    ...cfg.breaks.map((b) => `- Pausa${b.label ? ` (${b.label})` : ""}: ${b.startTime}–${b.endTime}. Não ofereça nem marque horários que atravessem esse intervalo.`),
+    ...(cfg.weeklyAvailability !== undefined ? ["- Só atenda dentro dos períodos de cada dia. Os intervalos entre períodos são pausas: não ofereça consultas que os atravessem."] : cfg.breaks.map((b) => `- Pausa${b.label ? ` (${b.label})` : ""}: ${b.startTime}–${b.endTime}. Não ofereça nem marque horários que atravessem esse intervalo.`)),
+    // Só os dias que ainda vão acontecer, e no máximo alguns: feriado do ano
+    // passado no prompt é token gasto para uma data que ninguém vai pedir.
+    ...(() => {
+      const upcoming = cfg.blockedDates.filter((b) => b.date >= today).slice(0, MAX_BLOCKED_DATES_IN_PROMPT);
+      if (!upcoming.length) return [];
+      return [
+        `- NÃO atendemos nestes dias: ${upcoming.map((b) => (b.label ? `${b.date} (${b.label})` : b.date)).join(", ")}.`,
+        "- Se o contato pedir um desses dias, diga que não haverá atendimento nessa data e ofereça o dia seguinte de atendimento. Nunca marque nesses dias.",
+      ];
+    })(),
     cfg.minNoticeHours > 0
       ? `- Só marque com pelo menos ${cfg.minNoticeHours}h de antecedência.`
       : "",
@@ -532,25 +610,68 @@ export function scheduleSystemContext(cfg: ScheduleConfig, now = new Date()): st
  * Inícios possíveis ("HH:MM") de um dia de atendimento: blocos da duração a
  * partir do início do expediente e de novo a partir do fim de cada pausa — com
  * almoço 12:00–13:00 e blocos de 45 min, a tarde começa às 13:00, não às 13:30.
- * Não olha dia da semana nem conflito; isso fica com `listFreeSlots`.
+ * Com weekday, usa somente os períodos desse dia. Sem weekday, mantém uma
+ * união para consumidores antigos; `listFreeSlots` sempre passa o dia local.
  */
-export function slotStartTimes(cfg: ScheduleConfig): string[] {
-  const end = minutesOf(cfg.endTime);
+export function slotStartTimes(cfg: ScheduleConfig, weekday?: number): string[] {
+  const week = getWeeklyAvailability(cfg);
+  const periods = weekday === undefined ? mergeRanges(week.flat()) : week[weekday] ?? [];
   const starts = new Set<number>();
-  for (const from of [minutesOf(cfg.startTime), ...cfg.breaks.map((b) => minutesOf(b.endTime))]) {
-    for (let m = from; m + cfg.durationMinutes <= end; m += cfg.durationMinutes) starts.add(m);
+  for (const period of periods) {
+    for (let m = period.start; m + cfg.durationMinutes <= period.end; m += cfg.durationMinutes) starts.add(m);
   }
   return [...starts]
     .sort((a, b) => a - b)
-    .map((m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`);
+    .map(minuteLabel);
 }
 
 /** O horário cai dentro do expediente configurado? */
+/**
+ * Lê a lista de datas bloqueadas. Nunca lança (a linha pode ser antiga, null
+ * ou editada à mão) e descarta o que não for uma data real — uma entrada
+ * quebrada vira dia sem bloqueio, nunca um dia bloqueado por engano.
+ */
+export function parseBlockedDates(raw: unknown): BlockedDate[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  return raw
+    .flatMap((item) => {
+      // Aceita tanto a lista de objetos quanto uma lista de strings simples:
+      // gravar só as datas é o formato que a tela usava antes do rótulo.
+      const date = typeof item === "string" ? item : (item as Record<string, unknown>)?.date;
+      if (!isCalendarDate(date)) return [];
+      // Data repetida bloquearia o mesmo dia duas vezes e apareceria duplicada
+      // na tela; a primeira vence e leva o rótulo dela.
+      if (seen.has(date)) return [];
+      seen.add(date);
+      const label = typeof item === "object" && item !== null
+        ? (item as Record<string, unknown>).label
+        : undefined;
+      return [{ date, label: typeof label === "string" ? label.trim().slice(0, 60) : "" }];
+    })
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .slice(0, MAX_BLOCKED_DATES);
+}
+
+/** `YYYY-MM-DD` do instante no fuso do negócio — o dia de quem atende. */
+export function localDateKey(at: Date, timezone: string): string {
+  const p = partsInZone(at, timezone);
+  return `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")}`;
+}
+
+/** A data caiu num dia bloqueado (feriado, recesso)? */
+export function isBlockedDate(at: Date, cfg: ScheduleConfig): boolean {
+  if (cfg.blockedDates.length === 0) return false;
+  const key = localDateKey(at, cfg.timezone);
+  return cfg.blockedDates.some((blocked) => blocked.date === key);
+}
+
 export function isWithinBusinessHours(startsAt: Date, cfg: ScheduleConfig): boolean {
+  // Data bloqueada vence a grade: o dia da semana está liberado, mas ESTE dia
+  // não. Fica antes da grade porque é a recusa mais barata e mais categórica.
+  if (isBlockedDate(startsAt, cfg)) return false;
   const p = partsInZone(startsAt, cfg.timezone);
-  if (!cfg.workdays.includes(p.weekday)) return false;
   const minutes = p.hour * 60 + p.minute;
   const end = minutes + cfg.durationMinutes;
-  return minutes >= minutesOf(cfg.startTime) && end <= minutesOf(cfg.endTime)
-    && !cfg.breaks.some((b) => minutes < minutesOf(b.endTime) && end > minutesOf(b.startTime));
+  return getWeeklyAvailability(cfg)[p.weekday]?.some((range) => minutes >= range.start && end <= range.end) ?? false;
 }

@@ -1,12 +1,12 @@
 "use client";
 
 import { useId, useState } from "react";
-import { Eye, EyeOff, Lock, Mail, Phone, IdCard, CalendarDays } from "lucide-react";
+import { Eye, EyeOff, Lock, Mail, Phone, Building2, MapPin, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { Select } from "@/components/ui/select";
+import { SelectMenu } from "@/components/ui/select-menu";
 import { LabeledField } from "@/components/ui/field";
 import { cn } from "@/lib/utils";
-import { maskCpfCnpj, maskPhone, isValidCpfCnpj, isValidPhone } from "@/lib/br-lead";
+import { maskCnpj, maskPhone, maskCep, isValidCnpj, isValidPhone, isValidCep } from "@/lib/br-lead";
 
 // O `LabeledField` local virou o `Field` de `components/ui` — mesmo contrato,
 // uma implementação só para (auth), onboarding e painel. Reexportado aqui para
@@ -143,6 +143,10 @@ export function PasswordField({
  * valor morando no wizard, ele sobrevive à navegação entre passos.
  */
 
+/**
+ * Documento da empresa. **Só CNPJ**: o fechai é vendido para negócios, e um
+ * campo que aceitasse CPF prometeria um cadastro que o servidor recusa.
+ */
 export function DocumentField({
   value,
   onChange,
@@ -156,9 +160,9 @@ export function DocumentField({
 }) {
   const id = useId();
   return (
-    <LabeledField label="CPF ou CNPJ" htmlFor={id} error={error}>
+    <LabeledField label="CNPJ" htmlFor={id} error={error} hint="Só aceitamos cadastro de empresas.">
       <div className="relative">
-        <IdCard
+        <Building2
           size={16}
           className="pointer-events-none absolute inset-y-0 left-3 my-auto text-neutral"
           aria-hidden
@@ -168,17 +172,84 @@ export function DocumentField({
           name="document"
           inputMode="numeric"
           autoComplete="off"
-          placeholder="000.000.000-00"
+          placeholder="00.000.000/0000-00"
           value={value}
           required
           aria-invalid={Boolean(error)}
           className={cn("pl-10", error && "border-danger focus-visible:ring-danger")}
-          onChange={(e) => onChange(maskCpfCnpj(e.currentTarget.value))}
+          onChange={(e) => onChange(maskCnpj(e.currentTarget.value))}
           onBlur={(e) => {
             const v = e.currentTarget.value;
-            onValidate?.(!v ? null : isValidCpfCnpj(v) ? null : "CPF ou CNPJ inválido — confira os números.");
+            onValidate?.(!v ? null : isValidCnpj(v) ? null : "CNPJ inválido — confira os números.");
           }}
         />
+      </div>
+    </LabeledField>
+  );
+}
+
+/**
+ * CEP do negócio, com a busca de endereço pendurada no campo.
+ *
+ * Quem dispara a busca é o formulário (prop `onComplete`, chamada quando os 8
+ * dígitos entram) — este componente não conhece o ViaCEP. O `loading` vem de
+ * fora pelo mesmo motivo: é o formulário que sabe se a busca está em curso.
+ */
+export function CepField({
+  value,
+  onChange,
+  onComplete,
+  loading,
+  hint,
+  error,
+  onValidate,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  /** Chamada assim que o CEP fica completo (8 dígitos). */
+  onComplete?: (cep: string) => void;
+  loading?: boolean;
+  hint?: string;
+  error?: string | null;
+  onValidate?: (err: string | null) => void;
+}) {
+  const id = useId();
+  return (
+    <LabeledField label="CEP" htmlFor={id} error={error} hint={hint}>
+      <div className="relative">
+        <MapPin
+          size={16}
+          className="pointer-events-none absolute inset-y-0 left-3 my-auto text-neutral"
+          aria-hidden
+        />
+        <Input
+          id={id}
+          name="zipCode"
+          inputMode="numeric"
+          autoComplete="postal-code"
+          placeholder="00000-000"
+          value={value}
+          required
+          aria-invalid={Boolean(error)}
+          aria-busy={loading || undefined}
+          className={cn("pl-10 pr-10", error && "border-danger focus-visible:ring-danger")}
+          onChange={(e) => {
+            const masked = maskCep(e.currentTarget.value);
+            onChange(masked);
+            if (isValidCep(masked)) onComplete?.(masked);
+          }}
+          onBlur={(e) => {
+            const v = e.currentTarget.value;
+            onValidate?.(!v ? null : isValidCep(v) ? null : "CEP inválido — são 8 dígitos.");
+          }}
+        />
+        {loading && (
+          <Loader2
+            size={16}
+            className="pointer-events-none absolute inset-y-0 right-3 my-auto animate-spin text-iris"
+            aria-hidden
+          />
+        )}
       </div>
     </LabeledField>
   );
@@ -232,48 +303,17 @@ export function PhoneField({
   );
 }
 
-export function DateField({
-  label,
-  name,
-  value,
-  onChange,
-  hint,
-  max,
-  error,
-}: {
-  label: string;
-  name: string;
-  value: string;
-  onChange: (value: string) => void;
-  hint?: string;
-  max?: string;
-  error?: string | null;
-}) {
-  const id = useId();
-  return (
-    <LabeledField label={label} htmlFor={id} error={error} hint={hint}>
-      <div className="relative">
-        <CalendarDays
-          size={16}
-          className="pointer-events-none absolute inset-y-0 left-3 my-auto text-neutral"
-          aria-hidden
-        />
-        <Input
-          id={id}
-          name={name}
-          type="date"
-          value={value}
-          max={max}
-          required
-          aria-invalid={Boolean(error)}
-          className={cn("pl-10", error && "border-danger focus-visible:ring-danger")}
-          onChange={(e) => onChange(e.currentTarget.value)}
-        />
-      </div>
-    </LabeledField>
-  );
-}
-
+/**
+ * Campo de escolha do cadastro.
+ *
+ * Usa o `SelectMenu` do produto, não o `<select>` nativo: o menu nativo é
+ * pintado pelo sistema operacional e abre com a fonte, o realce e as cores
+ * dele, fora dos tokens da marca — e não há CSS que alcance aquele popup.
+ *
+ * O menu do produto é `position: fixed`, então ele também escapa de qualquer
+ * ancestral com `overflow` (o passo do wizard, que anima altura) em vez de
+ * nascer cortado dentro dele.
+ */
 export function SelectField({
   label,
   name,
@@ -283,6 +323,9 @@ export function SelectField({
   icon,
   placeholder = "Selecione",
   optional,
+  disabled,
+  about,
+  error,
   className,
 }: {
   label: string;
@@ -293,28 +336,42 @@ export function SelectField({
   icon?: React.ComponentType<{ size?: number | string; className?: string }>;
   placeholder?: string;
   optional?: boolean;
+  /** Desabilita o controle — use junto de `about` dizendo o que falta. */
+  disabled?: boolean;
+  /**
+   * Explicação na bolinha ao lado do rótulo (hover, clique e teclado). É o
+   * lugar de "por que este campo está assim" — a dica de preenchimento, que a
+   * pessoa precisa ler antes de digitar, continua sendo `hint` e fica visível.
+   */
+  about?: React.ReactNode;
+  error?: string | null;
   className?: string;
 }) {
   const id = useId();
+  const labelId = `${id}-label`;
   return (
-    <LabeledField label={label} htmlFor={id} optional={optional} className={className}>
-      <Select
-        id={id}
+    <LabeledField
+      label={label}
+      htmlFor={id}
+      optional={optional}
+      about={about}
+      error={error}
+      labelId={labelId}
+      className={className}
+    >
+      <SelectMenu
         name={name}
+        label={label}
+        // O rótulo visível é quem nomeia o controle; repetir o texto em
+        // `aria-label` faria o leitor de tela ignorar o que está na tela.
+        labelledBy={labelId}
         icon={icon}
-        required={!optional}
+        placeholder={placeholder}
+        disabled={disabled}
         value={value}
-        onChange={(e) => onChange(e.currentTarget.value)}
-      >
-        <option value="" disabled>
-          {placeholder}
-        </option>
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </Select>
+        onChange={onChange}
+        options={options.map((o) => ({ value: o.value, label: o.label }))}
+      />
     </LabeledField>
   );
 }

@@ -1,33 +1,25 @@
 /**
- * Dados de qualificação do lead capturados no /cadastro: validação e máscara
- * de CPF/CNPJ e telefone, e as listas de opções dos selects (gênero, UF,
- * segmento de negócio, como conheceu o fechai). Um módulo só porque o
- * formulário de cadastro e a rota `/api/register` precisam da mesma regra —
- * duas cópias divergentes deixariam passar no cliente o que o servidor rejeita.
+ * Dados de qualificação do lead capturados no /cadastro: validação e máscara de
+ * CNPJ, telefone e CEP, e as listas de opções dos selects (UF, segmento de
+ * negócio, como conheceu o fechai). Um módulo só porque o formulário de
+ * cadastro e a rota `/api/register` precisam da mesma regra — duas cópias
+ * divergentes deixariam passar no cliente o que o servidor rejeita.
+ *
+ * **O fechai aceita apenas empresas.** O documento é CNPJ, ponto — não existe
+ * mais o caminho de pessoa física. A validação de CPF foi removida junto com os
+ * campos pessoais (nascimento, gênero): quem assina é um negócio.
  */
 
-/** Mantém só dígitos — é como CPF/CNPJ e telefone são guardados no banco. */
+/** Mantém só dígitos — é como CNPJ, telefone e CEP são guardados no banco. */
 export function onlyDigits(value: string) {
   return value.replace(/\D/g, "");
 }
 
 /**
- * Dígitos verificadores do CPF (algoritmo do módulo 11 da Receita Federal).
- * Também rejeita sequências repetidas ("00000000000"), que passariam no
- * cálculo mas nunca são CPFs reais.
+ * Dígitos verificadores do CNPJ (algoritmo do módulo 11 da Receita Federal).
+ * Também rejeita sequências repetidas ("00000000000000"), que passariam no
+ * cálculo mas nunca são CNPJs reais.
  */
-export function isValidCPF(digits: string) {
-  if (digits.length !== 11 || /^(\d)\1{10}$/.test(digits)) return false;
-  const calc = (len: number) => {
-    let sum = 0;
-    for (let i = 0; i < len; i++) sum += Number(digits[i]) * (len + 1 - i);
-    const rest = (sum * 10) % 11;
-    return rest === 10 ? 0 : rest;
-  };
-  return calc(9) === Number(digits[9]) && calc(10) === Number(digits[10]);
-}
-
-/** Dígitos verificadores do CNPJ (mesma ideia do CPF, pesos diferentes). */
 export function isValidCNPJ(digits: string) {
   if (digits.length !== 14 || /^(\d)\1{13}$/.test(digits)) return false;
   const calc = (len: number) => {
@@ -40,22 +32,15 @@ export function isValidCNPJ(digits: string) {
   return calc(12) === Number(digits[12]) && calc(13) === Number(digits[13]);
 }
 
-/** CPF (11 dígitos) ou CNPJ (14) — o único campo "documento" do cadastro. */
-export function isValidCpfCnpj(value: string) {
-  const digits = onlyDigits(value);
-  return digits.length === 11 ? isValidCPF(digits) : digits.length === 14 ? isValidCNPJ(digits) : false;
+/** O único campo "documento" do cadastro — CNPJ, porque só empresas entram. */
+export function isValidCnpj(value: string) {
+  return isValidCNPJ(onlyDigits(value));
 }
 
-/** Máscara progressiva enquanto digita: cresce de CPF pra CNPJ com o tamanho. */
-export function maskCpfCnpj(value: string) {
-  const d = onlyDigits(value).slice(0, 14);
-  if (d.length <= 11) {
-    return d
-      .replace(/(\d{3})(\d)/, "$1.$2")
-      .replace(/(\d{3})(\d)/, "$1.$2")
-      .replace(/(\d{3})(\d{1,2})$/, "$1-$2");
-  }
-  return d
+/** Máscara de CNPJ enquanto digita: 00.000.000/0000-00. */
+export function maskCnpj(value: string) {
+  return onlyDigits(value)
+    .slice(0, 14)
     .replace(/(\d{2})(\d)/, "$1.$2")
     .replace(/(\d{3})(\d)/, "$1.$2")
     .replace(/(\d{3})(\d)/, "$1/$2")
@@ -77,12 +62,15 @@ export function isValidPhone(value: string) {
   return d.length === 10 || d.length === 11;
 }
 
-export const GENDER_OPTIONS = [
-  { value: "feminino", label: "Feminino" },
-  { value: "masculino", label: "Masculino" },
-  { value: "outro", label: "Outro" },
-  { value: "prefiro_nao_informar", label: "Prefiro não informar" },
-] as const;
+/** Máscara de CEP enquanto digita: 01310-100. */
+export function maskCep(value: string) {
+  return onlyDigits(value).slice(0, 8).replace(/(\d{5})(\d{1,3})$/, "$1-$2");
+}
+
+/** CEP plausível: 8 dígitos. Se existe de verdade, quem diz é a busca. */
+export function isValidCep(value: string) {
+  return onlyDigits(value).length === 8;
+}
 
 export const BRAZILIAN_STATES = [
   "AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO",
@@ -109,3 +97,13 @@ export const REFERRAL_SOURCES = [
   { value: "facebook", label: "Facebook" },
   { value: "outro", label: "Outro" },
 ] as const;
+
+/**
+ * Valores que abrem um campo de texto livre ao serem escolhidos. "Outro" só
+ * qualifica o lead se a pessoa puder dizer *qual* — sem isso o dado vira uma
+ * gaveta que ninguém consegue ler depois.
+ */
+export const OTHER_VALUE = "outro";
+
+/** Quantos caracteres o texto de "Outro" aceita — cabe uma resposta, não um texto. */
+export const OTHER_DETAIL_MAX = 80;

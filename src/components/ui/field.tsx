@@ -21,6 +21,7 @@ export function Field({
   about,
   error,
   optional,
+  labelId,
   className,
   children,
 }: {
@@ -41,12 +42,19 @@ export function Field({
   error?: string | null;
   /** Marca o campo como opcional em texto (não só visualmente). */
   optional?: boolean;
+  /**
+   * `id` do próprio `<label>`, para um controle que não é um input nativo
+   * apontar para ele com `aria-labelledby` (`htmlFor` sozinho não alcança um
+   * `<button>`, que é o que o `SelectMenu` renderiza).
+   */
+  labelId?: string;
   className?: string;
   children: React.ReactNode;
 }) {
   return (
     <div className={className}>
       <label
+        id={labelId}
         htmlFor={htmlFor}
         className="flex items-center gap-1.5 text-sm font-medium text-ink panel:text-white/85"
       >

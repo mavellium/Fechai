@@ -166,7 +166,7 @@ const TOOLS: Record<ActionKey, ToolDef> = {
       const duration = resolveDuration(cfg, str(args.tipoAtendimento));
 
       if (!isWithinBusinessHours(startsAt, { ...cfg, durationMinutes: duration.minutes })) {
-        return `Fora do expediente (${cfg.startTime} às ${cfg.endTime}) ou durante uma pausa, considerando um bloco de ${duration.minutes} min. Proponha outro horário respeitando os intervalos.`;
+        return `Fora dos períodos de atendimento deste dia ou durante uma pausa, considerando um bloco de ${duration.minutes} min. Consulte list_available_slots e proponha outro horário respeitando os intervalos.`;
       }
 
       const endsAt = new Date(startsAt.getTime() + duration.minutes * 60_000);

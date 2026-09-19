@@ -18,6 +18,30 @@ mostrada no painel, e o horário combinado com o lead continua de pé.
 
 ## Configuração do agendamento por agente
 
+### Grade semanal
+
+`weeklyAvailability` guarda sete listas de `{ start, end }` em minutos locais,
+domingo primeiro. Os intervalos são fechados no início e abertos no fim;
+`1440` representa 24:00. Lista vazia fecha o dia; sete listas vazias fecham toda
+a semana, sem cair no expediente padrão. A escrita valida os limites e une
+períodos adjacentes; uma grade malformada na leitura nunca reabre horários.
+
+`WeeklyAvailabilityGrid` substitui os campos de dias, abertura, fechamento e
+pausas. Arrastar seleciona um retângulo de dias e horas; iniciar sobre um bloco
+preenchido remove. Há desfazer, teclado, seleção do dia inteiro e visualização
+em blocos de 60/30/15 minutos. Trocar a visualização não arredonda os períodos:
+horários parciais aparecem parcialmente preenchidos. Pausas são os espaços
+desmarcados entre períodos e podem variar de um dia para outro.
+
+Configurações sem a propriedade continuam usando `workdays`, `startTime`,
+`endTime` e `breaks`. `getWeeklyAvailability` converte esses dados sem perder
+minutos nem pausas, e a nova tela grava a grade na próxima confirmação.
+Não remova a compatibilidade de leitura sem migrar as linhas existentes.
+`slotStartTimes(cfg, weekday)`, a validação de marcar/reagendar e o prompt usam
+os períodos do dia. A consulta de conflitos cobre o dia local completo, inclusive
+o último bloco até meia-noite. Regressões em `weekly-availability*.test.ts` e
+`agendamento-tools.test.ts`.
+
 Em Agentes › Ações › Agendar horário, `TenantAction.config` guarda também:
 
 - `allowCancellation` e `allowRescheduling`: desligados por padrão, inclusive
@@ -47,6 +71,20 @@ Em Agentes › Ações › Agendar horário, `TenantAction.config` guarda també
   Pausas repetem-se nos dias atendidos. O formulário recusa sobreposição,
   intervalos invertidos e pausas fora do expediente. `isWithinBusinessHours`
   recusa qualquer consulta que atravesse uma pausa; encostar é permitido.
+- `blockedDates`: dias em que o negócio não atende (feriado, recesso), lista de
+  `{ date, label }` com `date` em `YYYY-MM-DD` **no fuso do negócio** — é um dia
+  do calendário de quem atende, não um instante; guardar UTC faria o bloqueio
+  escorregar de dia. É a **exceção da grade**: a grade só conhece dia da semana,
+  então sem isto 25/12 numa quarta é só mais uma quarta. `isWithinBusinessHours`
+  checa `isBlockedDate` **antes** da grade, e por isso `listFreeSlots` e
+  `schedule_meeting` já herdam a recusa — nenhum dos dois precisou mudar.
+  `scheduleSystemContext` lista só as datas **futuras** (teto
+  `MAX_BLOCKED_DATES_IN_PROMPT`) para o agente explicar em vez de só recusar.
+  A lista é **manual de propósito**: feriado nacional não é feriado para toda
+  clínica (muitas atendem), municipal não caberia numa tabela nossa e recesso
+  não é feriado nenhum — uma lista automática erraria dos dois lados. Config
+  antiga não tem o campo e vira lista vazia, que é o comportamento que ela já
+  tinha. `parseBlockedDates` aceita também uma lista de strings simples.
 - `reminderEnabled` e `reminders`: os lembretes pré-consulta. Ver a seção abaixo.
 
 ## Lembretes de consulta

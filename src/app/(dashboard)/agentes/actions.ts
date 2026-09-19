@@ -11,6 +11,7 @@ import { composeSystemPrompt, type PersonaAnswers } from "@/modules/agent-engine
 import { ACTION_BY_KEY, type ActionKey } from "@/modules/agent-engine/actions";
 import { createAgent, getAgentOwned, getAgentUsage } from "@/modules/agent-engine/agents";
 import { saveScheduleConfig } from "@/modules/scheduling/repository";
+import { parseWeeklyAvailability, validateWeeklyAvailability, type WeeklyAvailability } from "@/modules/scheduling/weekly-availability";
 import {
   MAX_DURATIONS,
   MAX_DURATION_MINUTES,
@@ -18,6 +19,8 @@ import {
   MIN_DURATION_MINUTES,
   formatReminderLead,
   isScheduleTime,
+  isCalendarDate,
+  MAX_BLOCKED_DATES,
   isScheduleTimezone,
   normalizeDurationLabel,
   validateDurations,
@@ -782,6 +785,13 @@ const scheduleConfigSchema = z.object({
       .max(MAX_REMINDER_MINUTES, `A antecedência máxima de um lembrete é ${formatReminderLead(MAX_REMINDER_MINUTES)}.`),
     template: z.string().trim().max(500),
   })),
+  // Datas bloqueadas (feriado, recesso). Data inválida é recusada em vez de
+  // descartada em silêncio: a pessoa digitou aquele dia esperando fechar, e
+  // sumir com a linha faria o agente atender num dia que ela achou bloqueado.
+  blockedDates: z.array(z.object({
+    date: z.string().refine(isCalendarDate, "Data inválida."),
+    label: z.string().trim().max(60),
+  })).max(MAX_BLOCKED_DATES, `São no máximo ${MAX_BLOCKED_DATES} datas bloqueadas.`),
 }).superRefine((data, ctx) => {
   // Variação sem duração: acontece sempre que os tipos vêm do Clinicorp, que
   // não informa quanto tempo cada um leva. A mensagem nomeia o tipo porque
@@ -824,6 +834,17 @@ export async function saveScheduleConfigAction(
   if (!agent) return { ok: false, error: "Agente não encontrado" };
 
   let breaks: unknown;
+  let weeklyAvailability: WeeklyAvailability | undefined;
+  if (formData.has("weeklyAvailability")) {
+    try {
+      const raw = JSON.parse(String(formData.get("weeklyAvailability")));
+      const error = validateWeeklyAvailability(raw);
+      if (error) return { ok: false, error };
+      weeklyAvailability = parseWeeklyAvailability(raw);
+    } catch {
+      return { ok: false, error: "Grade de horários inválida. Confira os períodos." };
+    }
+  }
   try {
     breaks = JSON.parse(String(formData.get("breaks") ?? "[]"));
   } catch {
@@ -841,22 +862,29 @@ export async function saveScheduleConfigAction(
   } catch {
     return { ok: false, error: "Lembretes inválidos. Confira as antecedências." };
   }
+  let blockedDates: unknown;
+  try {
+    blockedDates = JSON.parse(String(formData.get("blockedDates") ?? "[]"));
+  } catch {
+    return { ok: false, error: "Datas bloqueadas inválidas. Confira os dias." };
+  }
   const parsed = scheduleConfigSchema.safeParse({
     ...Object.fromEntries(formData),
     breaks,
     durations,
     reminders,
+    blockedDates,
   });
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Dados inválidos" };
   }
 
   // Checkboxes: `getAll` porque um <input name="workdays"> por dia marcado.
-  const workdays = formData
+  const workdays = weeklyAvailability ? weeklyAvailability.flatMap((ranges, day) => ranges.length ? [day] : []) : formData
     .getAll("workdays")
     .map((v) => Number(v))
     .filter((n) => Number.isInteger(n) && n >= 0 && n <= 6);
-  if (workdays.length === 0) {
+  if (weeklyAvailability === undefined && workdays.length === 0) {
     return { ok: false, error: "Escolha pelo menos um dia de atendimento." };
   }
 
@@ -878,6 +906,7 @@ export async function saveScheduleConfigAction(
 
   await saveScheduleConfig(tenantId, agent.id, {
     ...parsed.data,
+    ...(weeklyAvailability !== undefined ? { weeklyAvailability, breaks: [] } : {}),
     durations: filledDurations,
     workdays,
   });

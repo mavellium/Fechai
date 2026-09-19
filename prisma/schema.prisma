@@ -86,14 +86,28 @@ model Tenant {
   // ignorado justamente quando importa. Null = nunca alertada.
   whatsappHealthAlertAt DateTime?
 
-  // Qualificação do lead (o próprio dono do negócio que assina o fechai),
-  // capturada no /cadastro a partir desta reformulação — contas criadas antes
-  // ficam null, não é retroativo. Dados sobre o NEGÓCIO ficam aqui no Tenant;
-  // dados PESSOAIS de quem preencheu o formulário ficam no User (ver abaixo).
+  // Qualificação do lead (a empresa que assina o fechai), capturada no
+  // /cadastro a partir desta reformulação — contas criadas antes ficam null,
+  // não é retroativo. O fechai aceita apenas empresas: o documento é CNPJ e
+  // mora no User (quem preencheu o formulário); o endereço do negócio é aqui.
+  //
+  // O endereço vem do CEP (ViaCEP, ver lib/br-address.ts), mas todo campo é
+  // editável e guardado como veio da tela — o serviço é conveniência, não
+  // fonte da verdade, e CEP de cidade inteira não traz logradouro.
+  zipCode         String? // CEP, só dígitos (8) — sem máscara, como os telefones
+  street          String? // logradouro ("Avenida Paulista")
+  addressNumber   String? // número; String porque "s/n" e "1000-A" existem
+  complement      String? // complemento ("sala 42") — opcional no formulário
+  neighborhood    String? // bairro
   city            String? // cidade do negócio
   state           String? // UF (2 letras)
   businessSegment String? // ex: "estetica", "advocacia", "imobiliaria" — ver BUSINESS_SEGMENTS
-  referralSource  String? // como conheceu o fechai — ver REFERRAL_SOURCES
+  /// Texto livre quando `businessSegment` é "outro" — null nas demais opções.
+  /// "Outro" sozinho não qualifica ninguém; é este campo que diz qual.
+  businessSegmentOther String?
+  referralSource       String? // como conheceu o fechai — ver REFERRAL_SOURCES
+  /// Texto livre quando `referralSource` é "outro" — mesma regra do segmento.
+  referralSourceOther  String?
 
   users            User[]
   agents           Agent[]
@@ -124,19 +138,25 @@ model User {
   tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt    DateTime @default(now())
 
-  // Dados pessoais de quem preencheu o /cadastro — exigidos no formulário
-  // desde a reformulação (ver AGENTS.md), mas nulos em contas anteriores (não
-  // é retroativo) e em contas criadas pelo admin (/admin/contas), que não
-  // passam pelo formulário público. Só dígitos em `document` e nos telefones —
-  // a formatação é aplicada na exibição, não no armazenamento.
-  document       String? // CPF (11 dígitos) ou CNPJ (14 dígitos), sem máscara
+  // Dados de contato de quem preencheu o /cadastro — exigidos no formulário
+  // (ver AGENTS.md), mas nulos em contas anteriores (não é retroativo) e em
+  // contas criadas pelo admin (/admin/contas), que não passam pelo formulário
+  // público. Só dígitos em `document` e nos telefones — a formatação é
+  // aplicada na exibição, não no armazenamento.
+  document       String? // CNPJ (14 dígitos), sem máscara — só empresas se cadastram
   phone          String? // telefone principal, sem máscara
   phoneSecondary String? // telefone secundário (opcional mesmo no cadastro novo)
-  birthDate      DateTime? // data de nascimento
-  gender         String? // ver GENDER_OPTIONS em lib/br-lead.ts
+
+  /// Dados pessoais que o /cadastro pedia quando aceitava pessoa física.
+  /// O formulário não os coleta mais (só empresas entram, e nem nascimento nem
+  /// gênero descrevem um CNPJ), mas as colunas ficam: contas criadas antes têm
+  /// valor aqui e apagá-las destruiria histórico para não ganhar nada.
+  /// Não voltar a preencher — em conta nova nascem null.
+  birthDate      DateTime?
+  gender         String?
 
   // Login com Google (NextAuth). Só VINCULA uma conta que já existe — o
-  // provider não cria tenant: o /cadastro exige CPF/CNPJ, telefone e segmento,
+  // provider não cria tenant: o /cadastro exige CNPJ, telefone e segmento,
   // dados que o Google não fornece. `googleId` é o `sub` do Google, estável
   // mesmo se a pessoa trocar o e-mail da conta Google.
   googleId       String?   @unique

@@ -84,6 +84,13 @@ type SelectMenuBaseProps = {
    * busca e os botões ao lado dele numa mesma barra.
    */
   size?: "default" | "sm";
+  /**
+   * Desabilita o controle: o menu não abre e o botão sai da ordem de tabulação
+   * (é um `<button disabled>` de verdade, não um estilo por cima). Use para o
+   * campo que ainda depende de outro — a cidade antes da UF, por exemplo — e
+   * diga em algum lugar o que falta, senão o campo apagado não explica nada.
+   */
+  disabled?: boolean;
 };
 
 /**
@@ -119,6 +126,7 @@ export function SelectMenu({
   className,
   align = "start",
   size = "default",
+  disabled = false,
 }: SelectMenuProps) {
   const [open, setOpen] = React.useState(false);
   // Opção sob o cursor do teclado. Só existe com o menu aberto; separada do
@@ -343,6 +351,7 @@ export function SelectMenu({
         // de tela ignorar o rótulo que a pessoa está vendo.
         aria-labelledby={labelledBy}
         aria-label={labelledBy ? undefined : label}
+        disabled={disabled}
         onClick={() => (open ? closeMenu(false) : openMenu())}
         onKeyDown={onKeyDown}
         className={cn(
@@ -351,6 +360,10 @@ export function SelectMenu({
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris",
           "border-ink/15 bg-white text-ink hover:border-ink/25",
           "panel:border-white/20 panel:bg-white/5 panel:text-white panel:hover:border-white/30",
+          // Mesmo desabilitado dos campos de `input.tsx`: a borda de hover sai
+          // junto, senão o controle apagado ainda reage ao mouse.
+          "disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-ink/15",
+          "panel:disabled:hover:border-white/20",
           open && "border-iris ring-2 ring-iris panel:border-iris",
         )}
       >

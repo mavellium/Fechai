@@ -14,6 +14,7 @@ vi.mock("@/modules/agent-engine/handoff", () => ({ addLeadToHandoffGroup: vi.fn(
 import { getToolSchemas, runToolHandler } from "@/modules/agent-engine/tools";
 import { parseScheduleConfig } from "@/modules/scheduling/config";
 import { leadAppointmentsContext } from "@/modules/agent-engine/scheduling-tools";
+import { emptyWeek } from "@/modules/scheduling/weekly-availability";
 
 const ctx = { tenantId: "conta-1", leadId: "cliente-1", agentId: "agente-1", conversationId: "conversa-1" };
 const cfg = parseScheduleConfig({ allowCancellation: true, allowRescheduling: true, breaks: [{ label: "Almoço", startTime: "12:00", endTime: "13:00" }] });
@@ -158,6 +159,23 @@ describe("retorno de contato com consulta", () => {
 describe("horários livres antes de sugerir", () => {
   const slots = (args: Record<string, unknown>) => runToolHandler("list_available_slots", ctx, args);
 
+  it("usa a grade do dia, inclusive o último bloco até meia-noite", async () => {
+    const week = emptyWeek();
+    week[4] = [{ start: 1380, end: 1440 }];
+    week[5] = [{ start: 840, end: 900 }];
+    db.tenantAction.findFirst.mockResolvedValue({ config: { ...cfg, weeklyAvailability: week } });
+    db.appointment.findMany.mockResolvedValue([]);
+    expect(await slots({ date: "2026-09-17" })).toContain(": 23:00");
+    expect(await slots({ date: "2026-09-18" })).toContain(": 14:00");
+    expect(await slots({ date: "2026-09-19" })).toContain("não atendemos");
+  });
+
+  it("reagendamento não usa o expediente antigo quando a grade fecha o dia", async () => {
+    db.tenantAction.findFirst.mockResolvedValue({ config: { ...cfg, weeklyAvailability: emptyWeek() } });
+    expect(await reschedule()).toContain("original continua reservado");
+    expect(db.appointment.updateMany).not.toHaveBeenCalled();
+  });
+
   it("fica disponível sempre que o agendamento está ligado", () => {
     expect(getToolSchemas(["schedule_meeting"], { ...cfg, allowCancellation: false, allowRescheduling: false }).map((s) => s.name)).toContain("list_available_slots");
   });
@@ -192,4 +210,3 @@ describe("horários livres antes de sugerir", () => {
     expect(db.appointment.create).not.toHaveBeenCalled();
   });
 });
-

@@ -3,6 +3,7 @@ import { isWithinBusinessHours, type ScheduleConfig } from "@/modules/scheduling
 import { cancelAppointment, findLeadAppointment, listFreeSlots, listUpcomingLeadAppointments, rescheduleAppointment } from "@/modules/scheduling/repository";
 import { dayKeyInZone, formatInZone, parseLocalDateTime, partsInZone, timeInZone } from "@/modules/scheduling/time";
 import type { ToolContext } from "./tools";
+import { getWeeklyAvailability } from "@/modules/scheduling/weekly-availability";
 
 export const SCHEDULING_TOOLS: LlmToolSchema[] = [
   {
@@ -89,7 +90,7 @@ export async function availableSlotsContext(ctx: Pick<ToolContext, "tenantId">, 
     const slots = perDay[i];
     if (slots.length) return `- ${dayLabel(d, cfg.timezone)} (${d}): ${slots.map((s) => timeInZone(s, cfg.timezone)).join(", ")}`;
     const weekday = partsInZone(parseLocalDateTime(d, "12:00", cfg.timezone)!, cfg.timezone).weekday;
-    return `- ${dayLabel(d, cfg.timezone)} (${d}): ${cfg.workdays.includes(weekday) ? "sem horário livre" : "não atendemos"}`;
+    return `- ${dayLabel(d, cfg.timezone)} (${d}): ${getWeeklyAvailability(cfg)[weekday].length ? "sem horário livre" : "não atendemos"}`;
   });
   // A grade é a da duração padrão: calcular uma por variação daria listas
   // diferentes para o mesmo dia e o agente não teria como escolher entre elas.

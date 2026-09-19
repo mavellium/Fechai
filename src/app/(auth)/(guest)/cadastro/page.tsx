@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useMemo, useState } from "react";
+import { useCallback, useId, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { signIn } from "next-auth/react";
@@ -15,11 +15,6 @@ import {
   MapPin,
   Megaphone,
   Store,
-  UserRound,
-  Venus,
-  Mars,
-  CircleUser,
-  EyeOff,
   Handshake,
   Search,
   Camera,
@@ -40,41 +35,32 @@ import {
   PasswordField,
   LabeledField,
   DocumentField,
+  CepField,
   PhoneField,
-  DateField,
   SelectField,
 } from "../../_components/fields";
 import {
-  isValidCpfCnpj,
+  isValidCnpj,
   isValidPhone,
+  isValidCep,
   BRAZILIAN_STATES,
   BUSINESS_SEGMENTS,
+  OTHER_VALUE,
+  OTHER_DETAIL_MAX,
 } from "@/lib/br-lead";
+import { lookupCep, listMunicipalities, type Municipality } from "@/lib/br-address";
 
 type Phase = "idle" | "loading" | "done";
 type Role = "cliente" | "afiliado";
 type StepNumber = 1 | 2 | 3;
 
-const MIN_AGE_YEARS = 18;
-
 const STEPS = [
   { n: 1, label: "Acesso", icon: KeyRound, title: "Comece pelo acesso", subtitle: "É com esses dados que você entra no painel." },
-  { n: 2, label: "Seus dados", icon: UserRound, title: "Quem é você", subtitle: "Precisamos identificar o responsável pela conta." },
-  { n: 3, label: "Negócio", icon: Building2, title: "Sobre o seu negócio", subtitle: "Ajuda a gente a preparar o agente pro seu contexto." },
+  { n: 2, label: "Empresa", icon: Building2, title: "Dados da empresa", subtitle: "O fechai é para empresas — precisamos do CNPJ." },
+  { n: 3, label: "Negócio", icon: Store, title: "Sobre o seu negócio", subtitle: "Ajuda a gente a preparar o agente pro seu contexto." },
 ] as const;
 
 const STATE_OPTIONS = BRAZILIAN_STATES.map((uf) => ({ value: uf, label: uf }));
-
-// Ícones nos cartões de escolha: a lista é curta e ganha em ser vista de uma
-// vez (ver components/ui/radio-cards). As listas longas seguem em <Select>.
-const GENDER_CARDS = [
-  { value: "feminino", label: "Feminino", icon: Venus },
-  { value: "masculino", label: "Masculino", icon: Mars },
-  { value: "outro", label: "Outro", icon: CircleUser },
-  // Rótulo curto de propósito: em 375px "Prefiro não informar" era truncado
-  // pelo cartão; o valor gravado segue o mesmo.
-  { value: "prefiro_nao_informar", label: "Não informar", icon: EyeOff },
-] as const;
 
 // Esta versão do lucide não traz mais ícones de marca (Instagram/Facebook), e
 // o nome no rótulo já identifica o canal — os ícones aqui são só apoio visual.
@@ -83,15 +69,8 @@ const REFERRAL_CARDS = [
   { value: "google", label: "Google", icon: Search },
   { value: "instagram", label: "Instagram", icon: Camera },
   { value: "facebook", label: "Facebook", icon: ThumbsUp },
-  { value: "outro", label: "Outro", icon: Ellipsis },
+  { value: OTHER_VALUE, label: "Outro", icon: Ellipsis },
 ] as const;
-
-/** Data máxima aceita no seletor: quem nasceu depois disso tem menos de 18. */
-function maxBirthDate() {
-  const d = new Date();
-  d.setFullYear(d.getFullYear() - MIN_AGE_YEARS);
-  return d.toISOString().slice(0, 10);
-}
 
 type FormState = {
   name: string;
@@ -101,12 +80,19 @@ type FormState = {
   document: string;
   phone: string;
   phoneSecondary: string;
-  birthDate: string;
-  gender: string;
+  zipCode: string;
+  street: string;
+  addressNumber: string;
+  complement: string;
+  neighborhood: string;
   city: string;
   state: string;
   businessSegment: string;
+  /** Preenchido só quando `businessSegment` é "outro" — ver OTHER_VALUE. */
+  businessSegmentOther: string;
   referralSource: string;
+  /** Mesma regra do segmento: só existe quando a escolha foi "Outro". */
+  referralSourceOther: string;
   /**
    * Como a pessoa vai usar o fechai. Não é exclusivo: dá para ser cliente,
    * afiliado, ou os dois — e "os dois" é o caso que mais interessa ao produto.
@@ -122,13 +108,29 @@ const EMPTY: FormState = {
   document: "",
   phone: "",
   phoneSecondary: "",
-  birthDate: "",
-  gender: "",
+  zipCode: "",
+  street: "",
+  addressNumber: "",
+  complement: "",
+  neighborhood: "",
   city: "",
   state: "",
   businessSegment: "",
+  businessSegmentOther: "",
   referralSource: "",
+  referralSourceOther: "",
   roles: ["cliente"],
+};
+
+/** Situação da busca por CEP — o que a tela mostra abaixo do campo. */
+type CepStatus = "idle" | "loading" | "found" | "notfound" | "failed";
+
+const CEP_HINT: Record<CepStatus, string | undefined> = {
+  idle: "Preenchemos o endereço pra você.",
+  loading: "Buscando endereço…",
+  found: undefined, // o endereço preenchido na tela já é o retorno visível
+  notfound: "Não achamos esse CEP. Pode preencher o endereço à mão.",
+  failed: "Busca indisponível agora. Pode preencher o endereço à mão.",
 };
 
 export default function CadastroPage() {
@@ -140,7 +142,6 @@ export default function CadastroPage() {
   const preferAffiliate = searchParams.get("tipo") === "afiliado";
   const reduced = useReducedMotion();
   const nameId = useId();
-  const cityId = useId();
 
   const [step, setStep] = useState<StepNumber>(1);
   const [form, setForm] = useState<FormState>(() =>
@@ -152,13 +153,82 @@ export default function CadastroPage() {
   // Direção da transição: avançar entra pela direita, voltar pela esquerda.
   const [direction, setDirection] = useState<1 | -1>(1);
 
-  const maxBirth = useMemo(() => maxBirthDate(), []);
+  const [cepStatus, setCepStatus] = useState<CepStatus>("idle");
+  const [cities, setCities] = useState<Municipality[]>([]);
+  const [citiesLoading, setCitiesLoading] = useState(false);
+  /**
+   * Toda busca por CEP e por municípios recebe um número. Só a resposta do
+   * número mais recente é aplicada: digitar dois CEPs em sequência dispara duas
+   * requisições, e sem isso a mais lenta (a antiga) sobrescreveria a mais nova.
+   */
+  const cepRun = useRef(0);
+  const cityRun = useRef(0);
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));
     // O aviso some assim que a pessoa mexe no campo — não fica preso na tela.
     setErrors((e) => (key in e ? { ...e, [key]: undefined } : e));
   }
+
+  /**
+   * Carrega os municípios de uma UF. Vazio (falha ou UF em branco) deixa a
+   * cidade como campo de texto — o cadastro não trava porque o IBGE caiu.
+   */
+  const loadCities = useCallback(async (uf: string) => {
+    const run = ++cityRun.current;
+    if (!uf) {
+      setCities([]);
+      setCitiesLoading(false);
+      return;
+    }
+    setCitiesLoading(true);
+    const list = await listMunicipalities(uf);
+    if (cityRun.current !== run) return; // outra UF foi escolhida no meio
+    setCities(list);
+    setCitiesLoading(false);
+  }, []);
+
+  /** UF escolhida à mão: troca a lista e limpa a cidade da UF anterior. */
+  function selectState(uf: string) {
+    setForm((f) => ({ ...f, state: uf, city: "" }));
+    setErrors((e) => ({ ...e, state: undefined, city: undefined }));
+    void loadCities(uf);
+  }
+
+  /**
+   * Busca o endereço do CEP e preenche o resto. O retorno **não** é imposto:
+   * todo campo continua editável, porque CEP de cidade inteira não traz
+   * logradouro e endereço de verdade tem exceção que a base não conhece.
+   */
+  const fetchAddress = useCallback(
+    async (cep: string) => {
+      const run = ++cepRun.current;
+      setCepStatus("loading");
+      const found = await lookupCep(cep);
+      if (cepRun.current !== run) return; // outro CEP foi digitado no meio
+
+      if (!found) {
+        // `lookupCep` devolve null tanto para CEP inexistente quanto para
+        // serviço fora do ar; o texto muda, o caminho (digitar à mão) não.
+        setCepStatus("notfound");
+        return;
+      }
+
+      setForm((f) => ({
+        ...f,
+        street: found.street || f.street,
+        neighborhood: found.neighborhood || f.neighborhood,
+        city: found.city,
+        state: found.state,
+      }));
+      setErrors((e) => ({ ...e, zipCode: undefined, city: undefined, state: undefined }));
+      setCepStatus("found");
+      // A lista de municípios da UF vem junto: se a pessoa corrigir a cidade
+      // depois, o select já está pronto com as opções certas.
+      void loadCities(found.state);
+    },
+    [loadCities],
+  );
 
   /** Regras de cada passo. Devolve {} quando pode avançar. */
   function validate(target: StepNumber): Partial<Record<keyof FormState, string>> {
@@ -176,20 +246,24 @@ export default function CadastroPage() {
         e.passwordConfirm = "As senhas não são iguais.";
     }
     if (target === 2) {
-      if (!isValidCpfCnpj(form.document)) e.document = "CPF ou CNPJ inválido — confira os números.";
+      if (!isValidCnpj(form.document)) e.document = "CNPJ inválido — confira os números.";
       if (!isValidPhone(form.phone)) e.phone = "Telefone inválido — inclua o DDD.";
       if (form.phoneSecondary && !isValidPhone(form.phoneSecondary))
         e.phoneSecondary = "Telefone secundário inválido — inclua o DDD.";
-      if (!form.birthDate) e.birthDate = "Informe sua data de nascimento.";
-      else if (form.birthDate > maxBirth)
-        e.birthDate = `É preciso ter pelo menos ${MIN_AGE_YEARS} anos para criar uma conta.`;
-      if (!form.gender) e.gender = "Selecione uma opção.";
     }
     if (target === 3) {
-      if (!form.city.trim()) e.city = "Informe a cidade.";
+      if (!isValidCep(form.zipCode)) e.zipCode = "Informe um CEP válido (8 dígitos).";
+      if (!form.street.trim()) e.street = "Informe o logradouro.";
+      if (!form.addressNumber.trim()) e.addressNumber = "Informe o número.";
+      if (!form.neighborhood.trim()) e.neighborhood = "Informe o bairro.";
       if (!form.state) e.state = "Selecione o estado.";
+      if (!form.city.trim()) e.city = "Selecione a cidade.";
       if (!form.businessSegment) e.businessSegment = "Selecione o segmento.";
+      else if (form.businessSegment === OTHER_VALUE && !form.businessSegmentOther.trim())
+        e.businessSegmentOther = "Conte qual é o segmento.";
       if (!form.referralSource) e.referralSource = "Selecione uma opção.";
+      else if (form.referralSource === OTHER_VALUE && !form.referralSourceOther.trim())
+        e.referralSourceOther = "Conte como você conheceu o fechai.";
       if (form.roles.length === 0) e.roles = "Escolha pelo menos uma opção.";
     }
     return e;
@@ -408,73 +482,96 @@ export default function CadastroPage() {
                       optional
                     />
                   </div>
-
-                  <DateField
-                    label="Data de nascimento"
-                    name="birthDate"
-                    value={form.birthDate}
-                    onChange={(v) => set("birthDate", v)}
-                    max={maxBirth}
-                    hint={`É preciso ter ${MIN_AGE_YEARS} anos ou mais.`}
-                    error={errors.birthDate}
-                  />
-
-                  <fieldset>
-                    <legend className="block text-sm font-medium text-ink">Gênero</legend>
-                    <div className="mt-2">
-                      <RadioCards
-                        name="gender"
-                        options={GENDER_CARDS}
-                        value={form.gender}
-                        onChange={(v) => set("gender", v)}
-                      />
-                    </div>
-                    {errors.gender && (
-                      <p role="alert" className="mt-2 text-sm text-danger">
-                        {errors.gender}
-                      </p>
-                    )}
-                  </fieldset>
                 </>
               )}
 
               {step === 3 && (
                 <>
-                  <div className="grid gap-4 sm:grid-cols-[1fr_7rem]">
-                    <LabeledField label="Cidade" htmlFor={cityId} error={errors.city}>
-                      <div className="relative">
-                        <MapPin
-                          size={16}
-                          className="pointer-events-none absolute inset-y-0 left-3 my-auto text-neutral"
-                          aria-hidden
-                        />
-                        <Input
-                          id={cityId}
-                          name="city"
-                          value={form.city}
-                          onChange={(e) => set("city", e.currentTarget.value)}
-                          placeholder="Ex: São Paulo"
-                          autoComplete="address-level2"
-                          aria-invalid={Boolean(errors.city)}
-                          className={cn("pl-10", errors.city && "border-danger focus-visible:ring-danger")}
-                        />
-                      </div>
-                    </LabeledField>
+                  <CepField
+                    value={form.zipCode}
+                    onChange={(v) => {
+                      set("zipCode", v);
+                      // Mexeu no CEP: o resultado anterior não vale mais.
+                      if (cepStatus !== "idle") setCepStatus("idle");
+                    }}
+                    onComplete={(cep) => void fetchAddress(cep)}
+                    loading={cepStatus === "loading"}
+                    hint={CEP_HINT[cepStatus]}
+                    error={errors.zipCode}
+                    onValidate={(err) => setErrors((e) => ({ ...e, zipCode: err ?? undefined }))}
+                  />
 
+                  {/*
+                    O endereço fica visível e editável sempre — não escondido
+                    atrás do sucesso da busca. Quem digitou um CEP que o ViaCEP
+                    não conhece precisa do mesmo formulário que todo mundo, e
+                    número e complemento nunca vêm da busca de qualquer jeito.
+                  */}
+                  <div className="grid gap-4 sm:grid-cols-[1fr_7rem]">
+                    <TextField
+                      label="Logradouro"
+                      name="street"
+                      value={form.street}
+                      onChange={(v) => set("street", v)}
+                      placeholder="Ex: Avenida Paulista"
+                      autoComplete="address-line1"
+                      error={errors.street}
+                    />
+                    <TextField
+                      label="Número"
+                      name="addressNumber"
+                      value={form.addressNumber}
+                      onChange={(v) => set("addressNumber", v)}
+                      placeholder="900"
+                      autoComplete="address-line2"
+                      error={errors.addressNumber}
+                    />
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <TextField
+                      label="Bairro"
+                      name="neighborhood"
+                      value={form.neighborhood}
+                      onChange={(v) => set("neighborhood", v)}
+                      placeholder="Ex: Bela Vista"
+                      autoComplete="address-level3"
+                      error={errors.neighborhood}
+                    />
+                    <TextField
+                      label="Complemento"
+                      name="complement"
+                      value={form.complement}
+                      onChange={(v) => set("complement", v)}
+                      placeholder="Sala, andar…"
+                      optional
+                    />
+                  </div>
+
+                  {/*
+                    UF antes de cidade, e não o contrário: a lista de municípios
+                    só existe depois que o estado é conhecido.
+                  */}
+                  <div className="grid gap-4 sm:grid-cols-[7rem_1fr]">
                     <SelectField
                       label="UF"
                       name="state"
                       options={STATE_OPTIONS}
                       value={form.state}
-                      onChange={(v) => set("state", v)}
+                      onChange={selectState}
                       placeholder="UF"
+                      error={errors.state}
+                    />
+
+                    <CityField
+                      value={form.city}
+                      onChange={(v) => set("city", v)}
+                      state={form.state}
+                      cities={cities}
+                      loading={citiesLoading}
+                      error={errors.city}
                     />
                   </div>
-                  {errors.state && (
-                    <p role="alert" className="text-sm text-danger">
-                      {errors.state}
-                    </p>
-                  )}
 
                   <SelectField
                     label="Segmento do negócio"
@@ -484,11 +581,23 @@ export default function CadastroPage() {
                     value={form.businessSegment}
                     onChange={(v) => set("businessSegment", v)}
                     placeholder="Selecione o segmento"
+                    error={errors.businessSegment}
                   />
-                  {errors.businessSegment && (
-                    <p role="alert" className="text-sm text-danger">
-                      {errors.businessSegment}
-                    </p>
+
+                  {/*
+                    "Outro" sem o campo de texto é um dado que não qualifica
+                    ninguém — o detalhe é obrigatório quando a opção é essa.
+                  */}
+                  {form.businessSegment === OTHER_VALUE && (
+                    <OtherDetail
+                      label="Qual é o segmento?"
+                      name="businessSegmentOther"
+                      value={form.businessSegmentOther}
+                      onChange={(v) => set("businessSegmentOther", v)}
+                      placeholder="Ex: Pet shop"
+                      error={errors.businessSegmentOther}
+                      reduced={reduced}
+                    />
                   )}
 
                   <fieldset>
@@ -510,6 +619,18 @@ export default function CadastroPage() {
                       </p>
                     )}
                   </fieldset>
+
+                  {form.referralSource === OTHER_VALUE && (
+                    <OtherDetail
+                      label="Como você chegou até aqui?"
+                      name="referralSourceOther"
+                      value={form.referralSourceOther}
+                      onChange={(v) => set("referralSourceOther", v)}
+                      placeholder="Ex: podcast, evento, YouTube"
+                      error={errors.referralSourceOther}
+                      reduced={reduced}
+                    />
+                  )}
 
                   <fieldset>
                     <legend className="flex items-center gap-2 text-sm font-medium text-ink">
@@ -658,6 +779,195 @@ function Stepper({ step }: { step: StepNumber }) {
         })}
       </ol>
     </nav>
+  );
+}
+
+/** Campo de texto simples do formulário — a casca repetida do passo 3. */
+function TextField({
+  label,
+  name,
+  value,
+  onChange,
+  placeholder,
+  autoComplete,
+  optional,
+  error,
+}: {
+  label: string;
+  name: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  autoComplete?: string;
+  optional?: boolean;
+  error?: string;
+}) {
+  const id = useId();
+  return (
+    <LabeledField label={label} htmlFor={id} error={error} optional={optional}>
+      <Input
+        id={id}
+        name={name}
+        value={value}
+        onChange={(e) => onChange(e.currentTarget.value)}
+        placeholder={placeholder}
+        autoComplete={autoComplete}
+        required={!optional}
+        aria-invalid={Boolean(error)}
+        className={cn(error && "border-danger focus-visible:ring-danger")}
+      />
+    </LabeledField>
+  );
+}
+
+/** Explicação do estado do campo de cidade — vai na bolinha ao lado do rótulo. */
+const CITY_ABOUT = "A lista de municípios vem do estado: escolha a UF e as cidades aparecem aqui.";
+
+/**
+ * Cidade: um `<select>` com os municípios da UF escolhida.
+ *
+ * Sem UF o campo fica **desabilitado**, não escondido nem com um aviso fixo
+ * embaixo: desabilitado já diz "ainda não é a sua vez" sem ocupar uma linha de
+ * texto que some depois de ser lida uma vez. O porquê vai para a bolinha ao
+ * lado do rótulo (`about`), que abre no hover, no clique e pelo teclado — quem
+ * usa toque também alcança.
+ *
+ * Cai para campo de texto quando há UF mas não há lista (IBGE fora do ar). Um
+ * select vazio seria um beco sem saída; digitar é pior que escolher, mas é
+ * melhor que não conseguir terminar o cadastro.
+ */
+function CityField({
+  value,
+  onChange,
+  state,
+  cities,
+  loading,
+  error,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  state: string;
+  cities: Municipality[];
+  loading: boolean;
+  error?: string;
+}) {
+  const id = useId();
+
+  // Sem UF ou carregando: o mesmo select, desabilitado. Manter o controle (em
+  // vez de trocar por outro) evita o campo saltar de tipo no meio do caminho.
+  if (!state || loading) {
+    return (
+      <SelectField
+        label="Cidade"
+        name="city"
+        icon={MapPin}
+        options={[]}
+        value=""
+        onChange={onChange}
+        placeholder={loading ? "Carregando municípios…" : "Selecione a UF primeiro"}
+        disabled
+        about={CITY_ABOUT}
+      />
+    );
+  }
+
+  if (cities.length === 0) {
+    return (
+      <LabeledField label="Cidade" htmlFor={id} error={error}>
+        <div className="relative">
+          <MapPin
+            size={16}
+            className="pointer-events-none absolute inset-y-0 left-3 my-auto text-neutral"
+            aria-hidden
+          />
+          <Input
+            id={id}
+            name="city"
+            value={value}
+            onChange={(e) => onChange(e.currentTarget.value)}
+            placeholder="Ex: São Paulo"
+            autoComplete="address-level2"
+            required
+            aria-invalid={Boolean(error)}
+            className={cn("pl-10", error && "border-danger focus-visible:ring-danger")}
+          />
+        </div>
+      </LabeledField>
+    );
+  }
+
+  return (
+    <SelectField
+      label="Cidade"
+      name="city"
+      icon={MapPin}
+      options={cities}
+      value={value}
+      onChange={onChange}
+      placeholder="Selecione a cidade"
+      about={CITY_ABOUT}
+      error={error}
+    />
+  );
+}
+
+/**
+ * Campo de texto que aparece depois de escolher "Outro".
+ *
+ * Entra com animação de altura para a lista abaixo não saltar — e sem ela
+ * quando `prefers-reduced-motion` está ligado.
+ */
+function OtherDetail({
+  label,
+  name,
+  value,
+  onChange,
+  placeholder,
+  error,
+  reduced,
+}: {
+  label: string;
+  name: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  error?: string;
+  reduced: boolean | null;
+}) {
+  const id = useId();
+  return (
+    <motion.div
+      initial={reduced ? false : { opacity: 0, height: 0 }}
+      animate={{ opacity: 1, height: "auto" }}
+      transition={{ duration: 0.2, ease: "easeOut" }}
+      // `overflow-hidden` é o que faz a altura animar sem a lista de baixo
+      // saltar — mas ele também corta o anel de foco, que é desenhado PARA
+      // FORA da borda. O padding devolve o espaço do anel e a margem negativa
+      // tira esse espaço do fluxo, então o campo continua alinhado com os
+      // outros. Sem o par, ou o foco aparece cortado ou o campo entra torto.
+      //
+      // O `pb-1` existe porque o input é o último filho: sem ele, a borda de
+      // baixo do anel encosta no corte do `overflow`. Ele NÃO é compensado por
+      // `-mb`, ao contrário do eixo horizontal — a margem negativa comia 4px
+      // do `space-y-4` do passo e colava este campo no bloco seguinte, que é o
+      // que se via na tela. 4px a mais de altura aqui não desalinham nada.
+      className="-mx-1 overflow-hidden px-1 pb-1"
+    >
+      <LabeledField label={label} htmlFor={id} error={error}>
+        <Input
+          id={id}
+          name={name}
+          value={value}
+          onChange={(e) => onChange(e.currentTarget.value)}
+          placeholder={placeholder}
+          maxLength={OTHER_DETAIL_MAX}
+          required
+          autoFocus
+          aria-invalid={Boolean(error)}
+          className={cn(error && "border-danger focus-visible:ring-danger")}
+        />
+      </LabeledField>
+    </motion.div>
   );
 }
 

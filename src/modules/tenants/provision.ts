@@ -28,15 +28,23 @@ type CreateTenantWithOwnerInput = {
    * na criação pelo admin (/admin/contas), que não passa pelo formulário.
    */
   lead?: {
+    /** CNPJ, só dígitos — o fechai aceita apenas empresas. */
     document?: string;
     phone?: string;
     phoneSecondary?: string;
-    birthDate?: Date;
-    gender?: string;
+    zipCode?: string;
+    street?: string;
+    addressNumber?: string;
+    complement?: string;
+    neighborhood?: string;
     city?: string;
     state?: string;
     businessSegment?: string;
+    /** Texto livre — só quando `businessSegment` é "outro". */
+    businessSegmentOther?: string;
     referralSource?: string;
+    /** Texto livre — só quando `referralSource` é "outro". */
+    referralSourceOther?: string;
   };
 };
 
@@ -65,10 +73,17 @@ export async function createTenantWithOwner(input: CreateTenantWithOwnerInput) {
         name: tenantName,
         planKey,
         trialEndsAt,
+        zipCode: lead?.zipCode,
+        street: lead?.street,
+        addressNumber: lead?.addressNumber,
+        complement: lead?.complement,
+        neighborhood: lead?.neighborhood,
         city: lead?.city,
         state: lead?.state,
         businessSegment: lead?.businessSegment,
+        businessSegmentOther: lead?.businessSegmentOther,
         referralSource: lead?.referralSource,
+        referralSourceOther: lead?.referralSourceOther,
         whatsappInstance: { create: { status: "disconnected" } },
       },
     });
@@ -96,8 +111,8 @@ export async function createTenantWithOwner(input: CreateTenantWithOwnerInput) {
         document: lead?.document,
         phone: lead?.phone,
         phoneSecondary: lead?.phoneSecondary,
-        birthDate: lead?.birthDate,
-        gender: lead?.gender,
+        // `birthDate`/`gender` não entram mais: o cadastro é de empresa, e as
+        // colunas seguem no schema só pelo histórico das contas antigas.
       },
     });
 
