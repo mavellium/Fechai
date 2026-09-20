@@ -178,7 +178,7 @@ export function ConversationThread({
         <div className="border-t border-white/10 bg-warn/5 px-4 py-3">
           {conversation.agentPaused ? (
             <p className="text-sm text-white/80">
-              O agente está pausado nesta conversa (por reação, emoji ou você) — por isso ele não
+              O agente está pausado nesta conversa (por reação do atendente ou resposta manual) — por isso ele não
               respondeu. Ative-o acima para ele voltar a atender, ou responda você mesmo.
             </p>
           ) : (

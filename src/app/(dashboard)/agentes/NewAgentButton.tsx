@@ -14,7 +14,7 @@ import { createAgentAction } from "./actions";
 /**
  * Criação de agente. Só o nome — o resto é o passo a passo da própria tela do
  * agente, para onde a action redireciona. Pedir persona inteira aqui era o
- * jeito antigo (formulário de 7 campos de cara, sem contexto).
+ * jeito antigo (todos os campos de uma vez, sem contexto).
  */
 export function NewAgentButton({ usage }: { usage: AgentUsage }) {
   const ref = useRef<HTMLDialogElement>(null);

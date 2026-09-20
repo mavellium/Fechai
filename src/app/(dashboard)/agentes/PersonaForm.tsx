@@ -22,6 +22,7 @@ const EMPTY: PersonaAnswers = {
   businessName: "",
   sector: "",
   tone: "",
+  writingStyle: "",
   offer: "",
   avoid: "",
   objective: "",
@@ -30,7 +31,7 @@ const EMPTY: PersonaAnswers = {
 /**
  * Persona do agente.
  *
- * Antes eram sete campos empilhados, sem explicação e sem nenhuma pista do que
+ * Antes eram vários campos empilhados, sem explicação e sem nenhuma pista do que
  * o preenchimento produzia — quem chegava não sabia se estava configurando
  * aparência, texto de saudação ou comportamento. Agora os campos vêm em três
  * blocos com título ("quem ele é", "como fala", "onde a conversa chega"), cada
@@ -75,7 +76,7 @@ export function PersonaForm({
           return (
             // O hint da persona explica o que é o campo, não como preenchê-lo
             // (disso cuida o placeholder) — por isso vai na bolinha, não em
-            // linha: sete parágrafos empilhados afogavam os sete campos.
+            // linha: um parágrafo por campo afogaria o formulário.
             <Field key={f.name} label={f.label} htmlFor={id} about={f.hint} optional={!required}>
               <Control
                 {...fieldProps(id)}

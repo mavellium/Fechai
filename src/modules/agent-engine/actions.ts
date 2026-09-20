@@ -47,8 +47,8 @@ export const ACTION_CATALOG: ActionDef[] = [
   {
     key: "follow_up",
     label: "Follow-up automático",
-    description: "Reengaja o contato depois de quantas horas você definir, sem resposta.",
-    outcome: "O agente manda uma mensagem sozinho se o contato sumir.",
+    description: "Reengaja o contato sem resposta, desde que ele ainda não tenha consulta marcada.",
+    outcome: "O agente manda uma mensagem se o contato sumir; após agendar, ficam apenas os lembretes da consulta.",
     status: "ready",
     configurable: true,
   },

@@ -381,7 +381,7 @@ async function completeWithFallback(
  *
  * Exportada porque o webhook do WhatsApp também precisa dela: para saber se a
  * opção "ouvir áudio" está ligada antes de gastar uma transcrição, e a de
- * "parar com emoji" antes de pausar a conversa.
+ * "assumir com reação" antes de o atendente pausar a conversa.
  */
 export async function resolveAgent(tenantId: string, agentId?: string) {
   const select = {

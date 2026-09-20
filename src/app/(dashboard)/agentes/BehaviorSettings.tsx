@@ -34,9 +34,9 @@ const OPTIONS: {
   {
     key: "stopOnEmoji",
     icon: StopCircle,
-    title: "Encerrar conversa com emoji",
+    title: "Assumir conversa com reação",
     description:
-      "Se o cliente reagir com um emoji (ou responder só com um emoji), o agente para de responder naquela conversa — ela sobe como “precisa de você”. Devolva em Conversas para o agente retomar.",
+      "Quando você ou outro atendente reagir com um emoji pelo WhatsApp da empresa, o agente para de responder naquela conversa e ela sobe como “precisa de você”. Reações do cliente não pausam o agente.",
   },
 ];
 

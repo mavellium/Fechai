@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const db = vi.hoisted(() => ({
   tenantAction: { findFirst: vi.fn(), findUnique: vi.fn() },
   appointment: { findFirst: vi.fn(), findMany: vi.fn(), updateMany: vi.fn(), create: vi.fn(), update: vi.fn() },
+  conversation: { update: vi.fn() },
   lead: { findFirst: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
 }));
 const mirrors = vi.hoisted(() => ({ googlePush: vi.fn(), googleDelete: vi.fn(), clinicorpPush: vi.fn(), clinicorpCancel: vi.fn(), clinicorpConflict: vi.fn(), clinicorpBusy: vi.fn() }));
@@ -154,6 +155,27 @@ describe("retorno de contato com consulta", () => {
   });
 });
 
+describe("follow-up depois do agendamento", () => {
+  it("não programa reengajamento quando o contato já tem consulta futura", async () => {
+    db.appointment.findMany.mockResolvedValue([appointment]);
+
+    const result = await runToolHandler("follow_up", ctx, {});
+
+    expect(result).toContain("já tem uma consulta futura");
+    expect(db.conversation.update).not.toHaveBeenCalled();
+  });
+
+  it("continua permitindo follow-up para contato sem consulta futura", async () => {
+    db.appointment.findMany.mockResolvedValue([]);
+
+    expect(await runToolHandler("follow_up", ctx, {})).toContain("programado");
+    expect(db.conversation.update).toHaveBeenCalledWith({
+      where: { id: ctx.conversationId },
+      data: { followUpSentAt: null },
+    });
+  });
+});
+
 // Relato: o agente sugeria um horário já marcado, o contato aceitava e só
 // então ouvia "esse já está ocupado, escolha outro".
 describe("horários livres antes de sugerir", () => {
@@ -182,9 +204,10 @@ describe("horários livres antes de sugerir", () => {
   it("tira consultas nossas, bloqueios do Clinicorp e a pausa, e encaixa depois de cada ocupado", async () => {
     // Nossa consulta 10:00–10:30 e Clinicorp 14:00–15:30 (horário de SP).
     mirrors.clinicorpBusy.mockResolvedValue([{ startsAt: new Date("2026-09-17T17:00:00Z"), endsAt: new Date("2026-09-17T18:30:00Z") }]);
-    const result = await slots({ date: "2026-09-17" });
-    expect(result).toContain("09:00, 10:30, 11:00, 13:00, 15:30, 16:00, 17:00");
-    expect(result).not.toMatch(/10:00|12:00|14:00|15:00,/);
+    const result = await slots({ date: "2026-09-17", days: 1 });
+    const free = result.split("horários livres: ")[1];
+    expect(free).toBe("09:00, 10:30, 11:00, 13:00, 15:30, 16:00, 17:00");
+    expect(free).not.toMatch(/10:00|12:00|14:00|15:00,/);
     expect(mirrors.clinicorpBusy).toHaveBeenCalledWith(ctx.tenantId, "2026-09-17", cfg.timezone);
   });
   it("respeita a antecedência mínima e o limite exato aceito pela gravação", async () => {
@@ -197,9 +220,27 @@ describe("horários livres antes de sugerir", () => {
     db.appointment.findMany.mockResolvedValue([{ startsAt: new Date("2026-09-17T12:00:00Z"), endsAt: new Date("2026-09-17T21:00:00Z") }]);
     expect(await slots({ date: "2026-09-17" })).toContain("sem horário livre");
   });
-  it("consulta vários dias de uma vez, no máximo 7", async () => {
-    const result = await slots({ date: "2026-09-17", days: 30 });
-    expect(result.split("\n").filter((l) => l.startsWith("- "))).toHaveLength(7);
+  it("consulta duas semanas por padrão e limita a busca a 14 dias", async () => {
+    await slots({ date: "2026-09-17", days: 30 });
+    expect(mirrors.clinicorpBusy).toHaveBeenCalledWith(ctx.tenantId, "2026-09-30", cfg.timezone);
+    expect(mirrors.clinicorpBusy).not.toHaveBeenCalledWith(ctx.tenantId, "2026-10-01", cfg.timezone);
+  });
+  it("mostra expediente e horários reais de cada alternativa", async () => {
+    db.appointment.findMany.mockResolvedValue([]);
+    const result = await slots({ date: "2026-09-17", days: 1 });
+    expect(result).toContain("funcionamento 09:00–12:00, 13:00–18:00");
+    expect(result).toContain("horários livres: 09:00");
+  });
+  it("não devolve quinta ou sexta recusadas e avança para o próximo dia útil", async () => {
+    db.appointment.findMany.mockResolvedValue([]);
+    const result = await slots({
+      date: "2026-09-17",
+      excludeWeekdays: [4, 5],
+    });
+    expect(result).toContain("Dias da semana descartados pelo contato (não ofereça novamente): Quinta, Sexta");
+    expect(result).toContain("(2026-09-21) — funcionamento");
+    expect(result).not.toContain("qui., 17 de set. (2026-09-17) — funcionamento");
+    expect(result).not.toContain("sex., 18 de set. (2026-09-18) — funcionamento");
   });
   it("recusa por conflito já traz os livres do dia e não grava", async () => {
     db.appointment.findMany.mockResolvedValueOnce([]).mockResolvedValue([appointment]);

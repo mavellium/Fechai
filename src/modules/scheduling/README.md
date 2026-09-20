@@ -281,9 +281,14 @@ nada, o agente sugeria um horário já ocupado, o contato aceitava e só então
 - Candidatos: `slotStartTimes(cfg)` (grade da duração, recomeçada no fim de cada
   pausa) mais o fim de cada compromisso ocupado, para um encaixe fora da grade
   não sumir.
-- Tool `list_available_slots` (`date` + `days` até 7), sempre exposta com o
-  agendamento ligado. O prompt manda chamá-la antes de sugerir ou aceitar
-  qualquer horário.
+- Tool `list_available_slots` (`date` + `days` até 14 + `excludeDates` +
+  `excludeWeekdays`), sempre exposta com o agendamento ligado. Sem uma data exata pedida pelo contato, ela
+  pesquisa 14 dias por padrão e devolve até cinco dias com vaga, cada um com o
+  expediente daquele dia e os horários realmente livres. Datas que o contato
+  recusou entram em `excludeDates`; dias da semana recusados (como quinta e
+  sexta) entram em `excludeWeekdays`. Nenhum deles volta nas opções; o prompt manda
+  avançar para o próximo dia da grade em vez de insistir. A tool continua sendo
+  obrigatória antes de sugerir ou aceitar qualquer horário.
 - A recusa por conflito em `schedule_meeting` e `reschedule_meeting` já anexa os
   livres do mesmo dia (`freeSlotsHint`), para a segunda sugestão não ser outro
   chute. A lista é orientação: `hasConflictAnywhere` continua sendo a checagem

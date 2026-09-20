@@ -3,14 +3,28 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion, useReducedMotion } from "motion/react";
-import { ArrowLeft, ArrowRight, Check, MessageSquare, Sparkles, Zap } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  AudioLines,
+  Ban,
+  BrainCircuit,
+  Check,
+  MessageSquare,
+  Mic,
+  Sparkles,
+  StopCircle,
+  Zap,
+} from "lucide-react";
 import posthog from "posthog-js";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
 import { TypingToCheck } from "@/components/ui/TypingToCheck";
 import { cn } from "@/lib/utils";
+import { ACTION_BY_KEY } from "@/modules/agent-engine/actions";
 import {
   countActionsOverLimit,
   LAST_STEP,
@@ -27,16 +41,28 @@ import {
 import { completeOnboarding, saveOnboardingProgress } from "./actions";
 import { ChatPreview } from "./ChatPreview";
 import { IntegrationPanel } from "./IntegrationPanel";
+import { KnowledgeManager } from "@/app/(dashboard)/agentes/KnowledgeManager";
 
 const AUTOSAVE_DELAY = 800;
 
 type SaveState = "idle" | "saving" | "saved";
+
+type KnowledgeDocument = {
+  id: string;
+  title: string;
+  status: string;
+  createdAt: Date;
+  fileUrl: string | null;
+  fileName: string | null;
+};
 
 export function OnboardingWizard({
   businessName,
   tenantId,
   planLabel,
   actionLimit,
+  agentId,
+  knowledgeDocuments,
   whatsappStatus,
   initialStep,
   initialDraft,
@@ -45,6 +71,8 @@ export function OnboardingWizard({
   tenantId: string;
   planLabel: string;
   actionLimit: number;
+  agentId: string;
+  knowledgeDocuments: KnowledgeDocument[];
   whatsappStatus: string;
   initialStep: StepNumber;
   initialDraft: OnboardingDraft;
@@ -106,7 +134,7 @@ export function OnboardingWizard({
 
   async function finish() {
     // Revalida os passos que travam — o botão final não deve confiar só na UI.
-    for (const s of [2, 3] as StepNumber[]) {
+    for (const s of [2, 5] as StepNumber[]) {
       const found = validateStep(s, draft);
       if (Object.keys(found).length > 0) {
         setErrors(found);
@@ -161,6 +189,12 @@ export function OnboardingWizard({
               />
             )}
             {step === 3 && (
+              <StepRules draft={draft} onChange={update} />
+            )}
+            {step === 4 && (
+              <StepKnowledge agentId={agentId} documents={knowledgeDocuments} />
+            )}
+            {step === 5 && (
               <StepProcesses
                 draft={draft}
                 errors={errors}
@@ -168,7 +202,8 @@ export function OnboardingWizard({
                 onChange={update}
               />
             )}
-            {step === 4 && (
+            {step === 6 && <StepBehavior draft={draft} onChange={update} />}
+            {step === 7 && (
               <StepIntegration
                 draft={draft}
                 tenantId={tenantId}
@@ -337,8 +372,8 @@ function StepWelcome({ businessName, planLabel }: { businessName: string; planLa
       <p className="text-ink">
         Você acabou de criar a conta do{" "}
         <strong className="font-semibold">{businessName}</strong> no plano{" "}
-        <strong className="font-semibold">{planLabel}</strong>. Nos próximos 3 passos você vai montar
-        seu atendente e deixar ele pronto para conversar.
+        <strong className="font-semibold">{planLabel}</strong>. Nos próximos 6 passos você vai
+        configurar o que ele diz, sabe, pode fazer e como se comporta.
       </p>
 
       <ul className="mt-8 grid gap-6 sm:grid-cols-3">
@@ -352,8 +387,8 @@ function StepWelcome({ businessName, planLabel }: { businessName: string; planLa
       </ul>
 
       <p className="mt-8 border-t border-neutral/15 pt-6 text-sm text-neutral">
-        Leva uns 3 minutos. Se precisar parar no meio, é só fechar — a gente guarda o que você já
-        preencheu.
+        Leva poucos minutos. Se precisar parar no meio, é só fechar — a gente guarda o que você já
+        preencheu. Textos e arquivos enviados ao Cérebro também ficam salvos.
       </p>
     </div>
   );
@@ -407,8 +442,8 @@ function StepAgent({
 
         {/* objetivo */}
         <ChoiceGroup
-          label="O que ele deve buscar em cada conversa?"
-          hint="É para onde ele vai levar o papo."
+          label="Qual resultado ele deve priorizar?"
+          hint="Esse é o destino da conversa. Em Habilidades você escolhe as tarefas que ele pode executar para chegar lá."
           error={errors.objective}
           options={OBJECTIVE_OPTIONS}
           value={draft.objective}
@@ -429,6 +464,78 @@ function StepAgent({
 }
 
 /* ------------------------------------------------------------ passo 3 */
+
+function StepRules({
+  draft,
+  onChange,
+}: {
+  draft: OnboardingDraft;
+  onChange: <K extends keyof OnboardingDraft>(key: K, value: OnboardingDraft[K]) => void;
+}) {
+  const rulesId = useId();
+
+  return (
+    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
+      <Field
+        label="Regras do agente"
+        hint="Escreva uma regra por linha. Este passo é opcional e pode ser alterado depois."
+        htmlFor={rulesId}
+        optional
+      >
+        <Textarea
+          id={rulesId}
+          value={draft.rules}
+          onChange={(event) => onChange("rules", event.target.value)}
+          rows={9}
+          maxLength={4000}
+          placeholder={[
+            "Não prometer desconto fora da tabela",
+            "Não dar diagnóstico médico",
+            "Não confirmar prazo sem consultar a equipe",
+          ].join("\n")}
+        />
+      </Field>
+
+      <aside className="rounded-xl border border-neutral/20 bg-white p-5">
+        <Ban size={20} className="text-iris" aria-hidden />
+        <h2 className="font-display mt-3 font-semibold text-ink">Regra não é informação</h2>
+        <p className="mt-2 text-sm leading-relaxed text-neutral">
+          Regra diz o que o agente nunca faz. Preços, horários, serviços e respostas sobre o negócio
+          entram no Cérebro, no próximo passo.
+        </p>
+      </aside>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------ passo 4 */
+
+function StepKnowledge({
+  agentId,
+  documents,
+}: {
+  agentId: string;
+  documents: KnowledgeDocument[];
+}) {
+  return (
+    <div className="space-y-5">
+      <div className="flex items-start gap-3 rounded-xl border border-iris/20 bg-iris/5 px-5 py-4">
+        <BrainCircuit size={20} className="mt-0.5 shrink-0 text-iris" aria-hidden />
+        <p className="text-sm leading-relaxed text-neutral">
+          Cole informações ou envie arquivos <strong className="font-semibold text-ink">.txt, .md ou .pdf</strong>.
+          O agente consulta esta mesma base ao responder e não inventa o que estiver faltando. Você
+          também pode deixar para adicionar documentos depois.
+        </p>
+      </div>
+
+      <div data-surface="dark" className="rounded-xl bg-ink p-5 sm:p-6">
+        <KnowledgeManager agentId={agentId} documents={documents} />
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------ passo 5 */
 
 function StepProcesses({
   draft,
@@ -453,9 +560,17 @@ function StepProcesses({
 
   return (
     <div className="space-y-6">
+      <p className="rounded-xl border border-iris/15 bg-iris/5 px-4 py-3 text-sm leading-relaxed text-neutral">
+        <strong className="font-semibold text-ink">Objetivo é onde chegar.</strong>{" "}
+        Aqui você escolhe o que o atendente está autorizado a fazer sozinho durante o caminho.
+      </p>
+
       <div className="grid gap-3 sm:grid-cols-2">
         {PROCESS_CATALOG.map((p) => {
           const checked = draft.processes.includes(p.key);
+          const availableActions = p.actionKeys
+            .map((key) => ACTION_BY_KEY[key])
+            .filter((action) => action.status !== "disabled");
           return (
             <button
               key={p.key}
@@ -482,6 +597,14 @@ function StepProcesses({
                 <span className="mt-1 block text-sm leading-relaxed text-neutral">
                   {p.description}
                 </span>
+                <span className="mt-3 block border-t border-neutral/15 pt-3 text-xs leading-relaxed text-neutral">
+                  <strong className="font-semibold text-ink">O que esta escolha ativa: </strong>
+                  {availableActions.length > 0
+                    ? availableActions
+                        .map((action) => action.outcome ?? action.description)
+                        .join(" ")
+                    : "orienta o agente a conduzir esse tipo de conversa usando o objetivo e o Cérebro configurados."}
+                </span>
               </span>
             </button>
           );
@@ -502,8 +625,8 @@ function StepProcesses({
       )}
 
       <Field
-        label="Tem mais alguma coisa que ele deve resolver?"
-        hint="Opcional. Escreva com suas palavras."
+        label="Existe outra tarefa que ele pode assumir?"
+        hint="Opcional. Descreva uma tarefa prática com suas palavras."
         htmlFor={customId}
       >
         <Textarea
@@ -518,7 +641,83 @@ function StepProcesses({
   );
 }
 
-/* ------------------------------------------------------------ passo 4 */
+/* ------------------------------------------------------------ passo 6 */
+
+const BEHAVIOR_OPTIONS = [
+  {
+    key: "listenAudio" as const,
+    icon: Mic,
+    title: "Ouvir mensagens de voz",
+    description:
+      "Quando o cliente envia um áudio, o agente transcreve e entende a mensagem. Desligado, ele ignora áudios.",
+  },
+  {
+    key: "stopOnEmoji" as const,
+    icon: StopCircle,
+    title: "Atendente assume com uma reação",
+    description:
+      "Quando você ou outro atendente reage com um emoji pelo WhatsApp da empresa, o agente para de responder. Reações do cliente não pausam o agente.",
+  },
+];
+
+function StepBehavior({
+  draft,
+  onChange,
+}: {
+  draft: OnboardingDraft;
+  onChange: <K extends keyof OnboardingDraft>(key: K, value: OnboardingDraft[K]) => void;
+}) {
+  return (
+    <div className="space-y-3">
+      {BEHAVIOR_OPTIONS.map((option) => {
+        const checked = draft[option.key];
+        const descriptionId = `onboarding-${option.key}-description`;
+        return (
+          <div
+            key={option.key}
+            className={cn(
+              "flex flex-wrap items-center justify-between gap-4 rounded-xl border bg-white p-5 transition-colors",
+              checked ? "border-iris/50 bg-iris/5" : "border-neutral/20",
+            )}
+          >
+            <div className="flex min-w-0 flex-1 items-start gap-3">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-iris/10 text-iris">
+                <option.icon size={19} aria-hidden />
+              </span>
+              <div>
+                <h2 className="font-display font-semibold text-ink">{option.title}</h2>
+                <p id={descriptionId} className="mt-1 max-w-prose text-sm leading-relaxed text-neutral">
+                  {option.description}
+                </p>
+              </div>
+            </div>
+            <Switch
+              checked={checked}
+              onCheckedChange={(next) => onChange(option.key, next)}
+              label={`${option.title}: ${checked ? "ligado" : "desligado"}`}
+              describedBy={descriptionId}
+            />
+          </div>
+        );
+      })}
+
+      <div className="flex items-start gap-3 rounded-xl border border-neutral/20 bg-white p-5">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-neutral/10 text-neutral">
+          <AudioLines size={19} aria-hidden />
+        </span>
+        <div>
+          <h2 className="font-display font-semibold text-ink">Responder com áudio</h2>
+          <p className="mt-1 text-sm leading-relaxed text-neutral">
+            Essa opção exige escolher uma voz pronta ou gravar a sua. Depois do onboarding, ela fica
+            em Agentes › Comportamento; o agente só responde falando para quem também enviou áudio.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------ passo 7 */
 
 function StepIntegration({
   draft,
@@ -562,7 +761,7 @@ function ChoiceGroup({
   label: string;
   hint?: string;
   error?: string;
-  options: { value: string; hint: string }[];
+  options: { value: string; label?: string; hint: string }[];
   value: string;
   onSelect: (value: string) => void;
 }) {
@@ -596,7 +795,7 @@ function ChoiceGroup({
                 {checked && <span className="h-2 w-2 rounded-full bg-iris" />}
               </span>
               <span className="min-w-0">
-                <span className="block text-sm font-medium text-ink">{o.value}</span>
+                <span className="block text-sm font-medium text-ink">{o.label ?? o.value}</span>
                 <span className="mt-0.5 block text-sm text-neutral">{o.hint}</span>
               </span>
             </button>

@@ -184,18 +184,18 @@ o cliente queria. A action é `generateConversationSummary` em
 
 ### Transferir para humano e o grupo do WhatsApp (`handoff.ts`)
 
-Uma conversa vira "precisa de você" por **três caminhos**, e os três são a
+Uma conversa vira "precisa de você" por **dois caminhos**, e os dois são a
 mesma coisa para quem está do outro lado:
 
 | caminho | onde | o que marca |
 | --- | --- | --- |
 | tool `handoff_human` | `tools.ts` (o LLM decide) | `needsHuman` |
-| reação com emoji | webhook do WhatsApp | `needsHuman` + `agentPaused` |
-| mensagem só de emoji | webhook do WhatsApp | `needsHuman` + `agentPaused` |
+| reação do atendente pelo número da empresa | webhook do WhatsApp | `needsHuman` + `agentPaused` |
 
-Os dois últimos dependem de `Agent.stopOnEmoji`, que **nasce ligado**
-(`@default(true)` no schema): reagir com emoji é o gesto mais barato que existe
-no WhatsApp para "quero falar com gente".
+O segundo depende de `Agent.stopOnEmoji`, que **nasce ligado** (`@default(true)`
+no schema): reagir com emoji é o gesto mais barato para o atendente avisar
+"assumi esta conversa". O webhook distingue a origem por `isFromMe`: reação do
+cliente e mensagem que contém apenas emoji não pausam o agente.
 
 **A config da ação vive em `TenantAction.config`** (chave `handoff_human`),
 mesmo padrão de `follow-up/config.ts` e `scheduling/config.ts` — por agente,
@@ -280,6 +280,27 @@ A conversão para tempo/dinheiro mora em `TenantAttendanceCost` (minutos por
 atendimento × custo da hora), declarado pela clínica em /relatorios. Sem isso,
 o relatório mostra só a contagem e convida a definir — nunca uma média do
 sistema apresentada como fato.
+
+### Duplicar, exportar, importar e replicar agentes
+
+O formato portátil mora em `agent-package.ts`; leitura e criação ficam em
+`transfer.ts`. O pacote `.fechai-agent.json` é versionado e contém persona,
+prompt, comportamentos, ações com seus `config` e o texto integral dos
+documentos do Cérebro.
+
+Ao criar uma cópia, os documentos passam novamente por `ingestDocument`: os
+chunks e embeddings precisam nascer com o novo `agentId`; copiar linhas cruas
+misturaria o RAG dos agentes. A operação apaga a cópia incompleta se qualquer
+etapa falhar.
+
+Não entram conversas, contatos, agendamentos nem posição de agente principal.
+A cópia sempre nasce desligada. Voz pronta do catálogo é portável; voz gravada
+não é, porque compartilhar o mesmo modelo faria excluir/regravar em um agente
+quebrar o outro e transferiria uma voz pessoal para outra empresa.
+
+O cliente duplica e exporta em `/agentes/[id]`, importa em `/agentes`. O
+superadmin replica entre tenants em `/admin/agentes`; o limite de agentes e de
+ações do plano de destino continua valendo.
 
 ## O que NÃO faz
 

@@ -19,7 +19,7 @@ import {
 type Result = { ok: boolean; error?: string };
 
 const progressSchema = z.object({
-  step: z.number().int().min(1).max(4),
+  step: z.number().int().min(1).max(7),
   draft: draftSchema,
 });
 
@@ -98,6 +98,8 @@ export async function completeOnboarding(input: { draft: unknown }): Promise<Res
         systemPrompt,
         objective: persona.objective,
         personaDraft: persona,
+        listenAudio: draft.listenAudio,
+        stopOnEmoji: draft.stopOnEmoji,
       },
     }),
     // Liga o que foi escolhido e desliga o resto, para o estado bater com o wizard.
@@ -117,7 +119,7 @@ export async function completeOnboarding(input: { draft: unknown }): Promise<Res
       where: { id: tenantId },
       data: {
         onboardingCompleted: true,
-        onboardingStep: 4,
+        onboardingStep: 7,
         onboardingDraft: draft,
       },
     }),

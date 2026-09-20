@@ -7,7 +7,7 @@ import { ensureTenantWidgetDeployed } from "@/lib/widget/deploy";
 import { OnboardingWizard } from "./OnboardingWizard";
 
 /**
- * Onboarding guiado do usuário comum (OWNER). Uma rota, uma página: os 4
+ * Onboarding guiado do usuário comum (OWNER). Uma rota, uma página: os 7
  * passos são estado do client component — não há navegação entre rotas.
  *
  * requireOwner() já manda o SUPERADMIN para o painel dele, então o wizard
@@ -35,9 +35,31 @@ export default async function OnboardingPage() {
   // Conta suspensa não configura nada — o painel mostra o aviso e o suporte.
   if (tenant.status === "suspended") redirect("/inicio");
 
-  // Publica o widget.js do tenant na CDN sozinho — o snippet do passo 4 já
+  // Publica o widget.js do tenant na CDN sozinho — o snippet do passo Conectar já
   // funciona sem precisar visitar /whatsapp antes.
   await ensureTenantWidgetDeployed(session.user.tenantId);
+
+  // Cérebro é a base real do agente, não um campo provisório do onboarding.
+  // Assim, textos e arquivos adicionados aqui já aparecem no editor completo.
+  const agent = await prisma.agent.findFirst({
+    where: { tenantId: session.user.tenantId, archived: false },
+    orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }],
+    select: {
+      id: true,
+      knowledgeDocs: {
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          title: true,
+          status: true,
+          createdAt: true,
+          fileUrl: true,
+          fileName: true,
+        },
+      },
+    },
+  });
+  if (!agent) redirect("/inicio");
 
   return (
     <OnboardingWizard
@@ -45,6 +67,8 @@ export default async function OnboardingPage() {
       tenantId={session.user.tenantId}
       planLabel={PLAN_BY_KEY[tenant.planKey].name}
       actionLimit={PLAN_BY_KEY[tenant.planKey].maxActiveActions}
+      agentId={agent.id}
+      knowledgeDocuments={agent.knowledgeDocs}
       whatsappStatus={tenant.whatsappInstance?.status ?? "disconnected"}
       initialStep={isStepNumber(tenant.onboardingStep) ? tenant.onboardingStep : FIRST_STEP}
       initialDraft={parseDraft(tenant.onboardingDraft)}

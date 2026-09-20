@@ -2,6 +2,24 @@
 
 Uma linha por milestone concluído (mais recente no topo).
 
+## Portabilidade de agentes e laboratório administrativo — 2026-09-20
+
+- **Duplicar e transportar agentes:** o dono pode duplicar um agente, exportar
+  um pacote versionado `.fechai-agent.json` e importá-lo em outra conta. Persona,
+  regras, comportamento, configurações das habilidades e documentos do Cérebro
+  são recriados; conversas, contatos e agendamentos ficam fora.
+- **Réplica entre empresas:** `/admin/agentes` permite ao superadmin escolher um
+  agente de origem e uma empresa de destino. Toda cópia nasce desligada e não
+  principal, respeita os limites do plano e entra na trilha de auditoria.
+- **Voz e Cérebro isolados:** vozes do catálogo são portáveis; voz gravada não é
+  compartilhada. Documentos são ingeridos novamente para gerar chunks e
+  embeddings ligados ao novo agente.
+- **Banco de laboratório:** `npm run test:db:prepare` cria/sincroniza o banco
+  lógico `saas_test`, e `npm run dev:test` abre o app isolado na porta 3002. O
+  script recusa a URL de produção e nomes que não indiquem teste.
+- **Deploy esclarecido:** push para `main` recria web/worker, mas não cria outro
+  Postgres, não transporta `saas_test` e não roda `prisma db push` sozinho.
+
 ## Triagem de contatos, investido correto e preço por conta — 2026-09-17
 
 O agente passou a encerrar sozinho quem não é cliente em potencial, e o

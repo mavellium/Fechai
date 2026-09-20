@@ -56,7 +56,11 @@ describe("grade de horários", () => {
     expect(slotStartTimes(cfg).every((t) => t <= "14:15")).toBe(true);
   });
   it("diz ao agente para consultar os livres antes de sugerir", () => {
-    expect(scheduleSystemContext(parseScheduleConfig(null))).toContain("list_available_slots");
+    const context = scheduleSystemContext(parseScheduleConfig(null));
+    expect(context).toContain("list_available_slots");
+    expect(context).toContain("pesquise 14 dias");
+    expect(context).toContain("não pode quinta nem sexta");
+    expect(context).toContain("não os ofereça de novo");
   });
 });
 

@@ -75,7 +75,7 @@ export function ResolveButton({
       </Button>
       {agentPaused && (
         <p className="text-xs leading-relaxed text-white/50">
-          O agente está pausado nesta conversa — por reação, emoji ou resposta manual. Ative-o para
+          O agente está pausado nesta conversa — por reação do atendente ou resposta manual. Ative-o para
           ele voltar a atender.
         </p>
       )}

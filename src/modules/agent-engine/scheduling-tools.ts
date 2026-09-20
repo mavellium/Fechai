@@ -3,17 +3,32 @@ import { isWithinBusinessHours, type ScheduleConfig } from "@/modules/scheduling
 import { cancelAppointment, findLeadAppointment, listFreeSlots, listUpcomingLeadAppointments, rescheduleAppointment } from "@/modules/scheduling/repository";
 import { dayKeyInZone, formatInZone, parseLocalDateTime, partsInZone, timeInZone } from "@/modules/scheduling/time";
 import type { ToolContext } from "./tools";
-import { getWeeklyAvailability } from "@/modules/scheduling/weekly-availability";
+import { describeRanges, getWeeklyAvailability } from "@/modules/scheduling/weekly-availability";
+
+const DEFAULT_AVAILABILITY_SEARCH_DAYS = 14;
+const MAX_AVAILABILITY_SEARCH_DAYS = 14;
+const MAX_AVAILABLE_DATES_IN_RESULT = 5;
+const WEEKDAY_LABELS = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
 
 export const SCHEDULING_TOOLS: LlmToolSchema[] = [
   {
     name: "list_available_slots",
-    description: "Lista os horários LIVRES da agenda, já descontando consultas marcadas, pausas, expediente e antecedência mínima. Use sempre antes de sugerir ou aceitar um horário e ofereça somente horários desta lista. Não marca nada.",
+    description: "Lista um leque de horários LIVRES reais da agenda em vários dias, já descontando consultas, pausas, expediente e antecedência mínima. Use sempre antes de sugerir ou aceitar um horário. Quando o contato rejeitar dias ou datas, envie-os em excludeDates e não os ofereça novamente. Não marca nada.",
     parameters: {
       type: "object",
       properties: {
-        date: { type: "string", description: "Primeiro dia a consultar, AAAA-MM-DD" },
-        days: { type: "number", description: "Quantos dias consultar a partir da data (1 a 7). Padrão 1." },
+        date: { type: "string", description: "Primeiro dia a consultar, AAAA-MM-DD. Se o contato rejeitou dias consecutivos, comece depois do último deles." },
+        days: { type: "number", description: "Quantos dias corridos pesquisar a partir da data (1 a 14). Padrão 14 para encontrar vários dias úteis. Use 1 somente se o contato pediu uma data exata." },
+        excludeDates: {
+          type: "array",
+          items: { type: "string" },
+          description: "Datas AAAA-MM-DD que o contato já recusou ou disse que não pode. Elas não aparecem nas opções.",
+        },
+        excludeWeekdays: {
+          type: "array",
+          items: { type: "number" },
+          description: "Dias da semana que o contato não pode: 0=domingo, 1=segunda, ..., 6=sábado. Use, por exemplo, [4, 5] para 'não posso quinta nem sexta'.",
+        },
       },
       required: ["date"],
     },
@@ -80,18 +95,70 @@ function dayLabel(date: string, timeZone: string): string {
     : date;
 }
 
-export async function availableSlotsContext(ctx: Pick<ToolContext, "tenantId">, cfg: ScheduleConfig, date: string, days = 1): Promise<string> {
+export async function availableSlotsContext(
+  ctx: Pick<ToolContext, "tenantId">,
+  cfg: ScheduleConfig,
+  date: string,
+  days = DEFAULT_AVAILABILITY_SEARCH_DAYS,
+  excludeDates: unknown = [],
+  excludeWeekdays: unknown = [],
+): Promise<string> {
   if (!parseLocalDateTime(date, "12:00", cfg.timezone)) return "Data inválida. Use AAAA-MM-DD.";
-  const count = Math.min(Math.max(Math.round(days) || 1, 1), 7);
-  const dates = Array.from({ length: count }, (_, i) => addDays(date, i));
-  const perDay = await Promise.all(dates.map((d) => listFreeSlots(ctx.tenantId, cfg, d)));
-
-  const lines = dates.map((d, i) => {
-    const slots = perDay[i];
-    if (slots.length) return `- ${dayLabel(d, cfg.timezone)} (${d}): ${slots.map((s) => timeInZone(s, cfg.timezone)).join(", ")}`;
-    const weekday = partsInZone(parseLocalDateTime(d, "12:00", cfg.timezone)!, cfg.timezone).weekday;
-    return `- ${dayLabel(d, cfg.timezone)} (${d}): ${getWeeklyAvailability(cfg)[weekday].length ? "sem horário livre" : "não atendemos"}`;
+  const requestedDays = Number.isFinite(days)
+    ? Math.round(days)
+    : DEFAULT_AVAILABILITY_SEARCH_DAYS;
+  const count = Math.min(Math.max(requestedDays, 1), MAX_AVAILABILITY_SEARCH_DAYS);
+  const excluded = new Set(
+    (Array.isArray(excludeDates) ? excludeDates : [])
+      .filter((value): value is string => typeof value === "string")
+      .map((value) => value.trim())
+      .filter((value) => parseLocalDateTime(value, "12:00", cfg.timezone) !== null),
+  );
+  const excludedWeekdays = new Set(
+    (Array.isArray(excludeWeekdays) ? excludeWeekdays : [])
+      .filter((value): value is number => typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 6),
+  );
+  const searchedDates = Array.from({ length: count }, (_, i) => addDays(date, i));
+  const dates = searchedDates.filter((candidate) => {
+    if (excluded.has(candidate)) return false;
+    const noon = parseLocalDateTime(candidate, "12:00", cfg.timezone)!;
+    return !excludedWeekdays.has(partsInZone(noon, cfg.timezone).weekday);
   });
+  const perDay = await Promise.all(dates.map((d) => listFreeSlots(ctx.tenantId, cfg, d)));
+  const week = getWeeklyAvailability(cfg);
+
+  const results = dates.map((d, i) => {
+    const noon = parseLocalDateTime(d, "12:00", cfg.timezone)!;
+    const weekday = partsInZone(noon, cfg.timezone).weekday;
+    const ranges = week[weekday];
+    const slots = perDay[i];
+    return { date: d, label: dayLabel(d, cfg.timezone), ranges, slots };
+  });
+  const available = results.filter((result) => result.slots.length).slice(0, MAX_AVAILABLE_DATES_IN_RESULT);
+  const unavailable = results.filter((result) => result.ranges.length && !result.slots.length);
+  const closed = results.filter((result) => !result.ranges.length);
+
+  const lines = available.map((result) =>
+    `- ${result.label} (${result.date}) — funcionamento ${describeRanges(result.ranges)}; horários livres: ${result.slots.map((slot) => timeInZone(slot, cfg.timezone)).join(", ")}`,
+  );
+  if (!available.length) {
+    lines.push(`- Nenhum horário livre entre ${searchedDates[0]} e ${searchedDates.at(-1)} nas datas permitidas pelo contato.`);
+  }
+
+  const searchNotes = [
+    excluded.size
+      ? `Datas descartadas pelo contato (não ofereça novamente): ${[...excluded].sort().join(", ")}.`
+      : "",
+    excludedWeekdays.size
+      ? `Dias da semana descartados pelo contato (não ofereça novamente): ${[...excludedWeekdays].sort().map((day) => WEEKDAY_LABELS[day]).join(", ")}.`
+      : "",
+    unavailable.length
+      ? `Dias de atendimento sem horário livre nesta busca: ${unavailable.map((result) => `${result.label} (${result.date})`).join(", ")}.`
+      : "",
+    closed.length
+      ? `Dias em que não atendemos (sem expediente) foram pulados: ${closed.map((result) => `${result.label} (${result.date})`).join(", ")}.`
+      : "",
+  ].filter(Boolean);
   // A grade é a da duração padrão: calcular uma por variação daria listas
   // diferentes para o mesmo dia e o agente não teria como escolher entre elas.
   // Um tipo mais curto cabe em qualquer início destes; um mais longo é recusado
@@ -99,7 +166,11 @@ export async function availableSlotsContext(ctx: Pick<ToolContext, "tenantId">, 
   const note = cfg.durations.length
     ? ` Um tipo de atendimento mais longo pode não caber em todos eles — a checagem final é de schedule_meeting.`
     : "";
-  return `Horários livres (grade de ${cfg.durationMinutes} min). Ofereça somente estes:${note}\n${lines.join("\n")}`;
+  return [
+    `Horários livres reais (grade de ${cfg.durationMinutes} min). Ofereça somente estes e não repita datas/horas que o contato já recusou:${note}`,
+    ...lines,
+    ...searchNotes,
+  ].join("\n");
 }
 
 /**
@@ -125,7 +196,14 @@ export async function runSchedulingTool(name: string, ctx: ToolContext, args: Re
   if (name === "list_appointments") return leadAppointmentsContext(ctx, cfg);
   if (name === "list_available_slots") {
     if (typeof args.date !== "string") return "Informe a data em AAAA-MM-DD.";
-    return availableSlotsContext(ctx, cfg, args.date.trim(), typeof args.days === "number" ? args.days : 1);
+    return availableSlotsContext(
+      ctx,
+      cfg,
+      args.date.trim(),
+      typeof args.days === "number" ? args.days : undefined,
+      args.excludeDates,
+      args.excludeWeekdays,
+    );
   }
   if (typeof args.appointmentId !== "string" || !args.appointmentId.trim()) return "Consulte os agendamentos do contato e identifique a consulta antes de alterar.";
   const appointment = await findLeadAppointment(ctx.tenantId, ctx.leadId, args.appointmentId);

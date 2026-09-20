@@ -10,7 +10,7 @@ import { setConversationAgentPaused } from "./actions";
 /**
  * Liga/desliga o agente NESTA conversa.
  *
- * É a resposta ao "como faço o agente voltar a responder?": a reação/emoji de
+ * É a resposta ao "como faço o agente voltar a responder?": a reação do atendente
  * parada pausava a IA sem nenhum botão visível para retomá-la na mesma tela —
  * o "Marcar como resolvida" só tirava a conversa da fila e a IA continuava
  * muda. Este toggle aparece no cabeçalho do histórico e faz os dois lados: pausa

@@ -252,9 +252,9 @@ export class EvolutionProvider implements WhatsAppProvider {
     // pelo key.id contra o que o app já gravou ao enviar.
     if (!data) return null;
 
-    // Reação (emoji sobreposta a uma mensagem): não é uma mensagem do cliente.
-    // O webhook encerra a conversa com a opção "Encerrar conversa com emoji",
-    // mas nunca dispara turno do agente (nem entra no histórico).
+    // Reação (emoji sobreposta a uma mensagem) nunca dispara um turno nem entra
+    // no histórico. O webhook usa `fromMe` para distinguir o comando rápido do
+    // atendente (pausar o agente) de uma reação comum do cliente (ignorar).
     const reaction = data.message?.reactionMessage;
     const text =
       reaction?.text ??

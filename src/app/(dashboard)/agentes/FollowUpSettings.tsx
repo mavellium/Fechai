@@ -84,7 +84,8 @@ export function FollowUpSettings({ agentId, config }: { agentId: string; config:
         </label>
         <p id={`${delayId}-hint`} className="mt-1 text-sm text-neutral panel:text-white/55">
           Passado esse tempo de silêncio desde a última mensagem do agente, ele manda uma mensagem
-          de reengajamento sozinho — só uma vez por conversa.
+          de reengajamento sozinho — só uma vez por conversa. Se o contato já tiver consulta
+          marcada, o follow-up não é enviado; valem apenas os lembretes da consulta.
         </p>
         <div className="mt-2 flex items-end gap-2">
           <div className="w-28">

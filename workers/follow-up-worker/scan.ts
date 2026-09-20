@@ -4,11 +4,21 @@ import { parseFollowUpConfig, type FollowUpConfig } from "../../src/modules/foll
 
 // Regra pura de elegibilidade — fácil de testar sem banco.
 export function isEligible(
-  conv: { needsHuman: boolean; followUpSentAt: Date | null; lastInboundAt: Date | null; lastRole?: string },
+  conv: {
+    needsHuman: boolean;
+    followUpSentAt: Date | null;
+    lastInboundAt: Date | null;
+    lastRole?: string;
+    hasActiveAppointment?: boolean;
+  },
   cutoff: Date,
 ): boolean {
   if (conv.needsHuman) return false;
   if (conv.followUpSentAt) return false;
+  // Follow-up tenta recuperar uma venda/conversa abandonada. Depois que há
+  // consulta atual ou futura, o objetivo já foi alcançado; dali em diante quem
+  // fala sozinho são os lembretes da consulta, não uma cobrança genérica.
+  if (conv.hasActiveAppointment) return false;
   if (!conv.lastInboundAt) return false;
   if (conv.lastInboundAt >= cutoff) return false;
   // só faz sentido se a última mensagem foi do agente (lead ficou em silêncio)
@@ -41,8 +51,30 @@ export async function scanAndSendFollowUps(now: Date = new Date()) {
       needsHuman: false,
       followUpSentAt: null,
       lastInboundAt: { not: null },
+      // Vale para agendamento do agente e manual: ambos se ligam ao Lead. Usar
+      // `conversation.appointments` deixaria passar o manual, que não guarda
+      // `conversationId`.
+      lead: {
+        appointments: {
+          none: { status: "scheduled", endsAt: { gt: now } },
+        },
+      },
     },
-    include: { lead: true, messages: { orderBy: { createdAt: "desc" }, take: 1 } },
+    include: {
+      lead: {
+        include: {
+          // Segunda defesa em memória: mantém a regra explícita em
+          // `isEligible` e protege o envio mesmo se a consulta principal for
+          // ampliada/refatorada depois.
+          appointments: {
+            where: { status: "scheduled", endsAt: { gt: now } },
+            select: { id: true },
+            take: 1,
+          },
+        },
+      },
+      messages: { orderBy: { createdAt: "desc" }, take: 1 },
+    },
   });
 
   const provider = getWhatsAppProvider();
@@ -55,7 +87,11 @@ export async function scanAndSendFollowUps(now: Date = new Date()) {
     if (!config) continue;
 
     const cutoff = new Date(now.getTime() - config.delayMinutes * 60_000);
-    if (!isEligible({ ...c, lastRole: c.messages[0]?.role }, cutoff)) continue;
+    if (!isEligible({
+      ...c,
+      lastRole: c.messages[0]?.role,
+      hasActiveAppointment: c.lead.appointments.length > 0,
+    }, cutoff)) continue;
 
     let keyId: string | null = null;
     if (provider.isConfigured() && !c.lead.isTest) {

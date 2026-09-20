@@ -38,6 +38,65 @@ import { requestContext } from "@/modules/auth/attempts";
 import { blockIp, unblockIp, ipActivity } from "@/modules/auth/ip-block";
 
 import { recordUsage } from "@/modules/ai/usage";
+import { buildAgentPackage, createAgentFromPackage } from "@/modules/agent-engine/transfer";
+
+export type AdminAgentCopyResult = {
+  ok: boolean;
+  error?: string;
+  info?: string;
+  agentId?: string;
+  warnings?: string[];
+};
+
+/** Replica um agente de qualquer empresa para outra, sempre desligado. */
+export async function adminReplicateAgent(input: {
+  sourceAgentId: string;
+  destinationTenantId: string;
+  name?: string;
+}): Promise<AdminAgentCopyResult> {
+  await requireSuperadmin();
+  const parsed = z
+    .object({
+      sourceAgentId: z.string().min(1),
+      destinationTenantId: z.string().min(1),
+      name: z.string().trim().max(60).optional(),
+    })
+    .safeParse(input);
+  if (!parsed.success) return { ok: false, error: "Escolha o agente e a empresa de destino." };
+
+  const portable = await buildAgentPackage(parsed.data.sourceAgentId);
+  if (!portable) return { ok: false, error: "Agente de origem não encontrado." };
+
+  const result = await createAgentFromPackage({
+    tenantId: parsed.data.destinationTenantId,
+    package: portable,
+    name: parsed.data.name,
+  });
+  if (!result.ok) return result;
+
+  await recordAudit({
+    event: "admin.agent_replicated",
+    tenantId: parsed.data.destinationTenantId,
+    target: { type: "Agent", id: result.agentId, label: result.name },
+    after: {
+      name: result.name,
+      sourceAgentId: parsed.data.sourceAgentId,
+      sourceTenant: portable.source?.tenantName,
+    },
+    meta: { warnings: result.warnings },
+  });
+
+  revalidatePath("/admin/agentes");
+  revalidatePath("/admin/logs");
+  return {
+    ok: true,
+    agentId: result.agentId,
+    warnings: result.warnings,
+    info: result.warnings.length
+      ? `Agente replicado desligado. ${result.warnings.join(" ")}`
+      : "Agente replicado e deixado desligado para revisão.",
+  };
+}
 
 export async function suspendTenant(tenantId: string, suspend: boolean) {
   await requireSuperadmin();

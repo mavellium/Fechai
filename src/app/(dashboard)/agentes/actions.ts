@@ -51,8 +51,17 @@ import { SAMPLE_TEXT, findCatalogVoice } from "@/modules/voice/catalog";
 import { parseSpeechBlocklist } from "@/modules/voice/speech-text";
 import { VOICE_STYLES } from "@/modules/voice/style";
 import { recordAudit, recordChange, recordDeletion } from "@/modules/audit/log";
+import {
+  MAX_AGENT_PACKAGE_BYTES,
+  parseAgentPackage,
+} from "@/modules/agent-engine/agent-package";
+import {
+  buildAgentPackage,
+  createAgentFromPackage,
+} from "@/modules/agent-engine/transfer";
 
 export type Result = { ok: boolean; error?: string; info?: string };
+export type AgentCopyResult = Result & { agentId?: string; warnings?: string[] };
 
 /**
  * Todas as actions recebem `agentId` e passam por `requireAgent`: o id vem da
@@ -69,6 +78,7 @@ async function requireAgent(agentId: string) {
 function revalidateAgent(agentId: string) {
   revalidatePath("/agentes");
   revalidatePath(`/agentes/${agentId}`);
+  revalidatePath("/onboarding");
   revalidatePath("/inicio");
 }
 
@@ -105,6 +115,80 @@ export async function createAgentAction(_prev: Result | null, formData: FormData
 
   revalidatePath("/agentes");
   redirect(`/agentes/${agent.id}`);
+}
+
+/** Duplica toda a configuração do agente dentro da própria empresa. */
+export async function duplicateAgent(agentId: string): Promise<AgentCopyResult> {
+  const { tenantId, agent } = await requireAgent(agentId);
+  if (!agent) return { ok: false, error: "Agente não encontrado" };
+
+  const portable = await buildAgentPackage(agent.id, tenantId);
+  if (!portable) return { ok: false, error: "Agente não encontrado" };
+
+  const result = await createAgentFromPackage({
+    tenantId,
+    package: portable,
+    name: `${agent.name} (cópia)`,
+  });
+  if (!result.ok) return result;
+
+  await recordAudit({
+    event: "agent.created",
+    target: { type: "Agent", id: result.agentId, label: result.name },
+    after: { name: result.name, copiedFrom: agent.id },
+    meta: { operation: "duplicate", warnings: result.warnings },
+  });
+
+  revalidatePath("/agentes");
+  return {
+    ok: true,
+    agentId: result.agentId,
+    warnings: result.warnings,
+    info: result.warnings.length
+      ? `Agente duplicado. ${result.warnings.join(" ")}`
+      : "Agente duplicado com toda a configuração.",
+  };
+}
+
+/** Importa um pacote baixado anteriormente e abre a cópia para revisão. */
+export async function importAgentAction(
+  _prev: AgentCopyResult | null,
+  formData: FormData,
+): Promise<AgentCopyResult> {
+  const { tenantId } = await requireTenant();
+  const tooLarge = payloadTooLarge(formData, MAX_AGENT_PACKAGE_BYTES);
+  if (tooLarge) return { ok: false, error: "O arquivo do agente pode ter no máximo 45MB." };
+
+  const file = formData.get("agentPackage");
+  if (!(file instanceof File) || file.size === 0) {
+    return { ok: false, error: "Selecione um arquivo de agente para importar." };
+  }
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await file.text());
+  } catch {
+    return { ok: false, error: "O arquivo selecionado não contém um JSON válido." };
+  }
+  const parsed = parseAgentPackage(raw);
+  if (!parsed.ok) return parsed;
+
+  const result = await createAgentFromPackage({ tenantId, package: parsed.data });
+  if (!result.ok) return result;
+
+  await recordAudit({
+    event: "agent.created",
+    target: { type: "Agent", id: result.agentId, label: result.name },
+    after: { name: result.name, imported: true },
+    meta: {
+      operation: "import",
+      sourceTenant: parsed.data.source?.tenantName,
+      warnings: result.warnings,
+    },
+  });
+
+  revalidatePath("/agentes");
+  redirect(`/agentes/${result.agentId}`);
 }
 
 export async function renameAgent(agentId: string, name: string): Promise<Result> {
@@ -187,8 +271,8 @@ export async function setAgentEnabled(agentId: string, enabled: boolean): Promis
 
 /**
  * Liga/desliga um comportamento de conversa do agente (passo Comportamento):
- * `listenAudio` (ouvir mensagens de voz), `stopOnEmoji` (encerrar quando o
- * cliente manda só um emoji) e `speakReplies` (responder em áudio). São colunas
+ * `listenAudio` (ouvir mensagens de voz), `stopOnEmoji` (pausar quando um
+ * atendente reage pelo número da empresa) e `speakReplies` (responder em áudio). São colunas
  * do Agent, não ações com limite de plano — por isso não passam por
  * `setActionEnabled`.
  */
@@ -598,6 +682,7 @@ const personaSchema = z.object({
   businessName: z.string().trim().min(1, "Informe o nome do negócio"),
   sector: z.string().trim().default(""),
   tone: z.string().trim().default(""),
+  writingStyle: z.string().trim().default(""),
   offer: z.string().trim().default(""),
   avoid: z.string().trim().default(""),
   objective: z.string().trim().default(""),
@@ -676,6 +761,7 @@ export async function saveRules(_prev: Result | null, formData: FormData): Promi
     businessName: draft.businessName ?? "",
     sector: draft.sector ?? "",
     tone: draft.tone ?? "",
+    writingStyle: draft.writingStyle ?? "",
     offer: draft.offer ?? "",
     objective: draft.objective ?? "",
     avoid: parsed.data.rules,

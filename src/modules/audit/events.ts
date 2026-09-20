@@ -245,6 +245,11 @@ export const AUDIT_EVENTS = {
 
   "admin.impersonated": { label: "Entrou como o cliente", kind: "access", group: "admin" },
   "admin.impersonation_ended": { label: "Saiu do modo cliente", kind: "access", group: "admin" },
+  "admin.agent_replicated": {
+    label: "Replicou um agente entre empresas",
+    kind: "create",
+    group: "admin",
+  },
   "admin.ai_model_changed": { label: "Trocou o modelo de IA", kind: "update", group: "admin" },
   "admin.ai_credential_added": {
     label: "Adicionou uma credencial de IA",

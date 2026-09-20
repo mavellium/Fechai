@@ -16,7 +16,7 @@ npm run db:up              # Postgres (5433) + Redis (6379) via Docker
 npm install
 npx prisma db push
 npm run db:seed
-npm run dev               # http://localhost:3000
+npm run dev               # http://localhost:3001
 ```
 
 > A porta do Postgres no host é **5433** de propósito, para não colidir com uma instalação local na 5432.
@@ -34,12 +34,19 @@ Comece por **[docs/INDEX.md](./docs/INDEX.md)** — ele aponta para o resto (arq
 
 Deploy em produção (Docker, servidor Linux) → **[README.docker.md](./README.docker.md)**.
 Backup do banco em produção (diário 02:00 mantém 3, mensal dia 1 04:00 mantém 1) → **[deploy/BACKUP_SERVICE.md](./deploy/BACKUP_SERVICE.md)**.
+Laboratório administrativo com banco isolado → **[docs/ambiente-de-testes-admin.md](./docs/ambiente-de-testes-admin.md)**.
+
+> Push para `main` recria o app web e o worker na VPS, mas preserva o Postgres e
+> seu volume. Ele não cria o banco de laboratório nem aplica mudanças do Prisma
+> automaticamente; veja a seção "O que acontece ao fazer push" no guia Docker.
 
 ## Scripts
 
 | Comando | O que faz |
 |---|---|
 | `npm run dev` | App em desenvolvimento |
+| `npm run dev:test` | App na porta 3002 usando o banco isolado `TEST_DATABASE_URL` |
+| `npm run test:db:prepare` | Cria, atualiza e popula o banco do laboratório administrativo |
 | `npm run build` | Build de produção |
 | `npm run db:seed` | Popula superadmin + tenant de exemplo |
 | `npm run worker` | Worker de follow-up (BullMQ) |

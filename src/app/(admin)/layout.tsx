@@ -6,6 +6,7 @@ import type { NavItem } from "@/components/shell/ShellNav";
 
 const NAV: NavItem[] = [
   { href: "/admin/contas", label: "Contas", icon: "Building2" },
+  { href: "/admin/agentes", label: "Agentes", icon: "Bot" },
   { href: "/admin/logs", label: "Logs", icon: "ScrollText" },
   { href: "/admin/ia", label: "IA", icon: "Cpu" },
   { href: "/admin/feedbacks", label: "Feedbacks", icon: "Star" },
@@ -37,6 +38,11 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       signOutAction={signOutAction}
       accent="signal"
     >
+      {process.env.DATABASE_ENVIRONMENT === "test" && (
+        <div role="status" className="mb-5 rounded-control border border-warn/40 bg-warn/10 px-4 py-3 text-sm text-warn">
+          Ambiente de testes — todas as alterações desta janela usam o banco isolado do laboratório.
+        </div>
+      )}
       {children}
     </PanelShell>
   );

@@ -6,7 +6,7 @@ export type PersonaField = {
   placeholder: string;
   type: "text" | "textarea";
   /**
-   * O que responder aqui, em uma frase. Os sete campos eram só rótulo +
+   * O que responder aqui, em uma frase. Os campos eram só rótulo +
    * placeholder: dava para preencher tudo sem entender que aquilo vira o
    * comportamento do agente, e o resultado era persona genérica.
    */
@@ -27,7 +27,7 @@ export const PERSONA_GROUPS: { key: PersonaGroup; legend: string; hint: string }
   {
     key: "comportamento",
     legend: "2. Como ele fala",
-    hint: "O tom e os assuntos que ele puxa sozinho. Limites do que ele NUNCA deve fazer ficam no passo Regras.",
+    hint: "O tom, o estilo dos textos e os assuntos que ele puxa sozinho. Limites do que ele NUNCA deve fazer ficam no passo Regras.",
   },
   {
     key: "objetivo",
@@ -41,6 +41,7 @@ export type PersonaAnswers = {
   businessName: string;
   sector: string;
   tone: string;
+  writingStyle: string;
   offer: string;
   avoid: string;
   objective: string;
@@ -80,6 +81,14 @@ export const PERSONA_FIELDS: PersonaField[] = [
     group: "comportamento",
   },
   {
+    name: "writingStyle",
+    label: "Estilo de escrita",
+    placeholder: "Ex: frases curtas, poucos emojis e sem listas longas",
+    type: "text",
+    hint: "Define a forma das mensagens: tamanho das frases, uso de emojis, listas, parágrafos e nível de detalhe.",
+    group: "comportamento",
+  },
+  {
     name: "offer",
     label: "O que o agente deve oferecer/explicar",
     placeholder: "Ex: aulas experimentais, planos mensais, horários",
@@ -113,6 +122,7 @@ export function composeSystemPrompt(a: PersonaAnswers): string {
       ? `Você se chama ${a.agentName} e é o atendente virtual de ${a.businessName || "um negócio"}${a.sector ? `, do segmento: ${a.sector}` : ""}. Apresente-se pelo nome no primeiro contato.`
       : `Você é o atendente virtual de ${a.businessName || "um negócio"}${a.sector ? `, do segmento: ${a.sector}` : ""}.`,
     a.tone ? `Tom de voz: ${a.tone}.` : "",
+    a.writingStyle ? `Estilo de escrita: ${a.writingStyle}.` : "",
     "Responda com base APENAS na base de conhecimento fornecida. Se não souber, diga que vai verificar e ofereça encaminhar a um humano.",
     a.offer ? `Você deve oferecer/explicar: ${a.offer}.` : "",
     formatRules(a.avoid),

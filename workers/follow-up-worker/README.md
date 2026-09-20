@@ -8,7 +8,7 @@ relógio, não por uma resposta do contato:
 
 | varredura | reage a | para quem |
 | --- | --- | --- |
-| **follow-up** | silêncio do lead | tenants com a ação `follow_up` ativa |
+| **follow-up** | silêncio do lead sem consulta atual/futura | tenants com a ação `follow_up` ativa |
 | **lembretes** | consultas chegando | tenants com `schedule_meeting` ativa **e** lembrete configurado |
 
 As duas vivem no mesmo ciclo porque a cadência serve às duas; um segundo
@@ -20,7 +20,7 @@ certo, e reprocessar a metade que funcionou não ajudaria ninguém.
 ## Arquivos
 
 - `scan.ts` — follow-up (testável):
-  - `isEligible(conv, cutoff)` — regra pura: não `needsHuman`, sem `followUpSentAt`, `lastInboundAt` antigo, última msg do agente.
+  - `isEligible(conv, cutoff)` — regra pura: não `needsHuman`, sem `followUpSentAt`, sem consulta atual/futura, `lastInboundAt` antigo, última msg do agente.
   - `scanAndSendFollowUps(now?)` — varre elegíveis, envia via WhatsApp (se conectado), grava a mensagem e marca `followUpSentAt`. Retorna `{ scanned, sent }`.
 - `reminders.ts` — lembretes pré-consulta (ver seção abaixo):
   - `dueReminders(appt, reminders, now)` — regra pura: quais disparos venceram.
@@ -106,6 +106,13 @@ retardo mínimo real, então diminuir o intervalo configurado só ajuda até ess
 teto. Teto do próprio intervalo: `MAX_FOLLOWUP_DELAY_MINUTES` (30 dias).
 
 Regressões da conversão em `tests/follow-up-intervalo.test.ts`.
+
+**Consulta marcada encerra o reengajamento.** O worker ignora a conversa quando
+o lead tem um `Appointment` com status `scheduled` que ainda não terminou. A
+checagem é pelo `leadId`, e não só por `conversationId`, para cobrir também uma
+consulta marcada manualmente em `/agenda`. A própria tool `follow_up` faz a
+mesma checagem antes de sinalizar o follow-up. Depois de agendar, mensagens
+automáticas relacionadas à consulta são responsabilidade dos lembretes.
 
 ## O que NÃO faz
 

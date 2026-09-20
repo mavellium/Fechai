@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { prisma } from "@/lib/prisma";
-import { isEmojiOnly } from "@/lib/emoji";
 import { rateLimit } from "@/lib/rate-limit";
 import { getWhatsAppProvider } from "@/modules/whatsapp";
 import { isPhoneBlocked } from "@/modules/whatsapp/blocklist";
+import { shouldPauseAgentForReaction } from "@/modules/whatsapp/reactions";
 import {
   appendMessage,
   getOrCreateConversation,
@@ -144,8 +144,38 @@ export async function POST(req: Request) {
   //      humana (sentBy "human"), pausa o agente, igual resposta pelo painel.
   if (incoming.isFromMe) {
     // Grupo e áudio de ida: nada a registrar (não são respostas de atendimento).
-    if (incoming.isGroup || incoming.hasAudio || incoming.isReaction) {
+    if (incoming.isGroup || incoming.hasAudio) {
       return NextResponse.json({ ok: true, silent: "fromMe ignorado" });
+    }
+
+    // Reagir pelo número da clínica é um comando rápido do atendente para
+    // assumir a conversa. Reação do cliente não passa por este ramo e é
+    // ignorada mais abaixo — feedback do cliente não pode desligar a IA.
+    if (incoming.isReaction) {
+      if (
+        agent &&
+        shouldPauseAgentForReaction({
+          isReaction: incoming.isReaction,
+          isFromMe: incoming.isFromMe,
+          stopOnEmoji: agent.stopOnEmoji,
+        })
+      ) {
+        const { lead, conversation } = await getOrCreateConversation(
+          tenantId,
+          incoming.fromPhone,
+          incoming.fromName,
+        );
+        await prisma.conversation
+          .update({
+            where: { id: conversation.id },
+            data: { agentPaused: true, needsHuman: true },
+          })
+          .catch(() => {});
+        await addLeadToHandoffGroup(tenantId, agent.id, incoming.fromPhone, {
+          isTest: lead.isTest,
+        });
+      }
+      return NextResponse.json({ ok: true, silent: "reação do atendente" });
     }
 
     // Eco do app: o key.id já identifica sem tocar em lead/conversa.
@@ -186,44 +216,17 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, silent: "manual pelo whatsapp" });
   }
 
+  // Reação do cliente é só feedback sobre uma mensagem. Não cria conversa,
+  // não entra no histórico e, principalmente, não pausa o agente.
+  if (incoming.isReaction) {
+    return NextResponse.json({ ok: true, silent: "reação do cliente" });
+  }
+
   const { lead, conversation } = await getOrCreateConversation(
     tenantId,
     incoming.fromPhone,
     incoming.fromName,
   );
-
-  // Reação (emoji sobreposta a uma mensagem): não é uma mensagem do cliente —
-  // não entra no histórico e não dispara turno. Com a opção "Encerrar conversa
-  // com emoji" ligada, a reação encerra a conversa: pausa com o mesmo flag de
-  // quando um humano assume (`agentPaused`), para o agente não responder por
-  // cima na próxima mensagem.
-  if (incoming.isReaction) {
-    if (agent?.stopOnEmoji) {
-      await prisma.conversation
-        .update({ where: { id: conversation.id }, data: { agentPaused: true, needsHuman: true } })
-        .catch(() => {});
-      // "Transferir para humano" pode estar configurada para também colocar o
-      // contato num grupo do WhatsApp — mesmo caminho da tool `handoff_human`,
-      // porque para o cliente isso É uma transferência para atendimento.
-      await addLeadToHandoffGroup(tenantId, agent.id, incoming.fromPhone, {
-        isTest: lead.isTest,
-      });
-    }
-    return NextResponse.json({ ok: true, silent: "reaction" });
-  }
-
-  // Opção "parar com emoji": cliente manda só um emoji e a conversa encerra.
-  // Pausa com o mesmo flag de quando um humano assume (`agentPaused`): o
-  // `runAgentTurn` ainda registra a mensagem, mas fica em silêncio. O dono
-  // devolve a conversa em /conversas para o agente voltar a atender.
-  if (agent?.stopOnEmoji && isEmojiOnly(userMessage)) {
-    await prisma.conversation
-      .update({ where: { id: conversation.id }, data: { agentPaused: true, needsHuman: true } })
-      .catch(() => {});
-    await addLeadToHandoffGroup(tenantId, agent.id, incoming.fromPhone, {
-      isTest: lead.isTest,
-    });
-  }
 
   try {
     const { reply, status, replyMessageId } = await runAgentTurn({

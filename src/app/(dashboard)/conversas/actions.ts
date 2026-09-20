@@ -235,7 +235,7 @@ export async function sendRecordedAudioMessage(
 /**
  * Pausa/retoma o agente NESTA conversa (por conversa, não pelo agente inteiro).
  *
- * É a resposta ao "como faço ele voltar a responder?": a reação/emoji de parada
+ * É a resposta ao "como faço ele voltar a responder?": a reação do atendente
  * liga `agentPaused` (e `needsHuman`) no webhook, e não havia nenhum botão que
  * desligasse os dois de uma vez — o "Marcar como resolvida" só limpava o
  * `needsHuman` e a IA continuava muda. `paused=false` limpa os dois juntos: a

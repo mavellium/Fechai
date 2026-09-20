@@ -18,7 +18,7 @@ export type IncomingMessage = {
   isGroup: boolean;
   /** A mensagem é de áudio (voz ou arquivo) — transcrita antes do turno. */
   hasAudio: boolean;
-  /** Reação a uma mensagem (emoji sobreposta) — não é uma mensagem do cliente. */
+  /** Reação sobreposta a uma mensagem; `isFromMe` identifica quem reagiu. */
   isReaction?: boolean;
   /** A mensagem foi enviada pela própria instância (o número do tenant). */
   isFromMe?: boolean;

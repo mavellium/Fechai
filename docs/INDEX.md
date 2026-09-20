@@ -14,9 +14,9 @@ Ver [CHANGELOG.md](./CHANGELOG.md) para o último milestone concluído.
 
 ## Onde encontrar cada coisa
 
-- Arquitetura geral → [ARCHITECTURE.md](./ARCHITECTURE.md)
-- Convenções de código → [CONVENTIONS.md](./CONVENTIONS.md)
-- Primitivos de UI, superfícies e regras de interação → [CONVENTIONS.md](./CONVENTIONS.md) (seções "Superfícies" e "Regras de interação")
+- Arquitetura geral → [ARCHITECTURE.md](../ARCHITECTURE.md)
+- Convenções de código → [CONVENTIONS.md](../CONVENTIONS.md)
+- Primitivos de UI, superfícies e regras de interação → [CONVENTIONS.md](../CONVENTIONS.md) (seções "Superfícies" e "Regras de interação")
 - Revisão de UI do painel (diagnóstico, decisões e pendências) → [revisao-ui-painel-2026-07.md](./revisao-ui-painel-2026-07.md)
 - SEO e GEO (metadata, sitemap, JSON-LD, llms.txt + passos fora do código) → [SEO.md](./SEO.md)
 - Decisões técnicas (ADRs) → [decisions/](./decisions/)
@@ -30,12 +30,14 @@ Ver [CHANGELOG.md](./CHANGELOG.md) para o último milestone concluído.
 - Módulo affiliates (programa de indicação, comissão progressiva, papéis da conta) → `src/modules/affiliates/README.md`
 - Papéis da conta (cliente · afiliado) e painel enxuto de quem só afilia → seção "Os dois papéis" em `src/modules/affiliates/README.md`
 - Módulo agent-engine (ações + persona; motor no M5) → `src/modules/agent-engine/README.md`
+- Duplicação, exportação, importação e réplica administrativa de agentes → seção "Duplicar, exportar, importar e replicar agentes" no README do agent-engine
 - Resumo de conversa gerado por IA (sob demanda, com cache) → seção "Resumo da conversa" em `src/modules/agent-engine/README.md`
 - Módulo ai (providers de LLM/embeddings, catálogo, modelo ativo) → `src/modules/ai/README.md`
 - Módulo knowledge-base (RAG) → `src/modules/knowledge-base/README.md`
 - Módulo whatsapp (provider Evolution) → `src/modules/whatsapp/README.md`
 - Módulo reports → `src/modules/reports/README.md`
 - Módulo admin → `src/modules/admin/README.md`
+- Laboratório do administrador com banco isolado → [ambiente-de-testes-admin.md](./ambiente-de-testes-admin.md)
 - Módulo feedback → `src/modules/feedback/README.md`
 - Worker de follow-up → `workers/follow-up-worker/README.md`
 - Deploy em produção (Docker, servidor Linux) → [README.docker.md](../README.docker.md)
@@ -48,7 +50,11 @@ npm install
 npm run db:up             # sobe Postgres (pgvector) + Redis via Docker
 npm run db:push           # aplica o schema Prisma
 npm run db:seed           # cria superadmin + tenant demo
-npm run dev               # http://localhost:3000
+npm run dev               # http://localhost:3001
 ```
+
+Para testar mudanças administrativas sem tocar nessa base, prepare o banco
+isolado com `npm run test:db:prepare` e abra o laboratório com
+`npm run dev:test` em `http://localhost:3002`.
 
 Contas de teste (após seed): `superadmin@saas.local` / `demo@escola.local` — senha `password123`.

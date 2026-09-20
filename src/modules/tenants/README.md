@@ -60,6 +60,12 @@ Wizard de 4 passos para o usuário comum (`OWNER`); o `SUPERADMIN` nunca o vê p
 
 Estado no `Tenant`: `onboardingCompleted` (flag final), `onboardingStep` (retomada) e `onboardingDraft` (Json com as respostas parciais).
 
+Os passos 2 e 3 têm papéis diferentes: `objective` é o **resultado principal**
+que orienta a conversa (onde chegar); `processes` são as **tarefas permitidas**
+e viram capacidades/ações do agente (o que ele pode executar sozinho). Os
+textos exibidos podem evoluir, mas os `value` de objetivo e as chaves de
+processo permanecem estáveis para não quebrar rascunhos já salvos.
+
 Fluxo: `/cadastro` → `/planos` → `/onboarding` → `/inicio`. O guard vive no layout de `(dashboard)`, que redireciona para `/onboarding` enquanto a flag for falsa — por isso `/onboarding` mora **fora** desse grupo de rotas (senão haveria loop). A checagem de conta suspensa vem antes do guard, para a conta suspensa ver o aviso e não o wizard.
 
 Ao concluir, `completeOnboarding()` grava numa transação: `AgentConfig` (systemPrompt composto + `personaDraft`), os `TenantAction` escolhidos (ligando os do plano e desligando o resto) e a flag. Como as respostas viram um `PersonaAnswers`, tudo que foi definido no wizard continua editável em `/agentes` — não existe estado paralelo.

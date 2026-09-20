@@ -2,24 +2,26 @@
 
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Check, Pencil, Power, Star, Trash2, X } from "lucide-react";
+import { Check, Copy, Download, Pencil, Power, Star, Trash2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { ConfirmButton } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Alert } from "@/components/ui/alert";
 import { InfoHint } from "@/components/ui/info-hint";
-import { deleteAgent, renameAgent, setAgentEnabled, setPrimaryAgent } from "../actions";
+import { deleteAgent, duplicateAgent, renameAgent, setAgentEnabled, setPrimaryAgent } from "../actions";
 import { useUnsavedChanges, useUnsavedNavigation } from "@/components/ui/unsaved-changes";
 
 /** Nome do agente (edição no lugar) + gestão: liga/desliga, principal e exclusão. */
 export function AgentHeader({
   agent,
   canDelete,
+  canDuplicate,
 }: {
   agent: { id: string; name: string; isPrimary: boolean; enabled: boolean };
   canDelete: boolean;
+  canDuplicate: boolean;
 }) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
@@ -36,6 +38,7 @@ export function AgentHeader({
   const confirmNavigation = useUnsavedNavigation();
   const [enabled, setEnabled] = useState(agent.enabled);
   const [togglingPower, setTogglingPower] = useState(false);
+  const [duplicating, setDuplicating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
@@ -121,7 +124,36 @@ export function AgentHeader({
           </div>
         )}
 
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+          <a
+            href={`/api/agents/${agent.id}/export`}
+            download
+            className={buttonVariants({ variant: "outline", size: "sm" })}
+          >
+            <Download size={14} aria-hidden />
+            Exportar
+          </a>
+          <Button
+            variant="outline"
+            size="sm"
+            loading={duplicating}
+            loadingLabel="Duplicando agente"
+            disabled={!canDuplicate || pending}
+            title={canDuplicate ? undefined : "Limite de agentes do plano atingido"}
+            onClick={() => {
+              setError(null);
+              setDuplicating(true);
+              startTransition(async () => {
+                const result = await duplicateAgent(agent.id);
+                setDuplicating(false);
+                if (result.ok && result.agentId) router.push(`/agentes/${result.agentId}`);
+                else setError(result.error ?? "Não foi possível duplicar o agente.");
+              });
+            }}
+          >
+            <Copy size={14} aria-hidden />
+            Duplicar
+          </Button>
           {!agent.isPrimary && (
             <Button
               variant="outline"

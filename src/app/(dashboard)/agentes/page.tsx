@@ -5,6 +5,7 @@ import { agentSteps, getAgentUsage, listAgents } from "@/modules/agent-engine/ag
 import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/ui/page-header";
 import { NewAgentButton } from "./NewAgentButton";
+import { ImportAgentButton } from "./ImportAgentButton";
 
 export default async function AgentesPage() {
   const { tenantId } = await requireTenant();
@@ -17,7 +18,12 @@ export default async function AgentesPage() {
         title="Seus agentes"
         description="Cada agente tem persona, base de conhecimento e ações próprias."
         className="mb-2"
-        actions={<NewAgentButton usage={usage} />}
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <ImportAgentButton usage={usage} />
+            <NewAgentButton usage={usage} />
+          </div>
+        }
       />
 
       {/*

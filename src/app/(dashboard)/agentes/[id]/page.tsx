@@ -86,6 +86,7 @@ export default async function AgentePage({ params }: { params: Promise<{ id: str
           enabled: agent.enabled,
         }}
         canDelete={agentCount > 1}
+        canDuplicate={agentCount < planOf(tenant?.planKey).maxAgents}
       />
 
       <AgentWizard

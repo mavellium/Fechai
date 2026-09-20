@@ -8,8 +8,8 @@ import { getWhatsAppProvider } from "@/modules/whatsapp";
  *
  * Quando `addToGroup` está ligado, o contato é adicionado a um grupo fixo do
  * WhatsApp (cadastrado aqui pelo `groupId`) no momento em que a conversa vira
- * "precisa de você" — reação com emoji, mensagem só de emoji, ou a tool
- * `handoff_human` chamada pelo agente. O grupo é o mesmo para toda transferência
+ * "precisa de você" — reação do atendente ou a tool `handoff_human` chamada
+ * pelo agente. O grupo é o mesmo para toda transferência
  * deste agente (não um grupo novo por atendimento): normalmente é o grupo onde
  * a equipe de atendimento já está.
  */
@@ -98,9 +98,9 @@ export async function saveHandoffConfig(
 
 /**
  * Adiciona o lead ao grupo de atendimento do agente, se a ação "Transferir
- * para humano" estiver LIGADA e configurada para isso. Chamado nos três lugares
- * onde uma conversa vira "precisa de você": a tool `handoff_human`, a reação
- * com emoji e a mensagem só de emoji (ambas no webhook do WhatsApp).
+ * para humano" estiver LIGADA e configurada para isso. Chamado quando a tool
+ * `handoff_human` transfere a conversa ou quando o atendente reage pelo próprio
+ * número do WhatsApp para assumi-la.
  *
  * **Nunca lança**, e por isso o `try` cobre as consultas ao banco também, não
  * só a chamada de rede. Mesma regra do resto de `scheduling`/`voice`: nada aqui

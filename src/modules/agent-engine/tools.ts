@@ -230,13 +230,17 @@ const TOOLS: Record<ActionKey, ToolDef> = {
   follow_up: {
     schema: {
       name: "follow_up",
-      description: "Programa um follow-up automático caso o contato não responda.",
+      description: "Programa um follow-up automático caso o contato não responda e ainda não tenha consulta futura marcada. Nunca use depois de schedule_meeting confirmar um horário; consultas marcadas usam lembretes, não follow-up de reengajamento.",
       parameters: {
         type: "object",
         properties: { hours: { type: "number", description: "Horas até o follow-up" } },
       },
     },
     handler: async (ctx) => {
+      const upcoming = await listUpcomingLeadAppointments(ctx.tenantId, ctx.leadId);
+      if (upcoming.length) {
+        return "Follow-up automático não programado: o contato já tem uma consulta futura marcada. Não envie reengajamento; use apenas os lembretes configurados para a consulta.";
+      }
       // O disparo real é do worker (Milestone 6); aqui só sinalizamos.
       await prisma.conversation.update({
         where: { id: ctx.conversationId },

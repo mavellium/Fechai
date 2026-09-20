@@ -3,15 +3,15 @@
 ## Stack
 
 - **App:** Next.js 16 (App Router) + TypeScript + Tailwind v4 + shadcn-style UI
-- **ORM/DB:** Prisma 6 + PostgreSQL (pgvector) — ver [ADR-001](./decisions/ADR-001-prisma-v6.md)
+- **ORM/DB:** Prisma 6 + PostgreSQL (pgvector) — ver [ADR-001](./docs/decisions/ADR-001-prisma-v6.md)
 - **Auth:** Auth.js v5 (NextAuth) — Credentials, sessão JWT (`role`/`tenantId` no token)
-- **Pagamento:** Stripe (Checkout + Webhooks, modo teste) — `price_data` inline ([ADR-002](./decisions/ADR-002-stripe-inline-price.md))
-- **IA:** OpenAI via interface `LLMProvider` (function calling)
+- **Pagamento:** Stripe (Checkout + Webhooks, modo teste) — `price_data` inline ([ADR-002](./docs/decisions/ADR-002-stripe-inline-price.md))
+- **IA:** cadeia configurável de provedores via painel `/admin/ia` (Gemini, Grok, Groq, OpenAI e compatíveis)
 - **WhatsApp:** Evolution API via interface `WhatsAppProvider`
 - **Jobs:** BullMQ + Redis (worker de follow-up)
 - **RAG:** pgvector + embeddings OpenAI (`text-embedding-3-small`)
 
-> Estado: MVP com os 8 milestones construídos. Detalhe por milestone em [CHANGELOG.md](./CHANGELOG.md).
+> Estado e entregas recentes: [docs/CHANGELOG.md](./docs/CHANGELOG.md).
 
 ## Quatro camadas (isoladas por `tenantId`)
 
@@ -46,6 +46,10 @@ Todas degradam com graça quando a env não está configurada (respostas canned 
   **Traefik** do servidor (rede externa `traefik-public` + labels no `web`; mesmo padrão do projeto
   janus). Ver [README.docker.md](./README.docker.md). Localmente, só a Evolution pode subir isolada
   via `docker-compose.evolution.yml`.
+- **Laboratório administrativo local** — `npm run dev:test` usa o banco lógico
+  separado `saas_test`. Ele não é criado na VPS por commit/push e não substitui
+  uma implantação de homologação; ver
+  [docs/ambiente-de-testes-admin.md](./docs/ambiente-de-testes-admin.md).
 - **Vercel (app) + Railway/Fly.io (worker + Redis)** (compatível, não implementado) — alternativa
   gerenciada; o worker roda com `npm run worker` em qualquer um dos dois casos. Neste cenário a
   Evolution continua externa: use um host gerenciado da Evolution API e aponte

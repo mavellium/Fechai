@@ -173,6 +173,30 @@ git pull --ff-only origin main
 ./deploy.sh all
 ```
 
+### O que acontece ao fazer push para `main`
+
+Com os secrets do GitHub Actions configurados, o workflow `.github/workflows/deploy.yml`:
+
+1. executa TypeScript, lint e testes;
+2. conecta na VPS e faz `git pull --ff-only origin main`;
+3. constrói uma nova imagem e recria o slot web inativo;
+4. depois de o novo web ficar saudável, troca o tráfego e recria o worker.
+
+Ele **não cria nem recria o Postgres**, não cria o banco `saas_test` e não apaga
+o volume `pgdata`. O container de produção existente continua sendo usado e os
+dados permanecem no volume. Na primeira instalação, Postgres, Redis e Evolution
+precisam ter sido iniciados manualmente pela seção "Primeira subida".
+
+O workflow também **não executa `prisma db push` automaticamente**. Quando
+`prisma/schema.prisma` mudar, aplique o schema de modo explícito com
+`DEPLOY_DB_PUSH=1 ./deploy.sh web`, depois de conferir que a alteração é
+retrocompatível. As funções de duplicar/importar/exportar agentes não alteram o
+schema e não exigem esse passo.
+
+O laboratório `saas_test` é local por padrão. Git envia código e documentação,
+nunca o conteúdo de um banco. Para uma homologação online, use outra instância
+do app e uma conexão própria, conforme `docs/ambiente-de-testes-admin.md`.
+
 O deploy usa dois slots. Ele compila a nova imagem enquanto o slot atual atende, sobe o slot
 inativo, espera seu `/api/health`, aguarda o Traefik descobri-lo e só então para o anterior. Se o
 build, o boot ou o health check falhar, a versão atual continua no ar. Os comandos disponíveis são:

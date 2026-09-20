@@ -1,6 +1,5 @@
 /**
- * "Encerrar conversa com emoji": o cliente manda só um emoji (com espaço em
- * volta) e o agente para de responder naquela conversa.
+ * Reconhece conteúdo composto apenas por emoji (com espaço em volta).
  *
  * `\p{Extended_Pictographic}` cobre quase todos os emojis; os componentes de
  * junção (ZWJ, variação e tecla de keycap) entram explícitos porque não são

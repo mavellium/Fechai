@@ -34,7 +34,7 @@ const STEPS = [
     label: "Personalidade",
     icon: MessageSquareText,
     title: "Quem é o seu agente",
-    help: "Responda como se estivesse treinando um funcionário novo: o nome, o tom de voz e o que ele deve oferecer. Vira a instrução que ele recebe em toda conversa — fatos que mudam (preço, horário, cardápio) vão na Base de conhecimento, no passo Cérebro.",
+    help: "Responda como se estivesse treinando um funcionário novo: nome, tom de voz, estilo de escrita e o que ele deve oferecer. Isso vira a instrução que ele recebe em toda conversa — fatos que mudam (preço, horário, cardápio) vão no Cérebro.",
   },
   {
     key: "regras",
@@ -62,7 +62,7 @@ const STEPS = [
     label: "Comportamento",
     icon: Mic,
     title: "Como ele conversa",
-    help: "Como ele se comporta na conversa: ouvir mensagens de voz, responder falando na sua voz e encerrar quando a pessoa manda só um emoji. Ouvir e encerrar vêm ligados; responder com áudio você liga depois de escolher uma voz.",
+    help: "Como ele se comporta na conversa: ouvir mensagens de voz, responder falando na sua voz e pausar quando um atendente reage pelo WhatsApp da empresa. Ouvir e pausar vêm ligados; responder com áudio você liga depois de escolher uma voz.",
   },
   {
     key: "testar",
@@ -75,7 +75,7 @@ const STEPS = [
 
 /**
  * Passo a passo do agente: Personalidade → Regras → Cérebro → Habilidades →
- * Testar. A tela antiga empilhava tudo (7 campos de persona + regras + upload
+ * Testar. A tela antiga empilhava toda a persona + regras + upload
  * + 5 toggles) numa página só — quem chegava pela primeira vez não sabia por
  * onde começar nem quando tinha terminado. Regras já foi sub-aba dentro de
  * Personalidade; voltou a ser passo próprio para ficar visível por si só, não

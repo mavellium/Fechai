@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev -p 3001",
+    "dev:test": "tsx scripts/test-environment.ts dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
@@ -14,6 +15,10 @@
     "db:seed": "prisma db seed",
     "db:admin": "tsx prisma/create-admin.ts",
     "db:studio": "prisma studio",
+    "test:db:prepare": "tsx scripts/test-environment.ts prepare",
+    "test:db:push": "tsx scripts/test-environment.ts push",
+    "test:db:seed": "tsx scripts/test-environment.ts seed",
+    "test:db:studio": "tsx scripts/test-environment.ts studio",
     "worker": "tsx workers/follow-up-worker/index.ts",
     "widget:deploy": "tsx scripts/deploy-widget.ts",
     "whatsapp:webhooks": "tsx scripts/fix-evolution-webhooks.ts",

@@ -1,4 +1,4 @@
-// Onboarding guiado (/onboarding) — wizard de 4 passos para o usuário comum (OWNER).
+// Onboarding guiado (/onboarding) — wizard completo para o usuário comum (OWNER).
 //
 // Este módulo é a fonte única de verdade do wizard e é importado TANTO pelo
 // client component (UI/validação otimista) QUANTO pelas server actions
@@ -13,29 +13,47 @@ import type { PersonaAnswers } from "@/modules/agent-engine/persona";
 
 /* ------------------------------------------------------------------ passos */
 
-export type StepNumber = 1 | 2 | 3 | 4;
+export type StepNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
 export const ONBOARDING_STEPS = [
   {
     n: 1 as const,
     label: "Boas-vindas",
     title: "Vamos colocar seu atendente para trabalhar",
-    subtitle: "São 4 passos rápidos. Dá pra parar e continuar depois.",
+    subtitle: "Você vai configurar cada parte do agente. Dá pra parar e continuar depois.",
   },
   {
     n: 2 as const,
-    label: "Seu atendente",
-    title: "Como seu atendente deve ser?",
-    subtitle: "Isso define o jeito que ele fala com quem chega.",
+    label: "Jeito e objetivo",
+    title: "Defina o jeito e o objetivo do seu atendente",
+    subtitle: "Defina o jeito de falar e o resultado principal. As tarefas que ele pode executar vêm no próximo passo.",
   },
   {
     n: 3 as const,
-    label: "O que ele faz",
-    title: "O que seu atendente vai resolver?",
-    subtitle: "Escolha uma ou mais. Você pode mudar isso quando quiser.",
+    label: "Regras",
+    title: "O que ele nunca deve fazer?",
+    subtitle: "Defina limites claros para evitar promessas, respostas ou decisões que não combinam com seu negócio.",
   },
   {
     n: 4 as const,
+    label: "Cérebro",
+    title: "O que ele precisa saber?",
+    subtitle: "Adicione preços, horários, serviços e respostas frequentes para ele consultar durante as conversas.",
+  },
+  {
+    n: 5 as const,
+    label: "Habilidades",
+    title: "O que ele pode fazer sozinho?",
+    subtitle: "Escolha as tarefas práticas que ele tem permissão para executar e entenda o efeito de cada uma.",
+  },
+  {
+    n: 6 as const,
+    label: "Comportamento",
+    title: "Como ele deve agir durante a conversa?",
+    subtitle: "Escolha como o agente lida com áudios e quando um atendente humano assume o contato.",
+  },
+  {
+    n: 7 as const,
     label: "Conectar",
     title: "Onde as pessoas vão falar com ele",
     subtitle: "Conecte agora ou deixe para depois — seu atendente já está pronto.",
@@ -43,10 +61,10 @@ export const ONBOARDING_STEPS = [
 ];
 
 export const FIRST_STEP: StepNumber = 1;
-export const LAST_STEP: StepNumber = 4;
+export const LAST_STEP: StepNumber = 7;
 
 export function isStepNumber(n: unknown): n is StepNumber {
-  return n === 1 || n === 2 || n === 3 || n === 4;
+  return n === 1 || n === 2 || n === 3 || n === 4 || n === 5 || n === 6 || n === 7;
 }
 
 /* ------------------------------------------------- opções de personalidade */
@@ -61,15 +79,37 @@ export const TONE_OPTIONS = [
 
 /** Objetivo principal da conversa. */
 export const OBJECTIVE_OPTIONS = [
-  { value: "Agendar um horário", hint: "O agente puxa a conversa para marcar dia e hora." },
-  { value: "Fechar uma venda", hint: "O agente apresenta o que você vende e encaminha a compra." },
-  { value: "Entender o que a pessoa precisa", hint: "O agente qualifica e te entrega o contato pronto." },
-  { value: "Tirar dúvidas sobre o serviço", hint: "O agente informa e deixa a pessoa segura para decidir." },
+  {
+    value: "Agendar um horário",
+    label: "Conseguir um agendamento",
+    hint: "Resultado esperado: terminar a conversa com dia e hora combinados.",
+  },
+  {
+    value: "Fechar uma venda",
+    label: "Levar a pessoa à compra",
+    hint: "Resultado esperado: avançar a conversa até a decisão de compra.",
+  },
+  {
+    value: "Entender o que a pessoa precisa",
+    label: "Qualificar o contato",
+    hint: "Resultado esperado: descobrir a necessidade, o momento e o interesse da pessoa.",
+  },
+  {
+    value: "Tirar dúvidas sobre o serviço",
+    label: "Ajudar a pessoa a decidir",
+    hint: "Resultado esperado: resolver as dúvidas que impedem a decisão.",
+  },
 ];
 
 /* ---------------------------------------------------- processos / fluxos */
 
-export type ProcessKey = "atendimento" | "vendas" | "suporte" | "agendamento";
+export type ProcessKey =
+  | "atendimento"
+  | "vendas"
+  | "suporte"
+  | "agendamento"
+  | "follow_up"
+  | "triagem";
 
 export type ProcessDef = {
   key: ProcessKey;
@@ -82,27 +122,39 @@ export type ProcessDef = {
 export const PROCESS_CATALOG: ProcessDef[] = [
   {
     key: "atendimento",
-    label: "Atender e tirar dúvidas",
-    description: "Responde perguntas sobre preço, horário e como funciona — e guarda o contato.",
+    label: "Responder dúvidas e salvar o contato",
+    description: "Informa preço, horário e como funciona, além de registrar os dados da pessoa.",
     actionKeys: ["register_lead"],
   },
   {
     key: "vendas",
-    label: "Vender",
-    description: "Apresenta o que você oferece e te avisa quando alguém está pronto para comprar.",
+    label: "Identificar oportunidades de venda",
+    description: "Apresenta o que você oferece e avisa quando alguém demonstra intenção de comprar.",
     actionKeys: ["register_lead", "mark_hot_lead"],
   },
   {
     key: "suporte",
-    label: "Resolver problemas",
-    description: "Ajuda quem já é cliente e chama uma pessoa do seu time quando não dá conta.",
+    label: "Atender clientes e chamar seu time",
+    description: "Ajuda com problemas e transfere a conversa quando precisar de uma pessoa.",
     actionKeys: ["handoff_human"],
   },
   {
     key: "agendamento",
-    label: "Agendar horários",
-    description: "Marca dia e hora com a pessoa sem você precisar entrar na conversa.",
+    label: "Consultar a agenda e marcar horários",
+    description: "Mostra horários realmente livres e confirma a escolha sem você entrar na conversa.",
     actionKeys: ["schedule_meeting"],
+  },
+  {
+    key: "follow_up",
+    label: "Retomar contatos que pararam de responder",
+    description: "Envia uma nova mensagem depois do intervalo escolhido, mas não insiste após um agendamento.",
+    actionKeys: ["follow_up"],
+  },
+  {
+    key: "triagem",
+    label: "Encerrar contatos que não são clientes",
+    description: "Identifica vendedor, trote ou pedido fora da sua área e encerra a conversa com educação.",
+    actionKeys: ["disqualify_lead"],
   },
 ];
 
@@ -119,24 +171,33 @@ export type OnboardingDraft = {
   agentName: string;
   tone: string;
   objective: string;
+  rules: string;
   processes: ProcessKey[];
   customProcess: string;
+  listenAudio: boolean;
+  stopOnEmoji: boolean;
 };
 
 export const EMPTY_DRAFT: OnboardingDraft = {
   agentName: "",
   tone: "",
   objective: "",
+  rules: "",
   processes: [],
   customProcess: "",
+  listenAudio: true,
+  stopOnEmoji: true,
 };
 
 export const draftSchema = z.object({
   agentName: z.string().trim().max(40).default(""),
   tone: z.string().trim().max(120).default(""),
   objective: z.string().trim().max(160).default(""),
+  rules: z.string().trim().max(4000).default(""),
   processes: z.array(z.enum(PROCESS_KEYS)).default([]),
   customProcess: z.string().trim().max(240).default(""),
+  listenAudio: z.boolean().default(true),
+  stopOnEmoji: z.boolean().default(true),
 });
 
 /** Lê um draft vindo do banco (Json) ou do client, sempre devolvendo algo utilizável. */
@@ -153,8 +214,8 @@ export type StepErrors = Partial<Record<keyof OnboardingDraft, string>>;
 
 /**
  * Valida o que o passo exige para liberar o "Continuar".
- * Passos 1 e 4 não travam: boas-vindas não pede nada e a integração pode
- * ficar para depois (o agente já funciona no sandbox sem ela).
+ * Só personalidade e habilidades travam. Regras e Cérebro são opcionais, os
+ * comportamentos já têm padrões seguros e a integração pode ficar para depois.
  */
 export function validateStep(step: StepNumber, draft: OnboardingDraft): StepErrors {
   const errors: StepErrors = {};
@@ -167,12 +228,12 @@ export function validateStep(step: StepNumber, draft: OnboardingDraft): StepErro
       errors.tone = "Escolha como ele deve falar.";
     }
     if (!draft.objective.trim()) {
-      errors.objective = "Escolha o que ele deve buscar em cada conversa.";
+      errors.objective = "Escolha o resultado principal que ele deve buscar.";
     }
   }
 
-  if (step === 3 && draft.processes.length === 0 && !draft.customProcess.trim()) {
-    errors.processes = "Escolha pelo menos uma coisa para ele resolver.";
+  if (step === 5 && draft.processes.length === 0 && !draft.customProcess.trim()) {
+    errors.processes = "Escolha pelo menos uma tarefa que ele pode executar.";
   }
 
   return errors;
@@ -184,7 +245,7 @@ export function isStepValid(step: StepNumber, draft: OnboardingDraft): boolean {
 
 /** O wizard só pode ser concluído se todos os passos que travam estiverem ok. */
 export function canComplete(draft: OnboardingDraft): boolean {
-  return isStepValid(2, draft) && isStepValid(3, draft);
+  return isStepValid(2, draft) && isStepValid(5, draft);
 }
 
 /* ------------------------------------------------- tradução para o domínio */
@@ -236,8 +297,9 @@ export function draftToPersona(draft: OnboardingDraft, businessName: string): Pe
     businessName: businessName.trim(),
     sector: "",
     tone: draft.tone.trim(),
+    writingStyle: "",
     offer: describeProcesses(draft),
-    avoid: "",
+    avoid: draft.rules.trim(),
     objective: draft.objective.trim(),
   };
 }
