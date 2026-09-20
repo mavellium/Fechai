@@ -25,12 +25,6 @@ import { CalendarSyncStatus, type CalendarSyncItem } from "./CalendarSyncStatus"
 /** Quantos contatos mostrar no painel lateral — o resto fica em /contatos. */
 const SIDEBAR_CONTACTS = 6;
 
-const STATUS_BADGE: Record<string, { label: string; tone: "success" | "neutral" | "danger" }> = {
-  scheduled: { label: "marcado", tone: "success" },
-  done: { label: "realizado", tone: "neutral" },
-  canceled: { label: "cancelado", tone: "danger" },
-};
-
 /**
  * Agenda da conta: mês à esquerda, dia escolhido à direita.
  *

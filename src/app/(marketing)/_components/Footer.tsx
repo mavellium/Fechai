@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Mail } from "lucide-react";
-import { ORGANIZATION, SOCIAL_PROFILES } from "@/lib/seo";
+import { ORGANIZATION } from "@/lib/seo";
 
 // URLs de redes sociais — adapte conforme seus perfis oficiais
 const REDES_SOCIAIS = [

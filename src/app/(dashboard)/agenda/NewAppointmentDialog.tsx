@@ -27,6 +27,7 @@ export function NewAppointmentDialog({
   defaultDuration,
   durations = [],
   requiresContact = false,
+  triggerLabel = "Marcar horário",
 }: {
   contacts: ContactOption[];
   /** Dia aberto no calendário — já vem preenchido para poupar dois cliques. */
@@ -40,6 +41,8 @@ export function NewAppointmentDialog({
    */
   durations?: { label: string; minutes: number }[];
   requiresContact?: boolean;
+  /** Texto do gatilho conforme o lugar onde o diálogo aparece. */
+  triggerLabel?: string;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const confirmNavigation = useUnsavedNavigation();
@@ -60,7 +63,7 @@ export function NewAppointmentDialog({
     <>
       <Button type="button" variant="outline" size="sm" onClick={() => ref.current?.showModal()}>
         <CalendarPlus size={14} aria-hidden />
-        Marcar horário
+        {triggerLabel}
       </Button>
       {state?.warning && <Alert tone="warn">{state.warning}</Alert>}
 
