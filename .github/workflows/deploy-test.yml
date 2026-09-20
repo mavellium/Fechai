@@ -1,0 +1,43 @@
+name: Deploy Laboratorio
+
+# Manual de propósito: publicar produção não deve alterar o laboratório, e um
+# experimento no laboratório não pode entrar no ar só porque houve push.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: fechai-test
+  cancel-in-progress: false
+
+jobs:
+  verificacoes:
+    name: Verificacoes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm run lint
+      - run: npm test
+
+  deploy:
+    needs: verificacoes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publicando laboratório via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST_IP }}
+          username: ${{ secrets.HOST_USERNAME }}
+          key: ${{ secrets.HOST_SSH_KEY }}
+          port: 22
+          command_timeout: 30m
+          script: |
+            cd /var/www/Fechai
+            git pull --ff-only origin main
+            chmod +x deploy-test.sh
+            ./deploy-test.sh

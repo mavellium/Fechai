@@ -1,4 +1,4 @@
-import { Building2 } from "lucide-react";
+﻿import { Building2 } from "lucide-react";
 import { requireSuperadmin } from "@/lib/session";
 import {
   listTenants,
@@ -73,7 +73,7 @@ export default async function ContasPage({
   const atLimit = tenants.length === filters.limite;
 
   return (
-    <div className="mx-auto w-full max-w-[1600px] space-y-6">
+    <div className="w-full space-y-6">
       <PageHeader
         eyebrow="admin"
         title="Contas"
@@ -163,6 +163,7 @@ export default async function ContasPage({
                   planKey={t.planKey}
                   status={t.status}
                   whatsappStatus={t.whatsappInstance?.status ?? "—"}
+                  metaWhatsappEnabled={t.metaWhatsappEnabled}
                   messageLimitOverride={t.messageLimitOverride}
                   priceCentsOverride={t.priceCentsOverride}
                   trialEndsAt={t.trialEndsAt ? t.trialEndsAt.toISOString() : null}

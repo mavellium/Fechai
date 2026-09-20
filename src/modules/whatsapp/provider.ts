@@ -1,5 +1,5 @@
-// Interface do provedor de WhatsApp. Abstrai a Evolution API para permitir
-// trocar por WhatsApp Cloud API depois sem tocar no motor de conversa.
+// Interface comum da Evolution e da WhatsApp Cloud API oficial. O motor de
+// conversa recebe o mesmo contrato independentemente do provider do tenant.
 
 export type WhatsAppStatus = "disconnected" | "pending_qr" | "connected";
 
@@ -24,6 +24,8 @@ export type IncomingMessage = {
   isFromMe?: boolean;
   /** id da mensagem no WhatsApp (key.id) — necessário para baixar a mídia. */
   messageKeyId?: string;
+  /** id da mídia quando ele difere do id da mensagem (Cloud API da Meta). */
+  mediaId?: string;
 };
 
 export interface WhatsAppProvider {
@@ -58,15 +60,12 @@ export interface WhatsAppProvider {
     toPhone: string,
     audio: { base64: string; mime: string },
   ): Promise<string | null>;
-  /** Desloga o número da instância (exige novo QR para voltar). */
+  /** Desconecta do produto. Evolution desloga a sessão; Meta faz disconnect local. */
   disconnect(externalId: string): Promise<void>;
   /**
-   * (Re)aponta a instância para o webhook do fechai, com o header de segredo
-   * que a rota exige. É por instância de propósito: o webhook global do
-   * provedor não carrega header nenhum, e sem o segredo a rota devolve 401 —
-   * status que a Evolution trata como definitivo e não reentrega. Devolve
-   * false quando não há como configurar (URL ou segredo ausentes) para o
-   * chamador distinguir "não configurei" de "configurei".
+   * Garante a entrega de webhook no provider. Na Evolution reaponta a URL por
+   * instância com header secreto; na Meta inscreve o app no WABA. Devolve
+   * false quando faltam dados para automatizar a configuração.
    */
   ensureWebhook(externalId: string): Promise<boolean>;
   /** Baixa a mídia de uma mensagem recebida em base64 (ex.: mensagem de voz). */

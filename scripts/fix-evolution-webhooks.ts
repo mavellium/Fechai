@@ -16,7 +16,7 @@ import { getWhatsAppProvider } from "../src/modules/whatsapp";
 //
 // Rode uma vez após o deploy:  npm run whatsapp:webhooks
 async function main() {
-  const provider = getWhatsAppProvider();
+  const provider = getWhatsAppProvider("evolution");
   if (!provider.isConfigured()) {
     console.error("[whatsapp:webhooks] EVOLUTION_API_URL / EVOLUTION_API_KEY ausentes.");
     process.exit(1);
@@ -30,7 +30,7 @@ async function main() {
   }
 
   const instances = await prisma.whatsappInstance.findMany({
-    where: { externalId: { not: null } },
+    where: { provider: "evolution", externalId: { not: null } },
     select: { externalId: true, tenantId: true, status: true },
   });
 

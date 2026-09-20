@@ -2,13 +2,21 @@
 
 ## O que faz
 
-Conecta o número de WhatsApp do tenant e troca mensagens, atrás de uma interface que isola o provedor (hoje Evolution API self-hosted).
+Conecta o número de WhatsApp do tenant e troca mensagens atrás de uma interface
+que isola o provedor. Cada conta escolhe entre **Evolution API self-hosted** e
+**WhatsApp Cloud API oficial da Meta**; contas antigas continuam em Evolution.
 
 ## Arquivos
 
 - `provider.ts` — interface `WhatsAppProvider` (`createInstance`, `getQrCode`, `sendMessage`, `parseWebhook`) e tipos (`IncomingMessage`, `WhatsAppStatus`).
 - `evolution.ts` — `EvolutionProvider`: chama a Evolution API v2 (`/instance/create`, `/instance/connect`, `/message/sendText`) e faz parse do evento `messages.upsert`. `isConfigured()` = tem URL+key.
-- `index.ts` — `getWhatsAppProvider()` (factory). Trocar de provedor acontece só aqui.
+- `meta.ts` — `MetaCloudProvider`: Graph API oficial (texto, upload/download de
+  áudio, perfil do número, inscrição do app no WABA e parse de webhook).
+- `meta-config.ts` — resolve o adapter pela linha `WhatsappInstance`, decifra
+  credenciais e valida `X-Hub-Signature-256` sem vazar segredo.
+- `process-incoming.ts` — fluxo comum depois que cada webhook foi autenticado e
+  normalizado: bloqueio, áudio, conversa, agente, voz e resposta.
+- `index.ts` — factory dos adapters e nomes aceitos (`evolution | meta`).
 - `blocklist.ts` — números que o agente ignora (`isPhoneBlocked`,
   `canonicalPhone`, `listBlockedNumbers`). Ver abaixo.
 - `health.ts` — detecta número fora do ar (`checkTenantWhatsapp`, `scanWhatsappHealth`, `diagnose`) e sincroniza `WhatsappInstance.status` com a realidade.
@@ -16,7 +24,8 @@ Conecta o número de WhatsApp do tenant e troca mensagens, atrás de uma interfa
 ## Contratos expostos
 
 ```ts
-getWhatsAppProvider(): WhatsAppProvider
+getWhatsAppProvider(name, credentials?): WhatsAppProvider
+getWhatsAppProviderForInstance(instance): WhatsAppProvider
 createInstance(tenantId) -> { externalId, status, qrCode? }
 getQrCode(externalId) -> { status, qrCode? }        // GERA um QR (gasta QRCODE_LIMIT)
 getConnectionState(externalId) -> { status, exists, reachable }  // só LÊ, nunca gera
@@ -26,7 +35,57 @@ ensureWebhook(externalId) -> boolean   // false = sem URL/segredo para apontar
 parseWebhook(payload) -> IncomingMessage | null
 ```
 
-## Webhook: por instância, nunca global
+## Seleção por conta e credenciais da Meta
+
+`Tenant.metaWhatsappEnabled` nasce `false` e só o superadmin altera em
+`/admin/contas`. Sem essa liberação a alternativa Meta não aparece em
+`/integracoes`, as Server Actions recusam seleção/conexão direta e o webhook
+oficial não aceita a conta. Desabilitar enquanto Meta está em uso volta a linha
+para Evolution desconectada, mas preserva as credenciais cifradas.
+
+`WhatsappInstance.provider` nasce como `evolution`, portanto o `db push` não
+muda nenhuma conta existente. Para Meta, `externalId` é o **Phone Number ID** e
+os demais dados ficam na mesma linha:
+
+- Phone Number ID, WABA ID e telefone de exibição podem ficar legíveis;
+- access token, App Secret e verify token são cifrados com AES-256-GCM usando
+  `ENCRYPTION_KEY` (`meta*Encrypted`);
+- credencial ilegível nunca vai crua/cifrada para um header: o adapter fica
+  `isConfigured() === false` e a tela pede nova configuração.
+
+A troca de provider só é permitida com o atual desconectado. Assim não ficam
+Evolution e Meta processando o mesmo número em paralelo.
+
+## Webhook oficial da Meta
+
+Cada tenant recebe uma Callback URL própria:
+
+`/api/webhooks/whatsapp/meta/{tenantId}`
+
+O `GET` responde ao handshake somente se `hub.verify_token` bater, em tempo
+constante, com o token aleatório cifrado da conta. O `POST` lê o corpo bruto e
+valida `X-Hub-Signature-256` (HMAC-SHA256 com o App Secret) **antes** de fazer
+parse ou chamar o motor. O `phone_number_id` do payload ainda precisa bater com
+o salvo no tenant. Eventos de status (`sent`, `delivered`, `read`) são ignorados;
+somente `messages` entra no atendimento.
+
+No painel da Meta é obrigatório assinar o campo `messages`. A action também
+tenta `POST /{WABA-ID}/subscribed_apps`, mas mantém as credenciais válidas e
+mostra um aviso se o token não tiver permissão para fazer essa inscrição.
+
+### Diferenças funcionais da API oficial
+
+- Não existe QR nem sessão de aparelho. Conectar valida Phone Number ID + token.
+- A Cloud API oficial não gerencia participantes de grupos. A transferência
+  para humano continua marcando a conversa, mas o extra "adicionar ao grupo"
+  só funciona com Evolution.
+- Texto livre obedece à janela de atendimento aberta pelo cliente. Fora dela a
+  Meta exige template aprovado; follow-ups e lembretes em texto livre podem ser
+  recusados. A tela avisa isso sem fingir paridade que a própria Meta não oferece.
+- Desconectar no fechai é local: não desregistra o telefone do WABA. O webhook
+  passa a ignorar a linha e as credenciais ficam preservadas para reconexão.
+
+## Webhook Evolution: por instância, nunca global
 
 O webhook do fechai (`api/webhooks/whatsapp`) **recusa com 401 tudo que não trouxer
 o header `x-webhook-secret`** — identificador de instância é identificador, não

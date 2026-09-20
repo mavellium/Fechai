@@ -1,5 +1,8 @@
 import { prisma } from "@/lib/prisma";
-import { getWhatsAppProvider } from "@/modules/whatsapp";
+import {
+  getWhatsAppProviderForInstance,
+  WHATSAPP_PROVIDER_SELECT,
+} from "@/modules/whatsapp/meta-config";
 
 /**
  * Configuração da ação "Transferir para humano", guardada em `TenantAction.config`
@@ -128,11 +131,15 @@ export async function addLeadToHandoffGroup(
 
     const instance = await prisma.whatsappInstance.findUnique({
       where: { tenantId },
-      select: { externalId: true, status: true },
+      select: { status: true, ...WHATSAPP_PROVIDER_SELECT },
     });
     if (!instance?.externalId || instance.status !== "connected") return;
 
-    await getWhatsAppProvider().addParticipantToGroup(instance.externalId, config.groupId, phone);
+    await getWhatsAppProviderForInstance(instance).addParticipantToGroup(
+      instance.externalId,
+      config.groupId,
+      phone,
+    );
   } catch (err) {
     console.error("[handoff] falha ao adicionar contato ao grupo do WhatsApp", err);
   }

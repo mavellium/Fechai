@@ -1,4 +1,4 @@
-import { requireSuperadmin } from "@/lib/session";
+﻿import { requireSuperadmin } from "@/lib/session";
 import { AI_MODELS, getActiveModel, getAiSettingMeta } from "@/modules/ai";
 import { activeEmbeddingModel } from "@/modules/ai/embeddings";
 import type { ProviderKey } from "@/modules/ai/types";
@@ -105,7 +105,7 @@ export default async function AdminIaPage({
       : Boolean(process.env[active.envKey]);
 
   return (
-    <div className="mx-auto w-full max-w-[1600px] space-y-6">
+    <div className="w-full space-y-6">
       <PageHeader
         eyebrow="admin"
         title="Inteligência artificial"

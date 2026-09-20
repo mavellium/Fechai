@@ -93,6 +93,8 @@ export function IntegrationPanel({
             <h3 className="font-display text-base font-semibold text-ink">No seu WhatsApp</h3>
             <p className="mt-1 text-sm text-neutral">
               Conecte o número que seus clientes já usam. O atendente passa a responder por lá.
+              Se sua empresa usa a API oficial da Meta, conclua este passo e escolha essa opção em
+              Integrações.
             </p>
           </div>
         </div>

@@ -1,6 +1,9 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../../src/lib/prisma";
-import { getWhatsAppProvider } from "../../src/modules/whatsapp";
+import {
+  getWhatsAppProviderForInstance,
+  WHATSAPP_PROVIDER_SELECT,
+} from "../../src/modules/whatsapp/meta-config";
 import {
   parseScheduleConfig,
   renderReminder,
@@ -143,7 +146,6 @@ export async function scanAndSendReminders(now: Date = new Date()) {
     await markSent(appt.id, appt.remindersSent, pending.map((r) => r.minutesBefore), null);
   }
 
-  const provider = getWhatsAppProvider();
   let sent = 0;
 
   for (const appt of appointments) {
@@ -178,13 +180,17 @@ export async function scanAndSendReminders(now: Date = new Date()) {
     });
 
     let keyId: string | null = null;
-    if (provider.isConfigured()) {
+    {
       const instance = await prisma.whatsappInstance.findUnique({
         where: { tenantId: appt.tenantId },
+        select: { status: true, ...WHATSAPP_PROVIDER_SELECT },
       });
       if (instance?.externalId && instance.status === "connected") {
         try {
-          keyId = await provider.sendMessage(instance.externalId, appt.lead.phone, text);
+          const provider = getWhatsAppProviderForInstance(instance);
+          if (provider.isConfigured()) {
+            keyId = await provider.sendMessage(instance.externalId, appt.lead.phone, text);
+          }
         } catch (err) {
           console.error("[lembrete] falha ao enviar", appt.id, err);
         }

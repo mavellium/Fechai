@@ -178,7 +178,7 @@ export default async function ConfiguracoesPage() {
   const pending = checks ? checks.filter((c) => !c.ok).length : 0;
 
   return (
-    <div className="mx-auto w-full max-w-[1600px] space-y-6">
+    <div className="w-full space-y-6">
       <PageHeader
         eyebrow="configurações"
         title="Configurações"

@@ -1,5 +1,8 @@
 import { prisma } from "@/lib/prisma";
-import { getWhatsAppProvider } from "@/modules/whatsapp";
+import {
+  getWhatsAppProviderForInstance,
+  WHATSAPP_PROVIDER_SELECT,
+} from "@/modules/whatsapp/meta-config";
 import { storeVoiceMessage } from "@/modules/voice/storage";
 
 /**
@@ -141,7 +144,7 @@ export async function sendManualReply(
   if (!conversation.isTest) {
     const instance = await prisma.whatsappInstance.findUnique({
       where: { tenantId },
-      select: { status: true, externalId: true },
+      select: { status: true, ...WHATSAPP_PROVIDER_SELECT },
     });
     if (!instance || instance.status !== "connected" || !instance.externalId) {
       return { ok: false, error: "O WhatsApp não está conectado. Conecte na tela WhatsApp antes de enviar." };
@@ -150,7 +153,7 @@ export async function sendManualReply(
       // Grava o key.id da mensagem que acabamos de enviar: o webhook reentrega
       // tudo que a instância manda como fromMe, e sem esse id a resposta
       // manual apareceria duas vezes no histórico.
-      const provider = getWhatsAppProvider();
+      const provider = getWhatsAppProviderForInstance(instance);
       externalId = audio
         ? await provider.sendAudio(instance.externalId, conversation.lead!.phone, {
             base64: audio.buffer.toString("base64"),

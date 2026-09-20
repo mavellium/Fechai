@@ -1,4 +1,4 @@
-import Link from "next/link";
+﻿import Link from "next/link";
 import { ArrowUpRight, Bot, FileText, MessagesSquare, TriangleAlert } from "lucide-react";
 import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
@@ -120,7 +120,7 @@ export default async function InicioPage({
     const remaining = required.length - doneCount;
 
     return (
-      <div className="mx-auto w-full max-w-3xl space-y-8">
+      <div className="w-full space-y-8">
         {checkoutAlert}
         <PageHeader
           eyebrow="início"
@@ -168,7 +168,7 @@ export default async function InicioPage({
   const periodLabel = days === 30 ? "nos últimos 30 dias" : "nos últimos 7 dias";
 
   return (
-    <div className="mx-auto w-full max-w-[1600px] space-y-6">
+    <div className="w-full space-y-6">
       {checkoutAlert}
 
       <PageHeader

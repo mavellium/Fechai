@@ -1,4 +1,4 @@
-import { Bot } from "lucide-react";
+﻿import { Bot } from "lucide-react";
 import { requireSuperadmin } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { planOf } from "@/modules/billing/plans";
@@ -40,7 +40,7 @@ export default async function AdminAgentsPage() {
   }));
 
   return (
-    <div className="mx-auto w-full max-w-5xl space-y-6">
+    <div className="w-full space-y-6">
       <PageHeader
         eyebrow="admin"
         title="Replicar agentes"

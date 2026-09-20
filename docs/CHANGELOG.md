@@ -17,6 +17,10 @@ Uma linha por milestone concluído (mais recente no topo).
 - **Banco de laboratório:** `npm run test:db:prepare` cria/sincroniza o banco
   lógico `saas_test`, e `npm run dev:test` abre o app isolado na porta 3002. O
   script recusa a URL de produção e nomes que não indiquem teste.
+- **Laboratório na VPS:** `docker-compose.test.yml` cria Postgres, Redis, volume
+  e app próprios; `deploy-test.sh` aplica schema/seed somente nessa stack. O
+  workflow manual **Deploy Laboratório** impede que um push de produção ligue
+  integrações ou recrie o ambiente de testes sem intenção.
 - **Deploy esclarecido:** push para `main` recria web/worker, mas não cria outro
   Postgres, não transporta `saas_test` e não roda `prisma db push` sozinho.
 

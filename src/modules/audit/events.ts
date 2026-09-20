@@ -229,6 +229,11 @@ export const AUDIT_EVENTS = {
     group: "admin",
     revertible: true,
   },
+  "admin.meta_whatsapp_access_changed": {
+    label: "Alterou o acesso à API oficial da Meta",
+    kind: "update",
+    group: "admin",
+  },
   "admin.account_created": { label: "Criou uma conta pelo painel", kind: "create", group: "admin" },
   "admin.tenant_deleted": {
     label: "Excluiu a conta definitivamente",

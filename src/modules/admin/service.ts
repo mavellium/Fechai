@@ -5,7 +5,11 @@ import { prisma } from "@/lib/prisma";
 import { generateStrongPassword, BCRYPT_COST } from "@/lib/password";
 import { createTenantWithOwner } from "@/modules/tenants/provision";
 import { deleteFromBunny } from "@/lib/bunny";
-import { getWhatsAppProvider } from "@/modules/whatsapp";
+import {
+  getWhatsAppProviderForInstance,
+  WHATSAPP_PROVIDER_SELECT,
+  type WhatsappProviderInstance,
+} from "@/modules/whatsapp/meta-config";
 import { deleteVoice } from "@/modules/voice/fish";
 
 // Funções cross-tenant do painel admin. Autorização (SUPERADMIN) é garantida
@@ -266,7 +270,7 @@ export async function deleteTenant(tenantId: string): Promise<void> {
     where: { id: tenantId },
     select: {
       id: true,
-      whatsappInstance: { select: { externalId: true } },
+      whatsappInstance: { select: WHATSAPP_PROVIDER_SELECT },
       agents: { select: { voiceId: true, voiceSource: true } },
       knowledgeDocs: { select: { fileUrl: true } },
     },
@@ -284,7 +288,7 @@ export async function deleteTenant(tenantId: string): Promise<void> {
  */
 async function releaseExternalResources(tenant: {
   id: string;
-  whatsappInstance: { externalId: string | null } | null;
+  whatsappInstance: WhatsappProviderInstance | null;
   agents: { voiceId: string | null; voiceSource: string | null }[];
   knowledgeDocs: { fileUrl: string | null }[];
 }): Promise<void> {
@@ -293,7 +297,7 @@ async function releaseExternalResources(tenant: {
     try {
       // Logout, não delete: derruba a sessão do WhatsApp para o número não
       // seguir conectado a uma conta que não existe mais.
-      await getWhatsAppProvider().disconnect(externalId);
+      await getWhatsAppProviderForInstance(tenant.whatsappInstance!).disconnect(externalId);
     } catch (err) {
       console.error("[admin] falha ao desconectar WhatsApp da conta excluída", tenant.id, err);
     }

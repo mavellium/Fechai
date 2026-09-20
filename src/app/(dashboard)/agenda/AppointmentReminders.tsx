@@ -65,7 +65,7 @@ export function AppointmentReminders({
   const contentRef = useRef<HTMLFieldSetElement>(null);
   const [saved, setSaved] = useState(() => JSON.stringify({ custom: override !== null, drafts: toDrafts(override ?? agentReminders) }));
   const confirmNavigation = useUnsavedNavigation();
-  useUnsavedChanges(open && (pending || JSON.stringify({ custom, drafts }) !== saved), "Lembretes da consulta", contentRef);
+  useUnsavedChanges(open && (pending || JSON.stringify({ custom, drafts }) !== saved), "Lembretes da consulta", contentRef, () => save(custom ? drafts : null));
   function close() {
     if (!pending) confirmNavigation(() => setOpen(false), contentRef.current);
   }

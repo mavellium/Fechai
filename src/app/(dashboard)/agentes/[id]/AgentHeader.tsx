@@ -34,7 +34,7 @@ export function AgentHeader({
     if (!editing) setName(agent.name);
   }
   const rootRef = useRef<HTMLDivElement>(null);
-  useUnsavedChanges(editing && name !== savedName, "Nome do agente", rootRef);
+  useUnsavedChanges(editing && name !== savedName, "Nome do agente", rootRef, save);
   const confirmNavigation = useUnsavedNavigation();
   const [enabled, setEnabled] = useState(agent.enabled);
   const [togglingPower, setTogglingPower] = useState(false);

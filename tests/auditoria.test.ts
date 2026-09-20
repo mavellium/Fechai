@@ -105,10 +105,16 @@ describe("redação — o que nunca pode ser gravado", () => {
   });
 
   it("remove segredo de integração, comparando sem diferenciar maiúscula", () => {
-    const safe = redactSnapshot({ apiToken: "tok_123", ApiKey: "sk-abc", secretEnc: "xyz" });
+    const safe = redactSnapshot({
+      apiToken: "tok_123",
+      ApiKey: "sk-abc",
+      secretEnc: "xyz",
+      metaAccessTokenEncrypted: "v1:cifrado",
+    });
     expect(containsRedacted(safe)).toBe(true);
     expect(JSON.stringify(safe)).not.toContain("tok_123");
     expect(JSON.stringify(safe)).not.toContain("sk-abc");
+    expect(JSON.stringify(safe)).not.toContain("v1:cifrado");
   });
 
   it("corta campo de segredo com nome novo, pelo sufixo", () => {

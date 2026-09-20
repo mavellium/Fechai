@@ -1,4 +1,4 @@
-import { MessageSquareHeart, Star } from "lucide-react";
+﻿import { MessageSquareHeart, Star } from "lucide-react";
 import { requireSuperadmin } from "@/lib/session";
 import { listFeedbacks } from "@/modules/feedback/service";
 import { Card } from "@/components/ui/card";
@@ -24,7 +24,7 @@ export default async function FeedbacksPage({
   const feedbacks = await listFeedbacks(status !== "all" ? { status } : undefined);
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-6">
+    <div className="w-full space-y-6">
       <PageHeader
         eyebrow="admin"
         title="Feedbacks"

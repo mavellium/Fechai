@@ -1,5 +1,8 @@
 import { prisma } from "../../src/lib/prisma";
-import { getWhatsAppProvider } from "../../src/modules/whatsapp";
+import {
+  getWhatsAppProviderForInstance,
+  WHATSAPP_PROVIDER_SELECT,
+} from "../../src/modules/whatsapp/meta-config";
 import { parseFollowUpConfig, type FollowUpConfig } from "../../src/modules/follow-up/config";
 
 // Regra pura de elegibilidade — fácil de testar sem banco.
@@ -77,7 +80,6 @@ export async function scanAndSendFollowUps(now: Date = new Date()) {
     },
   });
 
-  const provider = getWhatsAppProvider();
   let sent = 0;
 
   for (const c of convos) {
@@ -94,11 +96,17 @@ export async function scanAndSendFollowUps(now: Date = new Date()) {
     }, cutoff)) continue;
 
     let keyId: string | null = null;
-    if (provider.isConfigured() && !c.lead.isTest) {
-      const instance = await prisma.whatsappInstance.findUnique({ where: { tenantId: c.tenantId } });
+    if (!c.lead.isTest) {
+      const instance = await prisma.whatsappInstance.findUnique({
+        where: { tenantId: c.tenantId },
+        select: { status: true, ...WHATSAPP_PROVIDER_SELECT },
+      });
       if (instance?.externalId && instance.status === "connected") {
         try {
-          keyId = await provider.sendMessage(instance.externalId, c.lead.phone, config.message);
+          const provider = getWhatsAppProviderForInstance(instance);
+          if (provider.isConfigured()) {
+            keyId = await provider.sendMessage(instance.externalId, c.lead.phone, config.message);
+          }
         } catch (err) {
           console.error("[follow-up] falha ao enviar", c.id, err);
         }

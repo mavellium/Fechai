@@ -79,6 +79,11 @@ model Tenant {
   // WhatsApp: se verdadeiro (padrão), o agente ignora mensagens de grupos.
   whatsappIgnoreGroups Boolean @default(true)
 
+  // Liberação comercial/operacional da API oficial da Meta. Nasce desligada:
+  // somente o superadmin pode expor essa alternativa para a conta. A Evolution
+  // continua sendo o provedor disponível por padrão.
+  metaWhatsappEnabled Boolean @default(false)
+
   // Último alerta de conexão de WhatsApp quebrada enviado para esta conta
   // (ver modules/whatsapp/health.ts). Serve só de cooldown: sem ele, uma conta
   // com o número fora do ar receberia um e-mail a cada varredura do worker até
@@ -94,14 +99,14 @@ model Tenant {
   // O endereço vem do CEP (ViaCEP, ver lib/br-address.ts), mas todo campo é
   // editável e guardado como veio da tela — o serviço é conveniência, não
   // fonte da verdade, e CEP de cidade inteira não traz logradouro.
-  zipCode         String? // CEP, só dígitos (8) — sem máscara, como os telefones
-  street          String? // logradouro ("Avenida Paulista")
-  addressNumber   String? // número; String porque "s/n" e "1000-A" existem
-  complement      String? // complemento ("sala 42") — opcional no formulário
-  neighborhood    String? // bairro
-  city            String? // cidade do negócio
-  state           String? // UF (2 letras)
-  businessSegment String? // ex: "estetica", "advocacia", "imobiliaria" — ver BUSINESS_SEGMENTS
+  zipCode              String? // CEP, só dígitos (8) — sem máscara, como os telefones
+  street               String? // logradouro ("Avenida Paulista")
+  addressNumber        String? // número; String porque "s/n" e "1000-A" existem
+  complement           String? // complemento ("sala 42") — opcional no formulário
+  neighborhood         String? // bairro
+  city                 String? // cidade do negócio
+  state                String? // UF (2 letras)
+  businessSegment      String? // ex: "estetica", "advocacia", "imobiliaria" — ver BUSINESS_SEGMENTS
   /// Texto livre quando `businessSegment` é "outro" — null nas demais opções.
   /// "Outro" sozinho não qualifica ninguém; é este campo que diz qual.
   businessSegmentOther String?
@@ -152,8 +157,8 @@ model User {
   /// gênero descrevem um CNPJ), mas as colunas ficam: contas criadas antes têm
   /// valor aqui e apagá-las destruiria histórico para não ganhar nada.
   /// Não voltar a preencher — em conta nova nascem null.
-  birthDate      DateTime?
-  gender         String?
+  birthDate DateTime?
+  gender    String?
 
   // Login com Google (NextAuth). Só VINCULA uma conta que já existe — o
   // provider não cria tenant: o /cadastro exige CNPJ, telefone e segmento,
@@ -343,12 +348,28 @@ model TenantAction {
 }
 
 model WhatsappInstance {
-  id         String   @id @default(cuid())
-  tenantId   String   @unique
-  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  status     String   @default("disconnected") // disconnected | pending_qr | connected
-  externalId String? // id da instância na Evolution API
-  updatedAt  DateTime @updatedAt
+  id         String  @id @default(cuid())
+  tenantId   String  @unique
+  tenant     Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  status     String  @default("disconnected") // disconnected | pending_qr | connected
+  /// `evolution` (padrão legado) ou `meta`. String para permitir acrescentar
+  /// outro adapter sem migração de enum em produção.
+  provider   String  @default("evolution")
+  /// Evolution: nome da instância. Meta: Phone Number ID.
+  externalId String?
+
+  /// Configuração da WhatsApp Cloud API oficial. Tokens/segredos são cifrados
+  /// com AES-256-GCM; nunca guardar credencial reversível em texto claro.
+  metaPhoneNumberId        String?
+  metaBusinessAccountId    String?
+  metaDisplayPhone         String?
+  metaAccessTokenEncrypted String?
+  metaAppSecretEncrypted   String?
+  metaVerifyTokenEncrypted String?
+
+  updatedAt DateTime @updatedAt
+
+  @@index([provider, externalId])
 }
 
 model Lead {

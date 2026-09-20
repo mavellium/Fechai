@@ -1,4 +1,4 @@
-import { BarChart3, Download } from "lucide-react";
+﻿import { BarChart3, Download } from "lucide-react";
 import { requireTenant, requireOwner } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import {
@@ -84,7 +84,7 @@ export default async function RelatoriosPage({
   // precisa ver o que indicou.
   if (hasAnyData === 0 && view !== "afiliados") {
     return (
-      <div className="mx-auto w-full max-w-[1600px] space-y-8">
+      <div className="w-full space-y-8">
         <PageHeader
           eyebrow="relatórios"
           title="Números da sua conta"
@@ -119,7 +119,7 @@ export default async function RelatoriosPage({
   if (!de) exportQs.set("periodo", period);
 
   return (
-    <div className="mx-auto w-full max-w-[1600px] space-y-6">
+    <div className="w-full space-y-6">
       <PageHeader
         eyebrow="relatórios"
         title="Números da sua conta"

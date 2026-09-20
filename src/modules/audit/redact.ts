@@ -49,7 +49,18 @@ const SECRET_FIELDS = new Set([
  * `apiToken`, `googleRefreshToken` e `webhookSecret` serem cortados sem que
  * alguém tenha de lembrar de adicioná-los à lista acima.
  */
-const SECRET_SUFFIXES = ["token", "secret", "password", "passwordhash", "apikey", "privatekey"];
+const SECRET_SUFFIXES = [
+  "token",
+  "secret",
+  "password",
+  "passwordhash",
+  "apikey",
+  "privatekey",
+  // Credencial já cifrada continua sendo segredo: não precisa ser copiada
+  // para auditoria e pode ser decifrada por quem tiver a chave do ambiente.
+  "encrypted",
+  "enc",
+];
 
 function isSecretField(key: string): boolean {
   const name = key.toLowerCase();

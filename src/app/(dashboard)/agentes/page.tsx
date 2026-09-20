@@ -12,7 +12,7 @@ export default async function AgentesPage() {
   const [agents, usage] = await Promise.all([listAgents(tenantId), getAgentUsage(tenantId)]);
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-6">
+    <div className="w-full space-y-6">
       <PageHeader
         eyebrow="agentes"
         title="Seus agentes"

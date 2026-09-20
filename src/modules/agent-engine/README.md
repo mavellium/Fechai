@@ -240,6 +240,11 @@ Envio: `WhatsAppProvider.addParticipantToGroup` →
 `POST /group/updateParticipant?groupJid=...` com `action: "add"` na Evolution.
 Regressões em `tests/handoff-grupo.test.ts` (banco e provider simulados).
 
+Na conexão oficial da Meta este extra não existe: a Cloud API não expõe gestão
+de participantes de grupos. A transferência principal (`needsHuman`) continua
+normal e `addLeadToHandoffGroup` engole a limitação como qualquer falha do extra;
+para adicionar ao grupo é necessário usar Evolution.
+
 O número precisa estar **conectado** (`WhatsappInstance.status`): sem sessão
 ativa não há de onde convidar. O WhatsApp também recusa o convite direto quando
 a pessoa restringe quem pode adicioná-la a grupos — nesse caso a Evolution

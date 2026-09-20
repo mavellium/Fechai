@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const WEEKDAY_HEADERS = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
@@ -39,30 +40,55 @@ export function CalendarMonth({
   const prev = month === 1 ? { year: year - 1, month: 12 } : { year, month: month - 1 };
   const next = month === 12 ? { year: year + 1, month: 1 } : { year, month: month + 1 };
 
+  const isCurrentMonth = today.year === year && today.month === month;
+
   const monthLabel = new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" }).format(
     new Date(Date.UTC(year, month - 1, 1)),
   );
 
   const navClass =
-    "rounded-control px-3 py-1.5 font-mono text-micro uppercase tracking-[0.15em] text-white/60 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris";
+    "flex h-8 w-8 items-center justify-center rounded-control font-mono text-white/60 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris";
 
   return (
     <div>
       <div className="mb-4 flex items-center justify-between gap-2">
-        <Link href={hrefFor({ ...prev, day: null })} className={navClass} rel="prev">
-          ← anterior
-        </Link>
-        <h2 className="font-display text-lg font-semibold capitalize text-white">{monthLabel}</h2>
-        <Link href={hrefFor({ ...next, day: null })} className={navClass} rel="next">
-          próximo →
-        </Link>
+        <div>
+          <h2 className="font-display text-lg font-semibold capitalize text-white">{monthLabel}</h2>
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          {!isCurrentMonth && (
+            <Link
+              href={hrefFor({ year: today.year, month: today.month, day: today.day })}
+              className="rounded-control px-2.5 py-1 font-mono text-micro uppercase tracking-wider text-iris transition-colors hover:bg-iris/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-iris"
+            >
+              Hoje
+            </Link>
+          )}
+          <Link
+            href={hrefFor({ ...prev, day: null })}
+            className={navClass}
+            rel="prev"
+            aria-label="Mês anterior"
+          >
+            <ChevronLeft size={16} aria-hidden />
+          </Link>
+          <Link
+            href={hrefFor({ ...next, day: null })}
+            className={navClass}
+            rel="next"
+            aria-label="Próximo mês"
+          >
+            <ChevronRight size={16} aria-hidden />
+          </Link>
+        </div>
       </div>
 
-      <div className="grid grid-cols-7 gap-1" role="grid" aria-label={`Calendário de ${monthLabel}`}>
+      <div className="grid grid-cols-7 gap-1.5 md:gap-2" role="grid" aria-label={`Calendário de ${monthLabel}`}>
         {WEEKDAY_HEADERS.map((label) => (
           <div
             key={label}
-            className="pb-1 text-center font-mono text-micro uppercase tracking-wide text-white/40"
+            className="pb-2 text-center font-mono text-xs uppercase tracking-wider text-white/45"
           >
             {label}
           </div>
@@ -70,7 +96,7 @@ export function CalendarMonth({
 
         {/* Casas vazias antes do dia 1 — `aria-hidden` porque não são dias. */}
         {Array.from({ length: firstWeekday }).map((_, i) => (
-          <div key={`empty-${i}`} aria-hidden />
+          <div key={`empty-${i}`} aria-hidden className="min-h-[3.75rem] md:min-h-[4.5rem] rounded-control border border-transparent" />
         ))}
 
         {Array.from({ length: daysInMonth }, (_, i) => i + 1).map((day) => {
@@ -86,26 +112,40 @@ export function CalendarMonth({
               aria-current={isSelected ? "date" : undefined}
               aria-label={`${day} de ${monthLabel}${count > 0 ? `, ${count} compromisso(s)` : ", sem compromissos"}`}
               className={cn(
-                // Altura fixa, não `aspect-square`: em telas largas a coluna do
-                // calendário passou a dividir espaço com o painel de contatos —
-                // células quadradas (~110px+) faziam a grade sozinha estourar a
-                // tela. Altura fixa mantém o mês compacto em qualquer largura.
-                "flex h-10 flex-col items-center justify-center gap-0.5 rounded-control border text-sm transition-colors",
-                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris focus-visible:ring-offset-2 focus-visible:ring-offset-ink",
+                "group relative flex min-h-[3.75rem] md:min-h-[4.5rem] flex-col justify-between rounded-control border p-2 transition-all duration-150",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris",
                 isSelected
-                  ? "border-iris bg-iris/20 text-white"
-                  : "border-transparent text-white/70 hover:bg-white/5 hover:text-white",
-                isToday && !isSelected && "border-white/25",
+                  ? "border-iris bg-iris/20 text-white shadow-sm ring-1 ring-iris/50"
+                  : "border-white/10 text-white/75 hover:border-white/25 hover:bg-white/5 hover:text-white",
+                isToday && !isSelected && "border-iris/40 bg-iris/[0.03]",
               )}
             >
-              <span className={cn("tabular-nums", isToday && "font-semibold text-white")}>
-                {day}
-              </span>
-              {/* Contagem em número, não só bolinha: a cor sozinha não diz
-                  quantos compromissos existem naquele dia. */}
-              {count > 0 && (
-                <span className="rounded-full bg-signal/25 px-1.5 font-mono text-[10px] leading-4 text-white">
-                  {count}
+              <div className="flex w-full items-center justify-between">
+                <span
+                  className={cn(
+                    "font-mono text-sm tabular-nums",
+                    isToday ? "font-bold text-iris" : isSelected ? "font-bold text-white" : "text-white/80"
+                  )}
+                >
+                  {day}
+                </span>
+                {isToday && (
+                  <span className="rounded-full bg-iris/25 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-iris">
+                    hoje
+                  </span>
+                )}
+              </div>
+
+              {count > 0 ? (
+                <div className="mt-1 flex items-center gap-1">
+                  <span className="inline-flex items-center gap-1 rounded-full bg-signal/20 px-1.5 py-0.5 font-mono text-[10px] font-medium text-white/90">
+                    <span className="h-1.5 w-1.5 rounded-full bg-signal" />
+                    {count} {count === 1 ? "marcado" : "marcados"}
+                  </span>
+                </div>
+              ) : (
+                <span className="font-mono text-[10px] text-transparent select-none group-hover:text-white/20">
+                  livre
                 </span>
               )}
             </Link>

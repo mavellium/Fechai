@@ -5,7 +5,12 @@ import { useRouter } from "next/navigation";
 import { Button } from "./button";
 import { snapshotForm } from "./unsaved-form-state";
 
-type Entry = { label: string; isDirty: () => boolean; element: () => HTMLElement | null };
+type Entry = {
+  label: string;
+  isDirty: () => boolean;
+  element: () => HTMLElement | null;
+  save?: () => Promise<unknown> | unknown;
+};
 type Guard = {
   register: (id: string, entry: Entry) => () => void;
   confirmNavigation: (proceed: () => void, scope?: HTMLElement | null) => void;
@@ -18,6 +23,7 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
   const entries = useRef(new Map<string, Entry>());
   const dialog = useRef<HTMLDialogElement>(null);
   const nextAction = useRef<(() => void) | null>(null);
+  const activeScope = useRef<HTMLElement | null>(null);
   const allowUnload = useRef(false);
   const router = useRouter();
   const titleId = useId();
@@ -33,8 +39,38 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
   const confirmNavigation = useCallback((proceed: () => void, scope?: HTMLElement | null) => {
     if (!hasChanges(scope)) { proceed(); return; }
     nextAction.current = proceed;
+    activeScope.current = scope ?? null;
     dialog.current?.showModal();
   }, [hasChanges]);
+
+  const saveAllChanges = useCallback(async () => {
+    const scope = activeScope.current;
+    const dirtyEntries = [...entries.current.values()].filter((entry) => {
+      const element = entry.element();
+      const inScope = !scope || (element && (scope.contains(element) || element.contains(scope)));
+      return inScope && entry.isDirty();
+    });
+
+    for (const entry of dirtyEntries) {
+      if (entry.save) {
+        await entry.save();
+      } else {
+        const element = entry.element();
+        if (element instanceof HTMLFormElement) {
+          element.requestSubmit();
+        } else if (element) {
+          const form = element.closest("form");
+          if (form) {
+            form.requestSubmit();
+          } else {
+            const submitBtn = element.querySelector<HTMLButtonElement>("button[type='submit']")
+              ?? Array.from(element.querySelectorAll<HTMLButtonElement>("button")).find((b) => /salvar/i.test(b.textContent || ""));
+            submitBtn?.click();
+          }
+        }
+      }
+    }
+  }, []);
 
   useEffect(() => {
     function beforeUnload(event: BeforeUnloadEvent) {
@@ -116,17 +152,36 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
     {children}
     <dialog ref={dialog} aria-labelledby={titleId} data-surface="dark"
       className="m-auto w-[calc(100%-2rem)] max-w-md rounded-surface border border-white/15 bg-ink p-6 text-white backdrop:bg-ink/70"
-      onClose={() => { nextAction.current = null; }}>
+      onClose={() => { nextAction.current = null; activeScope.current = null; }}>
       <h2 id={titleId} className="font-display text-lg font-semibold">Alterações não salvas</h2>
       <p className="mt-2 text-sm leading-relaxed text-white/65">Você fez alterações que ainda não foram salvas. Deseja continuar mesmo assim?</p>
       <div className="mt-6 flex flex-wrap justify-end gap-2">
-        <Button type="button" variant="outline" autoFocus onClick={() => dialog.current?.close()}>Voltar e salvar</Button>
-        <Button type="button" onClick={() => {
-          const proceed = nextAction.current;
-          nextAction.current = null;
-          dialog.current?.close();
-          proceed?.();
-        }}>Continuar sem salvar</Button>
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={() => {
+            nextAction.current = null;
+            activeScope.current = null;
+            dialog.current?.close();
+          }}
+        >
+          Voltar
+        </Button>
+        <Button
+          type="button"
+          variant="default"
+          autoFocus
+          onClick={async () => {
+            const proceed = nextAction.current;
+            nextAction.current = null;
+            activeScope.current = null;
+            await saveAllChanges();
+            dialog.current?.close();
+            proceed?.();
+          }}
+        >
+          Continuar e salvar
+        </Button>
       </div>
     </dialog>
   </Context.Provider>;
@@ -138,10 +193,22 @@ export function useUnsavedNavigation() {
 }
 
 /** Para editores controlados que não são formulários nativos (regras, voz). */
-export function useUnsavedChanges(dirty: boolean, label: string, element?: RefObject<HTMLElement | null>) {
+export function useUnsavedChanges(
+  dirty: boolean,
+  label: string,
+  element?: RefObject<HTMLElement | null>,
+  save?: () => Promise<unknown> | unknown
+) {
   const context = useContext(Context);
   const id = useId();
-  useEffect(() => context?.register(id, { label, isDirty: () => dirty, element: () => element?.current ?? null }), [context, dirty, element, id, label]);
+  useEffect(() => {
+    return context?.register(id, {
+      label,
+      isDirty: () => dirty,
+      element: () => element?.current ?? null,
+      save,
+    });
+  }, [context, dirty, element, id, label, save]);
 }
 
 /** Registra também envios automáticos que não passam pelo submit nativo. */

@@ -141,7 +141,7 @@ export default async function ConversasPage({
     // página passa a ocupá-la para que cada painel role sozinho, como em qualquer
     // caixa de entrada. Antes a página inteira rolava e o cabeçalho da conversa
     // saía de vista.
-    <div className="mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 flex-col gap-4">
+    <div className="flex min-h-0 w-full flex-1 flex-col gap-4">
       <PageHeader
         eyebrow="conversas"
         title="Conversas"

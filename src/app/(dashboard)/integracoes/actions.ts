@@ -5,7 +5,14 @@ import { z } from "zod";
 import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { payloadTooLarge } from "@/lib/rate-limit";
-import { getWhatsAppProvider } from "@/modules/whatsapp";
+import { randomBytes } from "node:crypto";
+import { getWhatsAppProvider, type WhatsAppProviderName } from "@/modules/whatsapp";
+import { MetaCloudProvider } from "@/modules/whatsapp/meta";
+import {
+  getWhatsAppProviderForInstance,
+  metaWebhookUrl,
+  WHATSAPP_PROVIDER_SELECT,
+} from "@/modules/whatsapp/meta-config";
 import {
   MAX_BLOCKED_NUMBERS,
   canonicalPhone,
@@ -24,7 +31,7 @@ import {
   verifyClinicorpCredentials,
   testClinicorpConnection,
 } from "@/modules/scheduling/clinicorp";
-import { isEncryptionConfigured } from "@/lib/crypto";
+import { encryptSecret, isEncryptionConfigured } from "@/lib/crypto";
 import { recordAudit, recordChange } from "@/modules/audit/log";
 
 type ConnectResult = {
@@ -34,9 +41,205 @@ type ConnectResult = {
   error?: string;
 };
 
+export type MetaConnectResult = ConnectResult & {
+  webhookUrl?: string;
+  verifyToken?: string;
+  displayPhone?: string | null;
+  warning?: string;
+};
+
+const metaWhatsappSchema = z.object({
+  phoneNumberId: z.string().trim().regex(/^\d{5,30}$/, "Informe o Phone Number ID numérico."),
+  businessAccountId: z.string().trim().regex(/^\d{5,30}$/, "Informe o WABA ID numérico."),
+  accessToken: z.string().trim().min(20, "Informe o token de acesso permanente."),
+  appSecret: z.string().trim().min(16, "Informe o App Secret da aplicação Meta."),
+});
+
+async function tenantCanUseMetaWhatsapp(tenantId: string): Promise<boolean> {
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { metaWhatsappEnabled: true },
+  });
+  return tenant?.metaWhatsappEnabled === true;
+}
+
+const META_WHATSAPP_NOT_ENABLED =
+  "A API oficial da Meta ainda não foi habilitada pelo administrador para esta conta.";
+
+/** Troca o adapter ativo sem tocar na integração que está conectada. */
+export async function setWhatsappProvider(
+  requested: string,
+): Promise<WhatsappControlResult> {
+  const { tenantId } = await requireTenant();
+  if (requested !== "evolution" && requested !== "meta") {
+    return { ok: false, error: "Provedor de WhatsApp inválido." };
+  }
+  const provider = requested as WhatsAppProviderName;
+  if (provider === "meta" && !(await tenantCanUseMetaWhatsapp(tenantId))) {
+    return { ok: false, error: META_WHATSAPP_NOT_ENABLED };
+  }
+  const instance = await prisma.whatsappInstance.findUnique({ where: { tenantId } });
+  if (instance?.status === "connected" && instance.provider !== provider) {
+    return { ok: false, error: "Desconecte o número atual antes de trocar de provedor." };
+  }
+
+  await prisma.whatsappInstance.upsert({
+    where: { tenantId },
+    create: { tenantId, provider, status: "disconnected" },
+    update: {
+      provider,
+      status: "disconnected",
+      externalId: provider === "meta" ? instance?.metaPhoneNumberId : null,
+    },
+  });
+  revalidatePath("/integracoes");
+  revalidatePath("/inicio");
+  return { ok: true };
+}
+
+/** Salva, valida e ativa a WhatsApp Cloud API oficial para a conta. */
+export async function saveMetaWhatsapp(formData: FormData): Promise<MetaConnectResult> {
+  const { tenantId } = await requireTenant();
+  if (!(await tenantCanUseMetaWhatsapp(tenantId))) {
+    return { ok: false, error: META_WHATSAPP_NOT_ENABLED };
+  }
+  if (!isEncryptionConfigured()) {
+    return {
+      ok: false,
+      error: "Falta a chave de criptografia no servidor. Configure ENCRYPTION_KEY antes de salvar credenciais.",
+    };
+  }
+
+  const parsed = metaWhatsappSchema.safeParse({
+    phoneNumberId: formData.get("phoneNumberId"),
+    businessAccountId: formData.get("businessAccountId"),
+    accessToken: formData.get("accessToken"),
+    appSecret: formData.get("appSecret"),
+  });
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Credenciais inválidas." };
+  }
+
+  const { phoneNumberId, businessAccountId, accessToken, appSecret } = parsed.data;
+  const current = await prisma.whatsappInstance.findUnique({ where: { tenantId } });
+  if (current?.status === "connected" && current.provider !== "meta") {
+    return { ok: false, error: "Desconecte o número da Evolution antes de ativar a Meta." };
+  }
+  const provider = new MetaCloudProvider({ phoneNumberId, businessAccountId, accessToken });
+  try {
+    const profile = await provider.getPhoneProfile(phoneNumberId);
+    const verifyToken = randomBytes(32).toString("base64url");
+    let warning: string | undefined;
+    try {
+      await provider.ensureWebhook(phoneNumberId);
+    } catch (err) {
+      console.error("[whatsapp meta] não foi possível inscrever o app no WABA", err);
+      warning =
+        "As credenciais foram validadas, mas a inscrição automática no WABA falhou. " +
+        "Confira se o token tem whatsapp_business_management e assine o campo messages no painel da Meta.";
+    }
+
+    const previous = current;
+    const row = await prisma.whatsappInstance.upsert({
+      where: { tenantId },
+      create: {
+        tenantId,
+        provider: "meta",
+        status: "connected",
+        externalId: phoneNumberId,
+        metaPhoneNumberId: phoneNumberId,
+        metaBusinessAccountId: businessAccountId,
+        metaDisplayPhone: profile.displayPhone,
+        metaAccessTokenEncrypted: encryptSecret(accessToken),
+        metaAppSecretEncrypted: encryptSecret(appSecret),
+        metaVerifyTokenEncrypted: encryptSecret(verifyToken),
+      },
+      update: {
+        provider: "meta",
+        status: "connected",
+        externalId: phoneNumberId,
+        metaPhoneNumberId: phoneNumberId,
+        metaBusinessAccountId: businessAccountId,
+        metaDisplayPhone: profile.displayPhone,
+        metaAccessTokenEncrypted: encryptSecret(accessToken),
+        metaAppSecretEncrypted: encryptSecret(appSecret),
+        metaVerifyTokenEncrypted: encryptSecret(verifyToken),
+      },
+    });
+
+    if (previous?.status !== "connected" || previous.provider !== "meta") {
+      await recordAudit({
+        event: "whatsapp.connected",
+        target: { type: "WhatsappInstance", id: row.id, label: "WhatsApp oficial" },
+        before: { status: previous?.status ?? "disconnected", provider: previous?.provider },
+        after: { status: "connected", provider: "meta" },
+      });
+    }
+
+    revalidatePath("/integracoes");
+    revalidatePath("/inicio");
+    return {
+      ok: true,
+      status: "connected",
+      webhookUrl: metaWebhookUrl(tenantId),
+      verifyToken,
+      displayPhone: profile.displayPhone,
+      warning,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "Não foi possível validar a conta na Meta.",
+    };
+  }
+}
+
+/** Revalida credenciais Meta preservadas depois de um disconnect local. */
+export async function reconnectMetaWhatsapp(): Promise<MetaConnectResult> {
+  const { tenantId } = await requireTenant();
+  if (!(await tenantCanUseMetaWhatsapp(tenantId))) {
+    return { ok: false, error: META_WHATSAPP_NOT_ENABLED };
+  }
+  const instance = await prisma.whatsappInstance.findUnique({
+    where: { tenantId },
+    select: { id: true, status: true, metaDisplayPhone: true, ...WHATSAPP_PROVIDER_SELECT },
+  });
+  if (!instance || instance.provider !== "meta") {
+    return { ok: false, error: "Configure primeiro a API oficial da Meta." };
+  }
+  const provider = getWhatsAppProviderForInstance(instance);
+  if (!provider.isConfigured() || !(provider instanceof MetaCloudProvider)) {
+    return { ok: false, error: "As credenciais salvas não puderam ser lidas. Configure novamente." };
+  }
+
+  try {
+    const profile = await provider.getPhoneProfile(instance.metaPhoneNumberId ?? undefined);
+    await provider.ensureWebhook(instance.externalId ?? "").catch((err) => {
+      console.error("[whatsapp meta] falha ao reinscrever WABA", err);
+    });
+    await prisma.whatsappInstance.update({
+      where: { tenantId },
+      data: { status: "connected", externalId: instance.metaPhoneNumberId },
+    });
+    revalidatePath("/integracoes");
+    revalidatePath("/inicio");
+    return {
+      ok: true,
+      status: "connected",
+      webhookUrl: metaWebhookUrl(tenantId),
+      displayPhone: profile.displayPhone ?? instance.metaDisplayPhone,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "Não foi possível reconectar com a Meta.",
+    };
+  }
+}
+
 export async function connectWhatsapp(): Promise<ConnectResult> {
   const { tenantId } = await requireTenant();
-  const provider = getWhatsAppProvider();
+  const provider = getWhatsAppProvider("evolution");
 
   if (!provider.isConfigured()) {
     return { ok: false, error: "Evolution API não configurada (EVOLUTION_API_URL / EVOLUTION_API_KEY)." };
@@ -44,6 +247,9 @@ export async function connectWhatsapp(): Promise<ConnectResult> {
 
   try {
     const existing = await prisma.whatsappInstance.findUnique({ where: { tenantId } });
+    if (existing?.provider === "meta") {
+      return { ok: false, error: "Selecione Evolution antes de gerar o código QR." };
+    }
 
     // Instância que existe mas NÃO está conectada: desloga antes de pedir o QR.
     //
@@ -123,8 +329,8 @@ export async function connectWhatsapp(): Promise<ConnectResult> {
 
     await prisma.whatsappInstance.upsert({
       where: { tenantId },
-      create: { tenantId, externalId: res.externalId, status: res.status },
-      update: { externalId: res.externalId, status: res.status },
+      create: { tenantId, provider: "evolution", externalId: res.externalId, status: res.status },
+      update: { provider: "evolution", externalId: res.externalId, status: res.status },
     });
     revalidatePath("/integracoes");
     revalidatePath("/inicio");
@@ -136,9 +342,12 @@ export async function connectWhatsapp(): Promise<ConnectResult> {
 
 export async function refreshWhatsappStatus(): Promise<ConnectResult> {
   const { tenantId } = await requireTenant();
-  const provider = getWhatsAppProvider();
   const instance = await prisma.whatsappInstance.findUnique({ where: { tenantId } });
   if (!instance?.externalId) return { ok: false, error: "Nenhuma instância criada ainda." };
+  if (instance.provider === "meta") {
+    return { ok: false, error: "A conexão oficial da Meta não usa código QR." };
+  }
+  const provider = getWhatsAppProvider("evolution");
   if (!provider.isConfigured()) return { ok: false, error: "Evolution API não configurada." };
 
   try {
@@ -175,16 +384,16 @@ type WhatsappControlResult = { ok: boolean; error?: string; info?: string };
  */
 export async function disconnectWhatsapp(): Promise<WhatsappControlResult> {
   const { tenantId } = await requireTenant();
-  const provider = getWhatsAppProvider();
   const instance = await prisma.whatsappInstance.findUnique({ where: { tenantId } });
   if (!instance?.externalId) return { ok: false, error: "Nenhum número conectado." };
-  if (!provider.isConfigured()) return { ok: false, error: "Evolution API não configurada." };
+  const provider = getWhatsAppProviderForInstance(instance);
+  if (!provider.isConfigured()) return { ok: false, error: "O provedor do WhatsApp não está configurado." };
 
   try {
     await provider.disconnect(instance.externalId);
   } catch (err) {
     const message = err instanceof Error ? err.message : "";
-    console.error("[whatsapp] falha ao desconectar na Evolution", err);
+    console.error(`[whatsapp] falha ao desconectar no provedor ${provider.name}`, err);
 
     // A sessão já ter caído NÃO é erro para quem clicou: a pessoa queria o
     // número fora do ar, e ele está. Antes a tela devolvia o erro cru do
@@ -193,7 +402,7 @@ export async function disconnectWhatsapp(): Promise<WhatsappControlResult> {
     // verdade não havia nada para desligar. 404 = instância não existe mais,
     // 400/500 = o provedor acha que já está fechada. Nos três, o resultado
     // que o usuário pediu já é verdade: seguimos e marcamos desconectado.
-    const jaEstavaFora = /\((400|404|500)\)/.test(message);
+    const jaEstavaFora = provider.name === "evolution" && /\((400|404|500)\)/.test(message);
     if (!jaEstavaFora) {
       return {
         ok: false,
@@ -221,7 +430,13 @@ export async function disconnectWhatsapp(): Promise<WhatsappControlResult> {
 
   revalidatePath("/integracoes");
   revalidatePath("/inicio");
-  return { ok: true, info: "WhatsApp desconectado. Para voltar, gere um novo código." };
+  return {
+    ok: true,
+    info:
+      provider.name === "meta"
+        ? "WhatsApp oficial desconectado do fechai. As credenciais foram preservadas para reconectar."
+        : "WhatsApp desconectado. Para voltar, gere um novo código.",
+  };
 }
 
 /**

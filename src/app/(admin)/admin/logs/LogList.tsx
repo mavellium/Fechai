@@ -2,12 +2,13 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Undo2, ShieldAlert, ShieldBan, UserCog, ChevronRight } from "lucide-react";
+import { Undo2, ShieldAlert, ShieldBan, UserCog, ChevronRight, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { SidePanel } from "@/components/ui/side-panel";
-import { revertAuditEvent } from "../../actions";
+import { deleteAuditEvent, revertAuditEvent } from "../../actions";
+import { ConfirmButton } from "@/components/ui/confirm-dialog";
 import { LogDetail } from "./LogDetail";
 import { BlockIpDialog, type IpSummary } from "./BlockIpDialog";
 import { ipSummaryFor } from "./actions";
@@ -101,6 +102,21 @@ export function LogList({
       });
       // Deu certo: a linha vira "desfeito" e o alvo mudou de estado. Sem
       // recarregar, a tela seguiria oferecendo desfazer o que já foi desfeito.
+      if (result.ok) router.refresh();
+    });
+  }
+
+  function remove(row: LogRow) {
+    setFeedback(null);
+    start(async () => {
+      const result = await deleteAuditEvent(row.id);
+      setFeedback({
+        id: row.id,
+        ok: Boolean(result.ok),
+        text: result.ok
+          ? (result.info ?? "Entrada excluída.")
+          : (result.error ?? "Não foi possível excluir a entrada."),
+      });
       if (result.ok) router.refresh();
     });
   }
@@ -208,6 +224,23 @@ export function LogList({
                           Desfazer
                         </Button>
                       )}
+                      <ConfirmButton
+                        size="sm"
+                        variant="ghost"
+                        disabled={pending}
+                        confirm={{
+                          title: "Excluir este log?",
+                          description:
+                            "Esta entrada será removida definitivamente da trilha de auditoria e não poderá ser restaurada.",
+                          confirmLabel: "Excluir log",
+                          tone: "danger",
+                        }}
+                        onConfirm={() => remove(row)}
+                        title="Excluir esta entrada do log"
+                      >
+                        <Trash2 size={14} aria-hidden />
+                        Excluir
+                      </ConfirmButton>
                       <Button
                         size="sm"
                         variant="ghost"

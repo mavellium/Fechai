@@ -17,12 +17,14 @@ import { disconnectWhatsapp, setWhatsappAgentEnabled, setWhatsappIgnoreGroups } 
  */
 export function WhatsappControls({
   connected,
+  provider = "evolution",
   agentName,
   agentEnabled,
   ignoreGroups,
 }: {
   /** true quando o número está conectado (desconectar só faz sentido aí). */
   connected: boolean;
+  provider?: "evolution" | "meta";
   agentName: string;
   agentEnabled: boolean;
   ignoreGroups: boolean;
@@ -89,7 +91,7 @@ export function WhatsappControls({
         />
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-4">
+      {provider === "evolution" && <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex min-w-0 items-start gap-3">
           <span
             aria-hidden
@@ -118,7 +120,7 @@ export function WhatsappControls({
           label={`Ignorar grupos ${ignore ? "ligado" : "desligado"}`}
           describedBy="whatsapp-groups-desc"
         />
-      </div>
+      </div>}
 
       {connected && (
         <div className="flex flex-wrap items-center justify-between gap-4 border-t border-white/10 pt-4">
@@ -132,8 +134,9 @@ export function WhatsappControls({
             <div className="min-w-0">
               <p className="font-medium text-white">Desconectar número</p>
               <p id="whatsapp-disconnect-desc" className="mt-0.5 max-w-prose text-sm text-white/65">
-                O WhatsApp sai do ar e para de receber mensagens. Para voltar, conecte o número de
-                novo com um novo código.
+                {provider === "meta"
+                  ? "O fechai para de enviar e processar mensagens deste número. As credenciais ficam salvas para uma reconexão rápida."
+                  : "O WhatsApp sai do ar e para de receber mensagens. Para voltar, conecte o número de novo com um novo código."}
               </p>
             </div>
           </div>
@@ -142,7 +145,9 @@ export function WhatsappControls({
             confirm={{
               title: "Desconectar o número?",
               description:
-                "O WhatsApp sai do ar e para de receber mensagens. O agente volta a atender quando você conectar o número de novo.",
+                provider === "meta"
+                  ? "O fechai deixa de processar este número. O cadastro do telefone na Meta não será removido."
+                  : "O WhatsApp sai do ar e para de receber mensagens. O agente volta a atender quando você conectar o número de novo.",
               confirmLabel: "Desconectar",
               tone: "danger",
             }}

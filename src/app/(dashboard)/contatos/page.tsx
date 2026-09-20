@@ -1,8 +1,8 @@
-import type { Prisma } from "@prisma/client";
+﻿import type { Prisma } from "@prisma/client";
 import { UsersRound, UserPlus, MessageSquare } from "lucide-react";
 import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
-import { getWhatsAppProvider } from "@/modules/whatsapp";
+import { getWhatsAppProviderForInstance } from "@/modules/whatsapp/meta-config";
 import { Card } from "@/components/ui/card";
 import { ButtonLink } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -78,11 +78,14 @@ export default async function ContatosPage({
     }),
   ]);
 
-  const provider = getWhatsAppProvider();
-  const connected = provider.isConfigured() && whatsapp?.status === "connected";
+  const connected = Boolean(
+    whatsapp &&
+      getWhatsAppProviderForInstance(whatsapp).isConfigured() &&
+      whatsapp.status === "connected",
+  );
 
   return (
-    <div className="mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 flex-col gap-4">
+    <div className="flex min-h-0 w-full flex-1 flex-col gap-4">
       <PageHeader
         eyebrow="contatos"
         title="Contatos"

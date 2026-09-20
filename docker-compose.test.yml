@@ -1,0 +1,123 @@
+# Laboratório online do administrador. Esta stack é deliberadamente separada
+# do docker-compose.yml de produção: projeto, rede, volumes, banco e imagem
+# próprios. Suba somente por deploy-test.sh.
+name: fechai-test
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: fechai_test
+      POSTGRES_PASSWORD: ${TEST_POSTGRES_PASSWORD:?defina TEST_POSTGRES_PASSWORD em .env.test-vps}
+      POSTGRES_DB: saas_test
+    ports:
+      - "127.0.0.1:${TEST_POSTGRES_HOST_PORT:-5434}:5432"
+    volumes:
+      - test_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fechai_test -d saas_test"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${TEST_REDIS_HOST_PORT:-6380}:6379"
+    volumes:
+      - test_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  web:
+    image: fechai-app:test
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ${TEST_NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY:-}
+        NEXT_PUBLIC_BUNNY_PULL_ZONE: ${TEST_NEXT_PUBLIC_BUNNY_PULL_ZONE:-}
+        NEXT_PUBLIC_SITE_URL: https://${TEST_APP_DOMAIN:?defina TEST_APP_DOMAIN em .env.test-vps}
+    command: ["npm", "run", "start"]
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      DATABASE_ENVIRONMENT: test
+      DATABASE_URL: postgresql://fechai_test:${TEST_POSTGRES_PASSWORD}@postgres:5432/saas_test?schema=public
+      REDIS_URL: redis://redis:6379
+      NEXTAUTH_URL: https://${TEST_APP_DOMAIN}
+      AUTH_URL: https://${TEST_APP_DOMAIN}
+      NEXT_PUBLIC_SITE_URL: https://${TEST_APP_DOMAIN}
+      NEXTAUTH_SECRET: ${TEST_AUTH_SECRET:?defina TEST_AUTH_SECRET em .env.test-vps}
+      AUTH_SECRET: ${TEST_AUTH_SECRET}
+      AUTH_TRUST_HOST: "true"
+
+      # Integrações do laboratório nunca herdam os segredos de produção.
+      # Só funcionam quando uma variável TEST_* específica é preenchida.
+      GEMINI_API_KEY: ${TEST_GEMINI_API_KEY:-}
+      OPENAI_API_KEY: ${TEST_OPENAI_API_KEY:-}
+      XAI_API_KEY: ${TEST_XAI_API_KEY:-}
+      GROQ_API_KEY: ${TEST_GROQ_API_KEY:-}
+      STRIPE_SECRET_KEY: ${TEST_STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${TEST_STRIPE_WEBHOOK_SECRET:-}
+      NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ${TEST_NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY:-}
+      EVOLUTION_API_URL: ${TEST_EVOLUTION_API_URL:-}
+      EVOLUTION_API_KEY: ${TEST_EVOLUTION_API_KEY:-}
+      EVOLUTION_WEBHOOK_ENABLED: "false"
+      EVOLUTION_WEBHOOK_URL: ""
+      WHATSAPP_WEBHOOK_SECRET: ${TEST_WHATSAPP_WEBHOOK_SECRET:-}
+      FISH_AUDIO_API_KEY: ${TEST_FISH_AUDIO_API_KEY:-}
+      ENCRYPTION_KEY: ${TEST_ENCRYPTION_KEY:-}
+      RESEND_API_KEY: ${TEST_RESEND_API_KEY:-}
+      MAIL_FROM: ${TEST_MAIL_FROM:-}
+      BUNNY_HOST: ${TEST_BUNNY_HOST:-}
+      BUNNY_STORAGE_ZONE: ${TEST_BUNNY_STORAGE_ZONE:-}
+      BUNNY_ACCESS_KEY: ${TEST_BUNNY_ACCESS_KEY:-}
+      BUNNY_PULL_ZONE: ${TEST_BUNNY_PULL_ZONE:-}
+      NEXT_PUBLIC_BUNNY_PULL_ZONE: ${TEST_NEXT_PUBLIC_BUNNY_PULL_ZONE:-}
+      BUNNY_API_KEY: ${TEST_BUNNY_API_KEY:-}
+      GOOGLE_CLIENT_ID: ${TEST_GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${TEST_GOOGLE_CLIENT_SECRET:-}
+      AUTH_GOOGLE_ID: ${TEST_AUTH_GOOGLE_ID:-}
+      AUTH_GOOGLE_SECRET: ${TEST_AUTH_GOOGLE_SECRET:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - default
+      - traefik-public
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-public"
+      - "traefik.http.routers.fechai-test.rule=Host(`${TEST_APP_DOMAIN}`)"
+      - "traefik.http.routers.fechai-test.entrypoints=websecure"
+      - "traefik.http.routers.fechai-test.tls.certresolver=myresolver"
+      - "traefik.http.routers.fechai-test.service=fechai-test"
+      - "traefik.http.routers.fechai-test.middlewares=fechai-test-auth"
+      - "traefik.http.middlewares.fechai-test-auth.basicauth.users=${TEST_BASIC_AUTH:?defina TEST_BASIC_AUTH em .env.test-vps}"
+      - "traefik.http.services.fechai-test.loadbalancer.server.port=3000"
+      - "traefik.http.services.fechai-test.loadbalancer.healthcheck.path=/api/health"
+      - "traefik.http.services.fechai-test.loadbalancer.healthcheck.interval=5s"
+    healthcheck:
+      test: ["CMD", "node", "docker/healthcheck-web.js"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 25s
+
+networks:
+  traefik-public:
+    external: true
+
+volumes:
+  test_pgdata:
+  test_redisdata:

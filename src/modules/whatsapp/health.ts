@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { sendMail } from "@/lib/mail";
-import { getWhatsAppProvider } from "./index";
+import { getWhatsAppProviderForInstance } from "./meta-config";
 
 /**
  * Saúde da conexão de WhatsApp de cada conta.
@@ -128,7 +128,6 @@ export function diagnose(input: {
  * sabia, não chutar "desconectado" e assustar o cliente à toa.
  */
 export async function checkTenantWhatsapp(tenantId: string, now = new Date()): Promise<WhatsappHealth> {
-  const provider = getWhatsAppProvider();
   const instance = await prisma.whatsappInstance.findUnique({ where: { tenantId } });
 
   const base: WhatsappHealth = {
@@ -146,9 +145,11 @@ export async function checkTenantWhatsapp(tenantId: string, now = new Date()): P
   // conectou o WhatsApp não está "quebrada"). Provedor sem a checagem de
   // estado também sai daqui: sem ela não há o que diagnosticar, e inventar um
   // veredito seria pior que não ter nenhum.
-  if (!instance?.externalId || !provider.isConfigured() || !provider.getConnectionState) {
+  if (!instance?.externalId) {
     return { ...base, verdict: "ok" };
   }
+  const provider = getWhatsAppProviderForInstance(instance);
+  if (!provider.isConfigured() || !provider.getConnectionState) return { ...base, verdict: "ok" };
 
   const live = await provider.getConnectionState(instance.externalId);
 
@@ -206,8 +207,7 @@ function alertText(tenantName: string, health: WhatsappHealth): { subject: strin
       subject: `${tenantName}: o WhatsApp precisa ser conectado de novo`,
       text:
         `O número de WhatsApp da conta ${tenantName} saiu do ar e precisa ser conectado de novo.\n\n` +
-        `Para voltar a atender: acesse Integrações e clique em "Conectar outro número", ` +
-        `depois leia o código com o celular do número.\n\n` +
+        `Para voltar a atender: acesse Integrações e reconecte o provedor configurado.\n\n` +
         `Enquanto isso, as mensagens que os clientes enviarem NÃO chegam no painel.`,
     };
   }

@@ -34,6 +34,7 @@ import { saveChain } from "@/modules/ai/chain";
 import { isEncryptionConfigured } from "@/lib/crypto";
 import { recordAudit, recordChange } from "@/modules/audit/log";
 import { revertAuditLog } from "@/modules/audit/revert";
+import { deleteAuditLog } from "@/modules/audit/delete";
 import { requestContext } from "@/modules/auth/attempts";
 import { blockIp, unblockIp, ipActivity } from "@/modules/auth/ip-block";
 
@@ -328,6 +329,78 @@ export async function setTenantTrial(tenantId: string, days: number | null) {
 
   revalidatePath("/admin/contas");
   revalidatePath("/admin/logs");
+}
+
+export type TenantMetaWhatsappAccessResult = {
+  ok: boolean;
+  error?: string;
+  info?: string;
+};
+
+/**
+ * Libera ou recolhe a alternativa oficial da Meta para uma conta.
+ *
+ * Ao recolher, uma integração Meta ativa é desligada localmente e a seleção
+ * volta para Evolution. Os segredos ficam preservados para uma reativação
+ * futura; apagar credenciais aqui tornaria um toggle administrativo
+ * desnecessariamente destrutivo.
+ */
+export async function setTenantMetaWhatsappEnabled(
+  tenantId: string,
+  enabled: boolean,
+): Promise<TenantMetaWhatsappAccessResult> {
+  await requireSuperadmin();
+  if (typeof enabled !== "boolean") {
+    return { ok: false, error: "Estado inválido para a API oficial da Meta." };
+  }
+
+  const before = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: {
+      name: true,
+      metaWhatsappEnabled: true,
+      whatsappInstance: { select: { provider: true, status: true } },
+    },
+  });
+  if (!before) return { ok: false, error: "Conta não encontrada." };
+
+  const disconnectingMeta = !enabled && before.whatsappInstance?.provider === "meta";
+  await prisma.$transaction([
+    prisma.tenant.update({
+      where: { id: tenantId },
+      data: { metaWhatsappEnabled: enabled },
+    }),
+    ...(disconnectingMeta
+      ? [
+          prisma.whatsappInstance.updateMany({
+            where: { tenantId, provider: "meta" },
+            data: { provider: "evolution", status: "disconnected", externalId: null },
+          }),
+        ]
+      : []),
+  ]);
+
+  await recordChange({
+    event: "admin.meta_whatsapp_access_changed",
+    target: { type: "Tenant", id: tenantId, label: before.name },
+    before: { metaWhatsappEnabled: before.metaWhatsappEnabled },
+    after: { metaWhatsappEnabled: enabled },
+    meta: { disconnectedMeta: disconnectingMeta },
+    tenantId,
+  });
+
+  revalidatePath("/admin/contas");
+  revalidatePath("/admin/logs");
+  revalidatePath("/integracoes");
+  revalidatePath("/inicio");
+  return {
+    ok: true,
+    info: enabled
+      ? "API oficial da Meta liberada para esta conta."
+      : disconnectingMeta
+        ? "API oficial ocultada e conexão Meta interrompida. As credenciais foram preservadas."
+        : "API oficial da Meta ocultada para esta conta.",
+  };
 }
 
 export async function markFeedback(feedbackId: string, status: FeedbackStatus) {
@@ -793,6 +866,23 @@ export async function revertAuditEvent(logId: string): Promise<RevertResultActio
   revalidatePath("/inicio");
   revalidatePath("/agentes");
   return { ok: true, info: result.info };
+}
+
+export type DeleteAuditResult = { ok: boolean; error?: string; info?: string };
+
+/** Exclui uma entrada específica da trilha, apenas para superadmin. */
+export async function deleteAuditEvent(logId: string): Promise<DeleteAuditResult> {
+  await requireSuperadmin();
+
+  if (typeof logId !== "string" || !logId.trim()) {
+    return { ok: false, error: "Entrada de log inválida." };
+  }
+
+  const deleted = await deleteAuditLog(logId);
+  if (!deleted) return { ok: false, error: "Esta entrada já não existe." };
+
+  revalidatePath("/admin/logs");
+  return { ok: true, info: "Entrada excluída." };
 }
 
 /* ------------------------------------------------------------------ *

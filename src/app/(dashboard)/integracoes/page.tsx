@@ -4,7 +4,8 @@ import Link from "next/link";
 import { AtSign, Globe, MessageCircle } from "lucide-react";
 import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
-import { getWhatsAppProvider } from "@/modules/whatsapp";
+import { getWhatsAppProvider, parseWhatsAppProviderName } from "@/modules/whatsapp";
+import { metaWebhookUrl, readMetaWebhookSecrets } from "@/modules/whatsapp/meta-config";
 import { Alert } from "@/components/ui/alert";
 import { Badge, StatusDot } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button";
@@ -23,6 +24,8 @@ import { GoogleCalendarCard, type GoogleState } from "./GoogleCalendarCard";
 import { ClinicorpCard, type ClinicorpState } from "./ClinicorpCard";
 import { listBlockedNumbers } from "@/modules/whatsapp/blocklist";
 import { WhatsappConnect } from "./WhatsappConnect";
+import { MetaWhatsappConnect } from "./MetaWhatsappConnect";
+import { WhatsappProviderSelector } from "./WhatsappProviderSelector";
 import { SnippetBox } from "./SnippetBox";
 
 const STATUS_LABEL: Record<string, { label: string; tone: "success" | "warn" | "neutral" }> = {
@@ -65,6 +68,7 @@ export default async function IntegracoesPage({
         widgetBorderColor: true,
         widgetEnabled: true,
         whatsappIgnoreGroups: true,
+        metaWhatsappEnabled: true,
       },
     }),
     prisma.agent.findFirst({
@@ -126,13 +130,24 @@ export default async function IntegracoesPage({
         }
       : { connected: false };
 
-  const configured = getWhatsAppProvider().isConfigured();
-  const status = instance?.status ?? "disconnected";
+  const metaEnabled = tenant?.metaWhatsappEnabled ?? false;
+  const savedProviderName = parseWhatsAppProviderName(instance?.provider);
+  // Falha fechada para linhas antigas ou alteradas à mão: sem liberação do
+  // admin, nem a tela Meta nem um status conectado residual ficam expostos.
+  const providerName = savedProviderName === "meta" && !metaEnabled ? "evolution" : savedProviderName;
+  const configured =
+    providerName === "meta"
+      ? isEncryptionConfigured()
+      : getWhatsAppProvider("evolution").isConfigured();
+  const status = savedProviderName === "meta" && !metaEnabled
+    ? "disconnected"
+    : instance?.status ?? "disconnected";
   const connected = status === "connected";
   const s = STATUS_LABEL[status] ?? { label: status, tone: "neutral" as const };
+  const metaSecrets = instance && providerName === "meta" ? readMetaWebhookSecrets(instance) : null;
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-8">
+    <div className="w-full space-y-8">
       <PageHeader
         eyebrow="integracoes"
         title="Integrações"
@@ -209,8 +224,9 @@ export default async function IntegracoesPage({
         <>
       {!configured && (
         <Alert tone="warn" title="Conexão indisponível neste ambiente">
-          Não dá para conectar o WhatsApp agora. Enquanto isso, você pode conversar com seu agente
-          na página de Conversas.{" "}
+          {providerName === "meta"
+            ? "Falta a chave de criptografia necessária para guardar as credenciais da Meta."
+            : "A Evolution API não está configurada neste ambiente."}{" "}
           <ButtonLink href="/conversas" variant="ghost" size="sm" className="ml-1 underline">
             Ir para Conversas
           </ButtonLink>
@@ -228,7 +244,9 @@ export default async function IntegracoesPage({
           hint={
             connected
               ? "Este é o número que seus clientes usam para falar com o agente."
-              : "Leva menos de um minuto — o código é gerado assim que a página abre."
+              : providerName === "meta"
+                ? "Conecte com as credenciais da WhatsApp Business Platform."
+                : "Leva menos de um minuto — o código é gerado assim que a página abre."
           }
           action={<StatusDot tone={s.tone}>{s.label}</StatusDot>}
         >
@@ -238,21 +256,50 @@ export default async function IntegracoesPage({
           </span>
         </CardTitle>
 
+        <WhatsappProviderSelector
+          provider={providerName}
+          connected={connected}
+          metaEnabled={metaEnabled}
+        />
+
         {/* key={status}: quando desconecta, o WhatsappConnect remonta no estado
             novo (o status é estado local dele e não se atualizaria sozinho). */}
-        <WhatsappConnect
-          key={status}
-          initialStatus={status}
-          configured={configured}
-          connectedSince={
-            connected && instance?.updatedAt ? dateLabel(instance.updatedAt) : undefined
-          }
-          inboundLast7={connected ? inboundLast7 : undefined}
-          agentName={agent?.name ?? "Agente"}
-          agentEnabled={agent?.enabled ?? false}
-          ignoreGroups={tenant?.whatsappIgnoreGroups ?? true}
-          blocked={blocked}
-        />
+        {providerName === "meta" ? (
+          <MetaWhatsappConnect
+            key={status}
+            connected={connected}
+            encryptionConfigured={isEncryptionConfigured()}
+            hasCredentials={Boolean(
+              instance?.metaPhoneNumberId &&
+                instance.metaAccessTokenEncrypted &&
+                instance.metaAppSecretEncrypted &&
+                instance.metaVerifyTokenEncrypted,
+            )}
+            displayPhone={instance?.metaDisplayPhone ?? null}
+            phoneNumberId={instance?.metaPhoneNumberId ?? null}
+            businessAccountId={instance?.metaBusinessAccountId ?? null}
+            webhookUrl={metaWebhookUrl(tenantId)}
+            verifyToken={metaSecrets?.verifyToken ?? null}
+            agentName={agent?.name ?? "Agente"}
+            agentEnabled={agent?.enabled ?? false}
+            ignoreGroups={tenant?.whatsappIgnoreGroups ?? true}
+            blocked={blocked}
+          />
+        ) : (
+          <WhatsappConnect
+            key={status}
+            initialStatus={status}
+            configured={configured}
+            connectedSince={
+              connected && instance?.updatedAt ? dateLabel(instance.updatedAt) : undefined
+            }
+            inboundLast7={connected ? inboundLast7 : undefined}
+            agentName={agent?.name ?? "Agente"}
+            agentEnabled={agent?.enabled ?? false}
+            ignoreGroups={tenant?.whatsappIgnoreGroups ?? true}
+            blocked={blocked}
+          />
+        )}
       </Card>
 
       <section className="space-y-3">

@@ -134,7 +134,7 @@ export function Navbar() {
             <Button
               size="sm"
               variant="outline"
-              className="border-white/25 bg-transparent text-white hover:bg-white/10"
+              className="border-white/25 bg-transparent text-white enabled:hover:bg-white/10 enabled:hover:text-white"
             >
               <UserPlus size={14} aria-hidden />
               Criar conta
@@ -214,7 +214,7 @@ export function Navbar() {
             <Link href="/cadastro" onClick={() => menuRef.current?.close()}>
               <Button
                 variant="outline"
-                className="w-full border-white/25 bg-transparent text-white hover:bg-white/10"
+                className="w-full border-white/25 bg-transparent text-white enabled:hover:bg-white/10 enabled:hover:text-white"
               >
                 <UserPlus size={14} aria-hidden />
                 Criar conta

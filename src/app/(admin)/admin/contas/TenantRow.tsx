@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button";
 import { ConfirmButton } from "@/components/ui/confirm-dialog";
 import { Select } from "@/components/ui/select";
 import { SidePanel } from "@/components/ui/side-panel";
+import { Switch } from "@/components/ui/switch";
+import { FormFeedback } from "@/components/ui/alert";
 import {
   suspendTenant,
   changePlan,
@@ -17,6 +19,7 @@ import {
   setTenantTrial,
   impersonateUser,
   deleteTenantAccount,
+  setTenantMetaWhatsappEnabled,
 } from "../../actions";
 
 type Props = {
@@ -25,6 +28,8 @@ type Props = {
   planKey: PlanKey;
   status: string;
   whatsappStatus: string;
+  /** Se o superadmin liberou a alternativa oficial da Meta para esta conta. */
+  metaWhatsappEnabled: boolean;
   /** Cota de mensagens/mês fixada fora do padrão do plano (null = usa o plano). */
   messageLimitOverride: number | null;
   priceCentsOverride: number | null;
@@ -97,6 +102,8 @@ export function TenantRow(t: Props) {
     centsToInput(t.priceCentsOverride ?? planOf(t.planKey).priceCents),
   );
   const [impError, setImpError] = useState<string | null>(null);
+  const [metaAccessError, setMetaAccessError] = useState<string | null>(null);
+  const [metaAccessInfo, setMetaAccessInfo] = useState<string | null>(null);
 
   // Exclusão definitiva: diálogo próprio (em vez de ConfirmButton) porque aqui
   // não basta um "confirmar" — o admin digita o nome da conta. A lista tem
@@ -163,6 +170,16 @@ export function TenantRow(t: Props) {
     if (limitInvalid) return;
     // Valor igual ao padrão do plano não precisa virar override — volta a seguir o plano.
     start(() => setTenantUsageLimit(t.id, limitValue === planDefault ? null : limitValue));
+  }
+
+  function toggleMetaAccess(enabled: boolean) {
+    setMetaAccessError(null);
+    setMetaAccessInfo(null);
+    start(async () => {
+      const result = await setTenantMetaWhatsappEnabled(t.id, enabled);
+      if (!result.ok) setMetaAccessError(result.error ?? "Não foi possível alterar o acesso.");
+      else setMetaAccessInfo(result.info ?? null);
+    });
   }
 
   // Reabre sempre com o que está gravado: um valor digitado e não salvo numa
@@ -623,6 +640,23 @@ export function TenantRow(t: Props) {
                 />
                 {WHATSAPP_PT[t.whatsappStatus] ?? t.whatsappStatus}
               </p>
+              <div className="mt-4 flex items-start justify-between gap-4 rounded-control border border-white/10 bg-white/[0.03] p-3">
+                <div>
+                  <p className="text-sm font-medium text-white/85">API oficial da Meta</p>
+                  <p id={`${t.id}-meta-whatsapp-help`} className="mt-1 text-sm text-white/50">
+                    Quando ligada, a opção aparece em Integrações para esta conta. Ao desligar uma
+                    conexão Meta ativa, o canal é interrompido e volta para Evolution.
+                  </p>
+                </div>
+                <Switch
+                  checked={t.metaWhatsappEnabled}
+                  onCheckedChange={toggleMetaAccess}
+                  loading={pending}
+                  label={`${t.metaWhatsappEnabled ? "Desabilitar" : "Habilitar"} API oficial da Meta para ${t.name}`}
+                  describedBy={`${t.id}-meta-whatsapp-help`}
+                />
+              </div>
+              <FormFeedback error={metaAccessError} info={metaAccessInfo} />
             </section>
           </div>
         </SidePanel>

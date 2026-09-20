@@ -197,6 +197,14 @@ O laboratório `saas_test` é local por padrão. Git envia código e documentaç
 nunca o conteúdo de um banco. Para uma homologação online, use outra instância
 do app e uma conexão própria, conforme `docs/ambiente-de-testes-admin.md`.
 
+O laboratório online já tem stack própria em `docker-compose.test.yml`. Depois
+de criar `.env.test-vps` a partir de `deploy/test.env.example` e configurar o
+DNS, publique manualmente pelo workflow **Deploy Laboratório** ou execute
+`./deploy-test.sh` na VPS. Essa operação usa o projeto Compose `fechai-test` e
+não compartilha containers, rede interna ou volumes com produção. O Traefik
+exige `TEST_BASIC_AUTH` antes de mostrar o login do app, porque as contas do
+seed usam credenciais públicas de demonstração.
+
 O deploy usa dois slots. Ele compila a nova imagem enquanto o slot atual atende, sobe o slot
 inativo, espera seu `/api/health`, aguarda o Traefik descobri-lo e só então para o anterior. Se o
 build, o boot ou o health check falhar, a versão atual continua no ar. Os comandos disponíveis são:

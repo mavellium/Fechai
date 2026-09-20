@@ -26,7 +26,7 @@ export function RulesForm({ agentId, initial }: { agentId: string; initial: stri
   const editRef = useRef<HTMLInputElement>(null);
   const inputId = useId();
   const editingDirty = editing !== null && editing.text !== rules.find((r) => r.id === editing.id)?.text;
-  useUnsavedChanges(pending || serialize(rules) !== saved || Boolean(draft) || editingDirty, "Regras", rootRef);
+  useUnsavedChanges(pending || serialize(rules) !== saved || Boolean(draft) || editingDirty, "Regras", rootRef, save);
 
   function applyEdit(current = rules): Rule[] | null {
     if (!editing) return current;

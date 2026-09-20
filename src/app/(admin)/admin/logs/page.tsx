@@ -1,4 +1,4 @@
-import { ScrollText, ShieldBan } from "lucide-react";
+﻿import { ScrollText, ShieldBan } from "lucide-react";
 import { requireSuperadmin } from "@/lib/session";
 import { listAuditLogs, AUDIT_PAGE_SIZE } from "@/modules/audit/query";
 import { AUDIT_GROUPS, type AuditGroup } from "@/modules/audit/events";
@@ -62,7 +62,7 @@ export default async function LogsPage({
     const blocked = await listBlockedIps();
 
     return (
-      <div className="mx-auto w-full max-w-[1400px] space-y-6">
+      <div className="w-full space-y-6">
         <Header activeCount={blocked.length} tab={tab} />
         <FilterTabs
           label="Alternar entre eventos e IPs bloqueados"
@@ -141,7 +141,7 @@ export default async function LogsPage({
   const atLimit = rows.length === AUDIT_PAGE_SIZE;
 
   return (
-    <div className="mx-auto w-full max-w-[1400px] space-y-6">
+    <div className="w-full space-y-6">
       <PageHeader
         eyebrow="admin"
         title="Logs"
