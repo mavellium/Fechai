@@ -19,7 +19,7 @@ que isola o provedor. Cada conta escolhe entre **Evolution API self-hosted** e
 - `index.ts` — factory dos adapters e nomes aceitos (`evolution | meta`).
 - `blocklist.ts` — números que o agente ignora (`isPhoneBlocked`,
   `canonicalPhone`, `listBlockedNumbers`). Ver abaixo.
-- `health.ts` — detecta número fora do ar (`checkTenantWhatsapp`, `scanWhatsappHealth`, `diagnose`) e sincroniza `WhatsappInstance.status` com a realidade.
+- `health.ts` — detecta número fora do ar (`checkTenantWhatsapp`, `scanWhatsappHealth`, `diagnose`), sincroniza `WhatsappInstance.status` com a realidade e garante periodicamente o webhook da Evolution.
 
 ## Contratos expostos
 
@@ -111,6 +111,10 @@ configura o webhook é o app**:
   veio buscar).
 - `npm run whatsapp:webhooks` conserta em lote quem já está conectado e não tem
   motivo para clicar em "Conectar" de novo.
+- O worker faz a mesma garantia continuamente: a cada minuto lê
+  `/webhook/find/{instance}` e só reaplica com `/webhook/set/{instance}` quando
+  URL, eventos ou header secreto divergirem. Isso cobre inclusive restart do
+  container que preserve a sessão, mas perca a configuração de entrega.
 
 Precisa de `EVOLUTION_WEBHOOK_URL` (a URL pública do `/api/webhooks/whatsapp`) e
 `WHATSAPP_WEBHOOK_SECRET` no `.env` do **app**. Sem um dos dois,

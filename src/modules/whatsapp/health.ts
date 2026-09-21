@@ -153,6 +153,16 @@ export async function checkTenantWhatsapp(tenantId: string, now = new Date()): P
 
   const live = await provider.getConnectionState(instance.externalId);
 
+  // Um restart pode preservar a sessão do WhatsApp e ainda assim apagar URL,
+  // eventos ou o header secreto do webhook. Nesse estado a Evolution diz
+  // `open`, mas nenhuma mensagem chega no fechai. A checagem é idempotente:
+  // Evolution lê a configuração atual e só faz POST quando precisa reparar.
+  if (provider.name === "evolution" && live.reachable && live.exists) {
+    await provider.ensureWebhook(instance.externalId).catch((err) =>
+      console.error(`[whatsapp health] falha ao garantir webhook de ${tenantId}`, err),
+    );
+  }
+
   // Última mensagem recebida de um cliente real. `Conversation.lastInboundAt`
   // já é mantido pelo motor e espelha `isTest`, então não precisa de join nem
   // de varrer Message. Sandbox fora: conversa de teste não prova que o número

@@ -31,7 +31,7 @@ services:
       AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:?defina EVOLUTION_API_KEY no .env}
       DATABASE_ENABLED: "true"
       DATABASE_PROVIDER: "postgresql"
-      DATABASE_CONNECTION_URI: postgresql://evolution:evolution@evolution-postgres:5432/evolution
+      DATABASE_CONNECTION_URI: postgresql://evolution:evolution@evolution-postgres:5432/evolution?connection_limit=${EVOLUTION_DB_CONNECTION_LIMIT:-10}&pool_timeout=${EVOLUTION_DB_POOL_TIMEOUT:-30}
       DATABASE_SAVE_DATA_INSTANCE: "true"
       DATABASE_SAVE_DATA_NEW_MESSAGE: "true"
       DATABASE_SAVE_MESSAGE_UPDATE: "true"
@@ -51,6 +51,17 @@ services:
     depends_on:
       evolution-postgres:
         condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          const c=new AbortController();const t=setTimeout(()=>c.abort(),8000);fetch('http://127.0.0.1:8080/instance/fetchInstances',{headers:{apikey:process.env.AUTHENTICATION_API_KEY},signal:c.signal}).then(async r=>{if(!r.ok)throw new Error(String(r.status));await r.json();clearTimeout(t);process.exit(0)}).catch(e=>{clearTimeout(t);console.error(e.message);process.exit(1)})
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
 
 volumes:
   evolutionpgdata:

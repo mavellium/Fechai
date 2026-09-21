@@ -100,7 +100,7 @@ Confira que a rede `traefik-public` existe (senão `docker network create traefi
 Traefik já está rodando — os slots web só são alcançáveis através dele.
 
 ```bash
-docker compose up -d --wait postgres redis evolution-postgres evolution
+docker compose up -d --wait postgres redis evolution-postgres evolution autoheal
 ./deploy.sh all
 ```
 
@@ -229,8 +229,31 @@ Cada linha deve mostrar `healthy` na coluna de status. Health checks configurado
 | `postgres` | `pg_isready` |
 | `redis` | `redis-cli ping` |
 | `evolution-postgres` | `pg_isready` |
+| `evolution` | `GET /instance/fetchInstances` autenticado (testa API + Prisma + Postgres) |
 | `web-blue` / `web-green` | `GET /api/health` (também testa a conexão com o banco) |
 | `worker` | conexão de ping com o Redis via `ioredis` (script em `docker/healthcheck-worker.js`) |
+
+### Auto-recuperação da Evolution
+
+A Evolution usa um pool Prisma explícito (`EVOLUTION_DB_CONNECTION_LIMIT`, padrão
+10; `EVOLUTION_DB_POOL_TIMEOUT`, padrão 30s). Isso evita o limite implícito de 5
+conexões que já deixou o processo vivo, mas incapaz de consumir mensagens.
+
+O healthcheck faz uma consulta autenticada que atravessa a API e o banco. Três
+falhas consecutivas marcam o container como `unhealthy`; o serviço `autoheal`
+observa **somente** a Evolution e reinicia somente esse container. O Postgres,
+Redis, volumes e sessões não são removidos.
+
+Como algumas versões da Evolution podem perder o webhook após um restart, o
+worker verifica a configuração a cada
+`WHATSAPP_HEALTH_SCAN_EVERY_MINUTES` (padrão 1 minuto) e reaplica URL, eventos e
+header secreto apenas quando houver divergência.
+
+Para acompanhar uma recuperação:
+
+```bash
+docker compose logs -f --tail=100 evolution autoheal worker
+```
 
 Teste manual do app depois de subir:
 

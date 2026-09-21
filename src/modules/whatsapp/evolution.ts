@@ -20,6 +20,21 @@ export class EvolutionProvider implements WhatsAppProvider {
     return { "Content-Type": "application/json", apikey: this.apiKey };
   }
 
+  /** Monitoramento não pode ficar preso para sempre numa Evolution travada. */
+  private async fetchWithTimeout(
+    url: string,
+    init: RequestInit = {},
+    timeoutMs = 10_000,
+  ): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, { ...init, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   private instanceName(tenantId: string) {
     return `tenant_${tenantId}`;
   }
@@ -55,6 +70,35 @@ export class EvolutionProvider implements WhatsAppProvider {
       // contato vira uma request no nosso webhook.
       events: ["MESSAGES_UPSERT", "CONNECTION_UPDATE", "QRCODE_UPDATED"],
     };
+  }
+
+  /**
+   * A Evolution já perdeu URL/eventos/header do webhook depois de reiniciar,
+   * mesmo mantendo a instância conectada. Antes de escrever de novo, compara a
+   * configuração atual: o worker chama isto a cada minuto e uma escrita cega
+   * transformaria monitoramento em carga desnecessária no banco que queremos
+   * proteger.
+   */
+  private webhookMatches(
+    current: unknown,
+    expected: NonNullable<ReturnType<EvolutionProvider["webhookConfig"]>>,
+  ): boolean {
+    const envelope = current as { webhook?: unknown } | null;
+    const value = (envelope?.webhook ?? current) as {
+      enabled?: boolean;
+      url?: string;
+      headers?: Record<string, unknown> | null;
+      events?: unknown;
+    } | null;
+    if (!value || value.enabled === false || value.url !== expected.url) return false;
+
+    const secret = Object.entries(value.headers ?? {}).find(
+      ([key]) => key.toLowerCase() === "x-webhook-secret",
+    )?.[1];
+    if (secret !== expected.headers["x-webhook-secret"]) return false;
+
+    const events = Array.isArray(value.events) ? value.events : [];
+    return expected.events.every((event) => events.includes(event));
   }
 
   async createInstance(tenantId: string): Promise<CreateInstanceResult> {
@@ -104,7 +148,7 @@ export class EvolutionProvider implements WhatsAppProvider {
     // `getQrCode` geraria um QR a cada chamada (ver a doc de
     // `getConnectionState` na interface).
     try {
-      const res = await fetch(`${this.baseUrl}/instance/connectionState/${externalId}`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/instance/connectionState/${externalId}`, {
         headers: this.headers(),
       });
       // 404 = a instância não existe mais no provedor. Acontece quando ela é
@@ -198,7 +242,20 @@ export class EvolutionProvider implements WhatsAppProvider {
   async ensureWebhook(externalId: string): Promise<boolean> {
     const webhook = this.webhookConfig();
     if (!webhook) return false;
-    const res = await fetch(`${this.baseUrl}/webhook/set/${externalId}`, {
+
+    // GET é deliberado: torna a checagem periódica barata e só grava quando a
+    // configuração realmente sumiu ou mudou. Se esta rota falhar, tenta o SET
+    // mesmo assim — reparar é mais importante que diagnosticar a leitura.
+    try {
+      const current = await this.fetchWithTimeout(`${this.baseUrl}/webhook/find/${externalId}`, {
+        headers: this.headers(),
+      });
+      if (current.ok && this.webhookMatches(await current.json(), webhook)) return true;
+    } catch {
+      // Cai no POST abaixo.
+    }
+
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/webhook/set/${externalId}`, {
       method: "POST",
       headers: this.headers(),
       body: JSON.stringify({ webhook }),
@@ -208,6 +265,7 @@ export class EvolutionProvider implements WhatsAppProvider {
         `Evolution webhook/set falhou (${res.status}): ${(await res.text().catch(() => "")).slice(0, 200)}`,
       );
     }
+    console.warn(`[evolution] webhook da instância ${externalId} foi reparado automaticamente`);
     return true;
   }
 

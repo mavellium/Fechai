@@ -16,7 +16,7 @@
 #
 # Uso (deploy completo, servidor):
 #   cp .env.example .env      # preencha os valores reais
-#   docker compose up -d --wait postgres redis evolution-postgres evolution
+#   docker compose up -d --wait postgres redis evolution-postgres evolution autoheal
 #   ./deploy.sh all           # primeira subida e deploys blue/green
 #
 # Uso (dev local — só a infra, app roda via `next dev` fora do Docker):
@@ -187,7 +187,10 @@ services:
       AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:?defina EVOLUTION_API_KEY no .env}
       DATABASE_ENABLED: "true"
       DATABASE_PROVIDER: "postgresql"
-      DATABASE_CONNECTION_URI: postgresql://${EVOLUTION_DB_USER:-evolution}:${EVOLUTION_DB_PASSWORD:-evolution}@evolution-postgres:5432/${EVOLUTION_DB_NAME:-evolution}
+      # O default do Prisma ficou em 5 conexões e travou a Evolution em produção
+      # durante uma rajada de sincronização. O timeout maior absorve picos curtos;
+      # o limite continua conservador diante das 100 conexões padrão do Postgres.
+      DATABASE_CONNECTION_URI: postgresql://${EVOLUTION_DB_USER:-evolution}:${EVOLUTION_DB_PASSWORD:-evolution}@evolution-postgres:5432/${EVOLUTION_DB_NAME:-evolution}?connection_limit=${EVOLUTION_DB_CONNECTION_LIMIT:-10}&pool_timeout=${EVOLUTION_DB_POOL_TIMEOUT:-30}
       DATABASE_SAVE_DATA_INSTANCE: "true"
       DATABASE_SAVE_DATA_NEW_MESSAGE: "true"
       DATABASE_SAVE_MESSAGE_UPDATE: "true"
@@ -227,6 +230,43 @@ services:
         condition: service_healthy
     networks:
       - fechai_net
+    labels:
+      # O Docker marca `unhealthy`, mas não reinicia sozinho. O serviço autoheal
+      # abaixo observa somente este label e recria o processo sem tocar no banco,
+      # no volume ou na sessão do WhatsApp.
+      - "autoheal=true"
+      - "autoheal.stop.timeout=20"
+    healthcheck:
+      # `/instance/fetchInstances` atravessa HTTP + Prisma + Postgres. Um ping
+      # simples na porta continuaria verde no incidente em que o Node ficou vivo,
+      # mas o pool do banco parou de atender.
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          const c=new AbortController();const t=setTimeout(()=>c.abort(),8000);fetch('http://127.0.0.1:8080/instance/fetchInstances',{headers:{apikey:process.env.AUTHENTICATION_API_KEY},signal:c.signal}).then(async r=>{if(!r.ok)throw new Error(String(r.status));await r.json();clearTimeout(t);process.exit(0)}).catch(e=>{clearTimeout(t);console.error(e.message);process.exit(1)})
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+
+  # `restart: unless-stopped` só reage quando o processo morre. A Evolution do
+  # incidente continuou viva, porém sem consumir mensagens. Autoheal transforma
+  # três falhas consecutivas do healthcheck em restart apenas deste container.
+  # O socket dá poder administrativo ao helper; por isso ele fica sem rede e
+  # monitora exclusivamente serviços rotulados com `autoheal=true`.
+  autoheal:
+    image: willfarrell/autoheal:1.1.0
+    restart: unless-stopped
+    network_mode: none
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: autoheal
+      AUTOHEAL_INTERVAL: 10
+      AUTOHEAL_START_PERIOD: 60
+      AUTOHEAL_DEFAULT_STOP_TIMEOUT: 20
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
 
 networks:
   fechai_net:

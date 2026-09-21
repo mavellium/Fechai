@@ -40,6 +40,15 @@ wait_healthy() {
   return 1
 }
 
+ensure_infra() {
+  echo "==> Garantindo bancos, Redis e auto-recuperação da Evolution..."
+  # Sem --force-recreate: serviços saudáveis e sem mudança ficam intactos. Na
+  # primeira aplicação desta proteção, só Evolution (config alterada) e o novo
+  # autoheal são criados/recriados; os volumes e bancos são preservados.
+  "${COMPOSE[@]}" up -d --wait --wait-timeout 180 \
+    postgres redis evolution-postgres evolution autoheal
+}
+
 rollback() {
   local active previous previous_id active_id
   active="$(running_web)"
@@ -115,7 +124,7 @@ deploy_worker() {
 
 case "${MODE}" in
   rollback) rollback ;;
-  web) deploy_web ;;
-  worker) deploy_worker ;;
-  all) deploy_web; deploy_worker ;;
+  web) ensure_infra; deploy_web ;;
+  worker) ensure_infra; deploy_worker ;;
+  all) ensure_infra; deploy_web; deploy_worker ;;
 esac

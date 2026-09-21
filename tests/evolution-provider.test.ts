@@ -85,9 +85,9 @@ describe("Webhook da instância", () => {
     const configurou = await provider.ensureWebhook("tenant_abc");
 
     expect(configurou).toBe(true);
-    expect(chamadas[0].url).toBe(`${URL_BASE}/webhook/set/tenant_abc`);
-    expect(chamadas[0].init.method).toBe("POST");
-    const webhook = corpo(chamadas[0]).webhook as Record<string, unknown>;
+    const escrita = chamadas.find((chamada) => chamada.init.method === "POST")!;
+    expect(escrita.url).toBe(`${URL_BASE}/webhook/set/tenant_abc`);
+    const webhook = corpo(escrita).webhook as Record<string, unknown>;
     expect(webhook.enabled).toBe(true);
     expect(webhook.url).toBe(WEBHOOK);
     expect(webhook.headers).toMatchObject({ "x-webhook-secret": SEGREDO });
@@ -97,12 +97,54 @@ describe("Webhook da instância", () => {
     const provider = await novoProvider();
     await provider.ensureWebhook("tenant_abc");
 
-    const webhook = corpo(chamadas[0]).webhook as { events: string[] };
+    const escrita = chamadas.find((chamada) => chamada.init.method === "POST")!;
+    const webhook = corpo(escrita).webhook as { events: string[] };
     // Lista vazia faz a Evolution assinar TODOS os eventos — aí cada "digitando"
     // de cada contato vira uma request na nossa rota.
     expect(webhook.events.length).toBeGreaterThan(0);
     expect(webhook.events).toContain("MESSAGES_UPSERT");
     expect(webhook.events).not.toContain("PRESENCE_UPDATE");
+  });
+
+  it("só lê quando o webhook já está saudável", async () => {
+    fetchMock.mockImplementationOnce(async (url: string, init: RequestInit = {}) => {
+      chamadas.push({ url: String(url), init });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          enabled: true,
+          url: WEBHOOK,
+          headers: { "X-Webhook-Secret": SEGREDO },
+          events: ["MESSAGES_UPSERT", "CONNECTION_UPDATE", "QRCODE_UPDATED"],
+        }),
+        text: async () => "",
+      } as unknown as Response;
+    });
+    const provider = await novoProvider();
+
+    expect(await provider.ensureWebhook("tenant_abc")).toBe(true);
+    expect(chamadas).toHaveLength(1);
+    expect(chamadas[0].url).toBe(`${URL_BASE}/webhook/find/tenant_abc`);
+    expect(chamadas[0].init.method).toBeUndefined();
+  });
+
+  it("repara automaticamente URL, eventos ou header perdidos", async () => {
+    fetchMock.mockImplementationOnce(async (url: string, init: RequestInit = {}) => {
+      chamadas.push({ url: String(url), init });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ enabled: true, url: "", headers: null, events: [] }),
+        text: async () => "",
+      } as unknown as Response;
+    });
+    const provider = await novoProvider();
+
+    expect(await provider.ensureWebhook("tenant_abc")).toBe(true);
+    expect(chamadas).toHaveLength(2);
+    expect(chamadas[1].url).toBe(`${URL_BASE}/webhook/set/tenant_abc`);
+    expect(chamadas[1].init.method).toBe("POST");
   });
 
   it("a instância nova já nasce com o webhook configurado", async () => {
