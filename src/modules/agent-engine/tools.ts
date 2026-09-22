@@ -13,6 +13,7 @@ import { DISQUALIFY_REASONS, parseReason } from "./disqualify";
 import { addLeadToHandoffGroup } from "./handoff";
 import { ACTION_BY_KEY, type ActionKey } from "./actions";
 import { freeSlotsHint, runSchedulingTool, SCHEDULING_TOOLS, schedulingToolAllowed } from "./scheduling-tools";
+import { allVariableDefinitions, parseVariableDefinitions, rememberConversationVariables, type VariableDefinition } from "./variables";
 
 export type ToolContext = {
   tenantId: string;
@@ -30,7 +31,7 @@ function str(v: unknown): string | undefined {
 }
 
 // Definições das tools por ação. O orquestrador expõe ao LLM só as ativas.
-export function getToolSchemas(activeKeys: string[], scheduleConfig?: ScheduleConfig): LlmToolSchema[] {
+export function getToolSchemas(activeKeys: string[], scheduleConfig?: ScheduleConfig, variableDefinitions?: VariableDefinition[]): LlmToolSchema[] {
   const schemas = activeKeys
     // Desativadas temporariamente não são expostas ao LLM mesmo se o tenant
     // ainda tiver a linha enabled no banco.
@@ -41,6 +42,25 @@ export function getToolSchemas(activeKeys: string[], scheduleConfig?: ScheduleCo
     const cfg = scheduleConfig ?? parseScheduleConfig(null);
     schemas.push(...SCHEDULING_TOOLS.filter((tool) => schedulingToolAllowed(tool.name, cfg)));
   }
+  if (variableDefinitions) {
+    schemas.push({
+      name: "remember_variables",
+      description: "Guarda ou corrige dados que o contato informou nesta conversa. Use assim que um valor for dito. Não invente valores nem envie campos vazios.",
+      parameters: {
+        type: "object",
+        properties: {
+          values: {
+            type: "object",
+            description: "Somente variáveis cujo valor foi informado pelo contato.",
+            properties: Object.fromEntries(allVariableDefinitions(variableDefinitions).filter((row) => row.key !== "numero").map((row) => [row.key, {
+              type: "string", description: row.description,
+            }])),
+          },
+        },
+        required: ["values"],
+      },
+    });
+  }
   return schemas;
 }
 
@@ -49,6 +69,25 @@ export async function runToolHandler(
   ctx: ToolContext,
   args: Record<string, unknown>,
 ): Promise<string> {
+  if (key === "remember_variables") {
+    try {
+      if (!ctx.agentId) return "Agente não encontrado.";
+      const agent = await prisma.agent.findFirst({
+        where: { id: ctx.agentId, tenantId: ctx.tenantId },
+        select: { variableDefinitions: true },
+      });
+      if (!agent) return "Agente não encontrado.";
+      return await rememberConversationVariables({
+        tenantId: ctx.tenantId,
+        conversationId: ctx.conversationId,
+        definitions: parseVariableDefinitions(agent.variableDefinitions),
+        values: args.values,
+      });
+    } catch (err) {
+      console.error("[tools] falha ao guardar variáveis", err);
+      return "Não foi possível guardar os dados desta conversa agora. Não afirme que foram salvos.";
+    }
+  }
   if (SCHEDULING_TOOLS.some((tool) => tool.name === key)) {
     try {
       const action = ctx.agentId ? await prisma.tenantAction.findFirst({
@@ -125,12 +164,12 @@ const TOOLS: Record<ActionKey, ToolDef> = {
         properties: {
           date: { type: "string", description: "Data no formato AAAA-MM-DD" },
           time: { type: "string", description: "Hora de início no formato HH:MM (24h)" },
-          title: { type: "string", description: "Assunto do horário. Ex: 'Aula experimental'" },
-          notes: { type: "string", description: "Observações combinadas na conversa" },
+          patientName: { type: "string", description: "Nome da pessoa que será atendida. Se o contato marcar para outra pessoa, use o nome dessa pessoa, não o nome do contato. Pergunte se ainda não souber." },
+          notes: { type: "string", description: "Observações clínicas ou logísticas combinadas na conversa. Não use para guardar o nome do paciente." },
           tipoAtendimento: { type: "string", description: "Nome EXATO do tipo de atendimento, copiado da lista de tipos com duração própria do contexto. Define o tamanho do bloco. Omita quando o negócio não tiver tipos ou quando o contato não disse qual quer." },
           additionalAppointment: { type: "boolean", description: "True somente se o contato pediu explicitamente OUTRA consulta separada, mantendo a anterior. Nunca use para reagendamento." },
         },
-        required: ["date", "time"],
+        required: ["date", "time", "patientName"],
       },
     },
     /**
@@ -149,6 +188,8 @@ const TOOLS: Record<ActionKey, ToolDef> = {
       const date = str(args.date);
       const time = str(args.time);
       if (!date || !time) return "Faltou a data ou a hora. Pergunte ao contato e tente de novo.";
+      const patientName = str(args.patientName);
+      if (!patientName) return "Falta o nome da pessoa que será atendida. Pergunte ao contato antes de marcar; não use o nome do contato sem confirmar que é o paciente.";
 
       const startsAt = parseLocalDateTime(date, time, cfg.timezone);
       if (!startsAt) return "Data ou hora inválida. Use AAAA-MM-DD e HH:MM.";
@@ -192,18 +233,13 @@ const TOOLS: Record<ActionKey, ToolDef> = {
         return `Esse horário está ocupado; nada foi marcado. Não diga ao contato que está confirmado.${await freeSlotsHint(ctx, cfg, startsAt)}`;
       }
 
-      const lead = await prisma.lead.findUnique({
-        where: { id: ctx.leadId },
-        select: { name: true, phone: true },
-      });
-      const who = lead?.name || lead?.phone || "contato";
-
       const appointment = await createAppointment({
         tenantId: ctx.tenantId,
         agentId: ctx.agentId,
         leadId: ctx.leadId,
         conversationId: ctx.conversationId,
-        title: str(args.title) ?? `Atendimento — ${who}`,
+        title: patientName,
+        patientName,
         notes: str(args.notes) ?? null,
         startsAt,
         durationMinutes: duration.minutes,

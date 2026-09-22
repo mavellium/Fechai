@@ -214,6 +214,8 @@ model Agent {
   systemPrompt    String    @default("")
   objective       String    @default("")
   personaDraft    Json? // respostas cruas do wizard, para reeditar
+  /// Definições opcionais das variáveis que o agente extrai durante a conversa.
+  variableDefinitions Json?
   /// Agente que atende o número de WhatsApp da conta. Enquanto o WhatsApp for
   /// um por conta (ver CHANGELOG), exatamente um agente é o principal.
   isPrimary       Boolean   @default(false)
@@ -440,6 +442,8 @@ model Conversation {
   /// comparar com a contagem atual. Sem isso, o resumo em cache mentiria em
   /// silêncio conforme a conversa continuasse.
   summaryMsgCount Int?
+  /// Valores por conversa: { chave: valor }. Ausência = não informado.
+  variables       Json?
   updatedAt       DateTime  @updatedAt
 
   appointments Appointment[]
@@ -502,6 +506,8 @@ model Appointment {
   conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
 
   title                  String
+  /// Pessoa atendida; o contato do WhatsApp pode marcar para outra pessoa.
+  patientName            String?
   notes                  String?
   startsAt               DateTime
   endsAt                 DateTime

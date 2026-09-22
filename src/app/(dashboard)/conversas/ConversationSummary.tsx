@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { RefreshCw, Sparkles } from "lucide-react";
 import posthog from "posthog-js";
 import { Alert } from "@/components/ui/alert";
@@ -37,6 +38,7 @@ export function ConversationSummary({
   conversationId: string;
   state: SummaryState;
 }) {
+  const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   // Resultado da geração desta sessão. O servidor revalida a rota, mas manter o
   // texto aqui faz ele aparecer no mesmo instante do clique.
@@ -62,6 +64,11 @@ export function ConversationSummary({
         return;
       }
       setFresh({ text: res.summary, at: new Date() });
+      // Resumir também recupera variáveis que estavam "não informado" (ver
+      // `agent-engine/summary-variables.ts`). O texto vem na resposta, mas a
+      // lista de variáveis é renderizada no servidor — sem isto ela só
+      // mudaria na próxima navegação.
+      router.refresh();
       posthog.capture("conversation_summarized", {
         message_count: state.messageCount,
         regenerated: Boolean(state.summary),

@@ -12,7 +12,9 @@ import { ConversationFilters } from "./ConversationFilters";
 import { isFishAudioConfigured } from "@/modules/voice/fish";
 import { ConversationThread } from "./ConversationThread";
 import { LeadPanel } from "./LeadPanel";
+import { ConversationVariables } from "./ConversationVariables";
 import { SandboxDialog } from "./SandboxDialog";
+import { parseConversationVariables, parseVariableDefinitions, withContactDefaults } from "@/modules/agent-engine/variables";
 
 /** Tamanho do lote. "Carregar mais" soma outro. */
 const PAGE_SIZE = 30;
@@ -70,7 +72,7 @@ export default async function ConversasPage({
             lead: true,
             // `voiceId` vem junto do nome (mesma query) para o composer saber se
             // pode oferecer os botões de voz — ver `voiceReady` abaixo.
-            agent: { select: { name: true, voiceId: true } },
+            agent: { select: { name: true, voiceId: true, variableDefinitions: true } },
             messages: { orderBy: { createdAt: "asc" } },
             _count: { select: { messages: true } },
           },
@@ -103,16 +105,18 @@ export default async function ConversasPage({
    * no envio, para a tela não prometer o que a action vai recusar.
    */
   let voiceReady = false;
+  const fallbackAgent = selected && !selected.agent
+    ? await prisma.agent.findFirst({
+        where: { tenantId, archived: false },
+        orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }],
+        select: { variableDefinitions: true, voiceId: true },
+      })
+    : null;
   if (selected && isFishAudioConfigured()) {
     if (selected.agent) {
       voiceReady = Boolean(selected.agent.voiceId);
     } else {
-      const primary = await prisma.agent.findFirst({
-        where: { tenantId, archived: false },
-        orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }],
-        select: { voiceId: true },
-      });
-      voiceReady = Boolean(primary?.voiceId);
+      voiceReady = Boolean(fallbackAgent?.voiceId);
     }
   }
 
@@ -131,6 +135,8 @@ export default async function ConversasPage({
           summary: selected.summary,
           summaryAt: selected.summaryAt,
           summaryMsgCount: selected.summaryMsgCount,
+          variableDefinitions: parseVariableDefinitions(selected.agent?.variableDefinitions ?? fallbackAgent?.variableDefinitions),
+          variables: withContactDefaults(parseConversationVariables(selected.variables), selected.lead),
         },
         messages: selected.messages,
       }
@@ -247,12 +253,19 @@ export default async function ConversasPage({
           )}
         </Card>
 
-        <Card className="hidden min-h-0 flex-col overflow-y-auto xl:flex">
+        <Card className="hidden min-h-0 flex-col overflow-hidden p-0 xl:flex">
           <h2 className="sr-only">Dados do cliente</h2>
           {detail ? (
-            <LeadPanel conversation={detail.data} />
+            <>
+              <div className="shrink-0 border-b border-white/10 p-4">
+                <ConversationVariables definitions={detail.data.variableDefinitions} values={detail.data.variables} />
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                <LeadPanel conversation={detail.data} />
+              </div>
+            </>
           ) : (
-            <p className="text-sm leading-relaxed text-white/50">
+            <p className="p-4 text-sm leading-relaxed text-white/50">
               Ao abrir uma conversa, aparecem aqui os dados do cliente, o histórico de atendimento
               e as ações disponíveis.
             </p>

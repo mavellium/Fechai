@@ -22,6 +22,8 @@ import { parseScheduleConfig, scheduleSystemContext } from "@/modules/scheduling
 import { getToolSchemas, runToolHandler, type ToolContext } from "./tools";
 import { leadAppointmentsContext } from "./scheduling-tools";
 import { appendMessage, getRecentMessages } from "./conversation";
+import { sanitizeUnresolvedPlaceholders } from "./reply-sanitizer";
+import { loadConversationVariables, parseVariableDefinitions, variablesSystemContext } from "./variables";
 
 const MAX_TOOL_ITERATIONS = 3;
 const DEFAULT_SYSTEM =
@@ -184,11 +186,19 @@ export async function runAgentTurn(input: {
         return "Não foi possível consultar a agenda. Não presuma que o contato está sem consulta; use list_appointments antes de marcar.";
       })
     : "";
+  const variableDefinitions = agent ? parseVariableDefinitions(agent.variableDefinitions) : [];
+  const variableValues = agent
+    ? await loadConversationVariables(tenantId, conversationId).catch((err) => {
+        console.error("[orchestrator] variáveis da conversa indisponíveis", err);
+        return {};
+      })
+    : {};
 
   const systemPrompt = [
     agent?.systemPrompt || DEFAULT_SYSTEM,
     scheduleContext,
     appointmentsContext,
+    agent ? variablesSystemContext(variableDefinitions, variableValues) : "",
     context,
     INJECTION_GUARD,
   ]
@@ -200,7 +210,7 @@ export async function runAgentTurn(input: {
     ...history.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
   ];
 
-  const toolSchemas = getToolSchemas(actions.map((a) => a.key), scheduleConfig);
+  const toolSchemas = getToolSchemas(actions.map((a) => a.key), scheduleConfig, agent ? variableDefinitions : undefined);
   const ctx: ToolContext = { tenantId, conversationId, leadId, agentId: agent?.id ?? null };
   // A cadeia de fallback vem do painel (/admin/ia): o admin monta a ordem e
   // aponta cada degrau para uma credencial. Sem nada cadastrado, cai no padrão
@@ -280,7 +290,16 @@ export async function runAgentTurn(input: {
     return { reply: err.userMessage, toolsUsed, status: "ok", replyMessageId: replyMsg.id };
   }
 
-  if (!finalReply) finalReply = "Certo!";
+  // A tool pode ter aprendido um valor neste mesmo turno. Releia antes de
+  // substituir tokens; ausentes somem em vez de chegar como {{nome}}.
+  const latestVariableValues = agent
+    ? await loadConversationVariables(tenantId, conversationId).catch(() => variableValues)
+    : variableValues;
+  const sanitizedReply = sanitizeUnresolvedPlaceholders(finalReply, latestVariableValues);
+  if (sanitizedReply !== finalReply.trim()) {
+    console.warn("[orchestrator] variável de template removida da resposta da IA");
+  }
+  finalReply = sanitizedReply || "Certo!";
   const replyMsg = await appendMessage(conversationId, "assistant", finalReply, "agent");
   return { reply: finalReply, toolsUsed, status: agent ? "ok" : "no_agent", replyMessageId: replyMsg.id };
 }
@@ -399,6 +418,7 @@ export async function resolveAgent(tenantId: string, agentId?: string) {
     // Vêm na mesma query pelo mesmo motivo dos dois acima.
     voiceStyle: true,
     speechBlocklist: true,
+    variableDefinitions: true,
   } as const;
   if (agentId) {
     return prisma.agent.findFirst({

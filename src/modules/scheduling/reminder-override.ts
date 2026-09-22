@@ -1,6 +1,7 @@
 import {
   DEFAULT_REMINDER_TEMPLATE,
   MAX_REMINDER_MINUTES,
+  isValidReminderSendTime,
   type ReminderRule,
 } from "./config";
 
@@ -48,6 +49,7 @@ export function parseReminderOverride(raw: unknown): ReminderRule[] | null {
       seen.add(minutes);
       return [{
         minutesBefore: minutes,
+        ...(isValidReminderSendTime(r.sendTime, minutes) ? { sendTime: r.sendTime as string } : {}),
         template:
           typeof r.template === "string" && r.template.trim()
             ? r.template.trim().slice(0, 500)
@@ -67,6 +69,7 @@ export function serializeReminderOverride(
   if (reminders === null) return null;
   return reminders.map((r) => ({
     minutesBefore: Math.round(r.minutesBefore),
+    ...(r.sendTime ? { sendTime: r.sendTime } : {}),
     template: r.template.trim().slice(0, 500),
   }));
 }

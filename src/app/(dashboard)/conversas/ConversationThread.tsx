@@ -10,6 +10,7 @@ import { LeadPanel, type LeadPanelData } from "./LeadPanel";
 import { SendMessageForm } from "./SendMessageForm";
 import { DeleteTestConversationButton } from "./DeleteTestConversationButton";
 import { AgentPauseButton } from "./AgentPauseButton";
+import { ConversationVariables } from "./ConversationVariables";
 
 type ThreadMessage = {
   id: string;
@@ -87,6 +88,9 @@ export function ConversationThread({
           conversationId={conversation.id}
           paused={conversation.agentPaused}
         />
+        <div className="mt-2 xl:hidden">
+          <ConversationVariables definitions={conversation.variableDefinitions} values={conversation.variables} />
+        </div>
       </div>
 
       {/* O resumo acima do histórico, em xl+, onde a coluna do cliente já

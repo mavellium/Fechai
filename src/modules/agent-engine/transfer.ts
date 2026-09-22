@@ -6,6 +6,7 @@ import { ACTION_CATALOG, isActionAvailable } from "./actions";
 import { catalogVoiceByReferenceId, findCatalogVoice } from "@/modules/voice/catalog";
 import type { AgentPackage } from "./agent-package";
 import { AGENT_PACKAGE_FORMAT, AGENT_PACKAGE_VERSION } from "./agent-package";
+import { parseVariableDefinitions } from "./variables";
 
 export type AgentTransferResult =
   | { ok: true; agentId: string; name: string; warnings: string[] }
@@ -23,6 +24,7 @@ export async function buildAgentPackage(
       systemPrompt: true,
       objective: true,
       personaDraft: true,
+      variableDefinitions: true,
       listenAudio: true,
       stopOnEmoji: true,
       speakReplies: true,
@@ -56,6 +58,7 @@ export async function buildAgentPackage(
       systemPrompt: agent.systemPrompt,
       objective: agent.objective,
       personaDraft: agent.personaDraft,
+      variableDefinitions: parseVariableDefinitions(agent.variableDefinitions),
       listenAudio: agent.listenAudio,
       stopOnEmoji: agent.stopOnEmoji,
       speakReplies: agent.speakReplies,
@@ -140,6 +143,7 @@ export async function createAgentFromPackage(input: {
         personaDraft: (input.package.agent.personaDraft ?? undefined) as
           | Prisma.InputJsonValue
           | undefined,
+        variableDefinitions: input.package.agent.variableDefinitions,
         isPrimary: false,
         enabled: false,
         listenAudio: input.package.agent.listenAudio,

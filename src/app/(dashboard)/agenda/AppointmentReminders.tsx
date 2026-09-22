@@ -134,7 +134,7 @@ export function AppointmentReminders({
                 <ul className="mt-1.5 space-y-1">
                   {agentReminders.map((r) => (
                     <li key={r.minutesBefore} className="text-sm text-white/75">
-                      {formatReminderLead(r.minutesBefore)} antes
+                      {formatReminderLead(r.minutesBefore)} antes{r.sendTime ? ` às ${r.sendTime}` : ""}
                     </li>
                   ))}
                 </ul>

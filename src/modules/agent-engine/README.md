@@ -12,6 +12,8 @@ Cérebro do produto: recebe uma mensagem, monta o contexto (persona + RAG + hist
 - `tools.ts` — schemas + handlers por ação (`getToolSchemas`, `runToolHandler`). Handlers gravam no banco (lead/conversation).
 - `conversation.ts` — `getOrCreateConversation`, `appendMessage`, `getRecentMessages`, `startFreshTestConversation`, `sendManualReply`.
 - `orchestrator.ts` — `runAgentTurn({tenantId, conversationId, leadId, userMessage})`: loop de tools (máx 3), RAG via `searchSimilarChunks`, persiste mensagens.
+- `reply-sanitizer.ts` — última barreira antes de persistir/enviar: remove variáveis de template não resolvidas (`[Nome]`, `{{push_name}}` etc.) e recompõe a pontuação.
+- `variables.ts` — definições por agente e valores por conversa. Nome, número e endereço existem por padrão; as demais são opcionais e configuradas em Agentes › Variáveis.
 - `summary.ts` — `summarizeConversation(tenantId, conversationId)`: resumo em texto da conversa, sob demanda, com cache no banco. Ver seção abaixo.
 - `disqualify.ts` — motivos da triagem (`DISQUALIFY_REASONS`), rótulos e o custo do atendimento manual que converte triagem em dinheiro. Ver seção abaixo.
 - `handoff.ts` — config da ação "Transferir para humano" e `addLeadToHandoffGroup`: põe o contato num grupo do WhatsApp ao passar para atendimento. Ver seção abaixo.
@@ -31,6 +33,55 @@ addLeadToHandoffGroup(tenantId, agentId, phone, { isTest? }) -> void  // nunca l
 ```
 
 Consumidores: `api/webhooks/whatsapp` (WhatsApp real) e `api/sandbox` (chat de teste).
+
+### Variáveis da conversa
+
+`Agent.variableDefinitions` guarda até 20 chaves personalizadas com descrição.
+`Conversation.variables` guarda só os valores informados naquela conversa;
+ausência aparece como "não informado" na lista recolhível em `/conversas`.
+**Toda variável nasce "não informado" e só é preenchida pelo que a conversa
+revelar.** A única exceção é `{{numero}}`: o telefone é a identidade do contato
+no WhatsApp, o sistema já o conhece antes da primeira mensagem e o agente não
+tem como perguntá-lo a quem está falando pelo próprio telefone — por isso ele é
+controlado pelo sistema e `remember_variables` o recusa. `{{nome}}` **não** é
+pré-preenchido com `Lead.name`: esse valor pode ser o apelido do perfil (ou
+"Chat de teste", no sandbox), e mostrá-lo faria a tela afirmar que o contato
+informou um nome que nunca disse. No chat de teste nem `{{numero}}` nasce
+preenchido, porque `sandbox:<agentId>` não é um telefone. Definições inválidas
+na leitura são ignoradas, e a escrita recusa chaves duplicadas ou que tentem
+substituir as três padrão.
+
+Conversas anteriores a essa regra têm o nome do perfil e o número sintético já
+gravados; `scripts/limpa-variaveis-herdadas.ts` limpa o resíduo uma vez. Ele
+não mexe no `{{nome}}` de conversa real de propósito: `remember_variables`
+grava o nome dito **e** atualiza `Lead.name`, então os dois serem iguais não
+distingue o valor herdado do legítimo.
+
+**Resumir a conversa também preenche as variáveis** (`summary-variables.ts`).
+As variáveis só se preenchem quando o agente chama `remember_variables`
+durante o turno, o que deixa de fora todo o passado: conversa anterior à
+variável existir, conversa atendida à mão, conversa em que o agente não chamou
+a tool — o dado está escrito no histórico e a tela diz "não informado". Como o
+resumo já relê a conversa inteira numa chamada que o dono pediu, o mesmo
+retorno traz um bloco `<variaveis>` com os valores encontrados: recupera o
+passado **sem uma segunda chamada paga**. O bloco é arrancado do texto antes de
+exibir (é protocolo interno, não faz parte do resumo) e só as chaves ausentes
+são pedidas — o que o agente guardou ao vivo tem prioridade sobre a releitura e
+nunca é sobrescrito. O modelo é instruído a escrever "não informado" quando o
+dado não aparece, e esses valores são descartados: sem essa saída explícita um
+modelo pressionado a preencher todo campo preenche com o que é *provável*, que
+é justamente o erro que não se pode cometer com dado de cliente. A gravação
+acontece depois do resumo e num `try` próprio — a extração é um brinde da mesma
+chamada e não pode derrubar o que a pessoa pediu.
+
+O contexto do turno mostra as definições e os valores ao agente. A tool interna
+`remember_variables` atualiza os valores informados, sem consumir uma vaga de
+habilidade; chaves não configuradas e valores vazios são recusados. Ao mudar
+`{{nome}}`, o nome do contato também é atualizado. A resposta final substitui
+valores conhecidos e remove tokens ausentes antes de salvar ou enviar; o
+follow-up aplica a mesma barreira. Lembretes aceitam as variáveis da conversa
+como extras, além de data/hora/local da consulta. Exportar ou duplicar o agente
+leva as definições, nunca os valores das conversas.
 
 ### Conversa de teste (sandbox)
 

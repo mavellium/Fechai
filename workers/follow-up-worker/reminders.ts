@@ -11,7 +11,8 @@ import {
   type ScheduleConfig,
 } from "../../src/modules/scheduling/config";
 import { parseReminderOverride } from "../../src/modules/scheduling/reminder-override";
-import { dateInZone, timeInZone } from "../../src/modules/scheduling/time";
+import { parseConversationVariables } from "../../src/modules/agent-engine/variables";
+import { dateInZone, partsInZone, timeInZone, zonedTimeToUtc } from "../../src/modules/scheduling/time";
 
 /**
  * Lembretes pré-consulta. Rodam no mesmo worker do follow-up (mesma varredura
@@ -30,11 +31,20 @@ type ReminderCandidate = {
   remindersSent: number[];
 };
 
+/** Instante de disparo no fuso da agenda; sem horário fixo, duração exata. */
+export function reminderDueAt(startsAt: Date, rule: ReminderRule, timezone: string): Date {
+  if (!rule.sendTime) return new Date(startsAt.getTime() - rule.minutesBefore * 60_000);
+  const local = partsInZone(startsAt, timezone);
+  const day = new Date(Date.UTC(local.year, local.month - 1, local.day - rule.minutesBefore / 1440));
+  const [hour, minute] = rule.sendTime.split(":").map(Number);
+  return zonedTimeToUtc(day.getUTCFullYear(), day.getUTCMonth() + 1, day.getUTCDate(), hour, minute, timezone);
+}
+
 /**
  * Quais disparos estão vencidos agora, do mais distante para o mais próximo.
  *
- * A janela de cada um é `startsAt - minutesBefore <= now <= startsAt`. O
- * limite de cima importa: um worker parado por duas horas não pode acordar e
+ * A janela começa em `reminderDueAt` (antecedência exata ou horário local fixo)
+ * e termina em `startsAt`. O limite de cima importa: um worker parado por duas horas não pode acordar e
  * mandar "sua consulta é amanhã" para quem já foi atendido. Quem ficou para
  * trás é marcado como enviado sem enviar (ver `scanAndSendReminders`), senão
  * a mesma consulta seria reavaliada em todo ciclo para sempre.
@@ -43,13 +53,14 @@ export function dueReminders(
   appt: ReminderCandidate,
   reminders: ReminderRule[],
   now: Date,
+  timezone = "America/Sao_Paulo",
 ): ReminderRule[] {
   if (appt.status !== "scheduled") return [];
   if (appt.startsAt.getTime() < now.getTime()) return [];
   const sent = new Set(appt.remindersSent);
   return reminders
     .filter((r) => !sent.has(r.minutesBefore))
-    .filter((r) => now.getTime() >= appt.startsAt.getTime() - r.minutesBefore * 60_000)
+    .filter((r) => now.getTime() >= reminderDueAt(appt.startsAt, r, timezone).getTime())
     .sort((a, b) => b.minutesBefore - a.minutesBefore);
 }
 
@@ -103,10 +114,14 @@ export async function scanAndSendReminders(now: Date = new Date()) {
   // carregaria a agenda inteira do ano para descartar quase tudo em memória.
   // Uma consulta pode ter override próprio mais distante que o do agente, por
   // isso o teto considera os dois.
-  const configuredLeads = [...configByAgent.values()]
+  const configuredRules = [...configByAgent.values()]
     .filter((cfg) => cfg.reminderEnabled)
-    .flatMap((cfg) => cfg.reminders.map((r) => r.minutesBefore));
-  const maxLeadMinutes = Math.max(0, ...configuredLeads);
+    .flatMap((cfg) => cfg.reminders);
+  // Um horário fixo na véspera pode cair quase um dia antes do instante
+  // "24 horas antes"; inclua essa margem na busca sem carregar o ano inteiro.
+  const maxLeadMinutes = Math.max(0, ...configuredRules.map((r) =>
+    r.minutesBefore + (r.sendTime ? 1440 : 0),
+  ));
 
   const appointments = await prisma.appointment.findMany({
     where: {
@@ -123,7 +138,7 @@ export async function scanAndSendReminders(now: Date = new Date()) {
         { reminderOverride: { not: Prisma.DbNull } },
       ],
     },
-    include: { lead: true },
+    include: { lead: true, conversation: { select: { variables: true } } },
   });
 
   // Consultas que já passaram e ainda tinham disparo pendente: fechar sem
@@ -155,7 +170,7 @@ export async function scanAndSendReminders(now: Date = new Date()) {
     const rules = remindersFor(appt, cfg);
     if (rules.length === 0) continue;
 
-    const due = dueReminders(appt, rules, now);
+    const due = dueReminders(appt, rules, now, cfg.timezone);
     if (due.length === 0) continue;
 
     // Vários disparos vencidos de uma vez (worker parado, ou dois lembretes
@@ -177,7 +192,12 @@ export async function scanAndSendReminders(now: Date = new Date()) {
       data: dateInZone(appt.startsAt, cfg.timezone),
       hora: timeInZone(appt.startsAt, cfg.timezone),
       local: cfg.location,
+      extras: parseConversationVariables(appt.conversation?.variables),
     });
+    if (!text) {
+      await markSent(appt.id, appt.remindersSent, closing, null);
+      continue;
+    }
 
     let keyId: string | null = null;
     {

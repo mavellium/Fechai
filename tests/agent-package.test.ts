@@ -40,6 +40,7 @@ describe("pacote portátil do agente", () => {
     if (!result.ok) return;
     expect(result.data.actions[0].config).toMatchObject({ durationMinutes: 30 });
     expect(result.data.knowledge[0].content).toContain("8h às 18h");
+    expect(result.data.agent.variableDefinitions).toEqual([]);
   });
 
   it("recusa JSON comum e versão incompatível", () => {

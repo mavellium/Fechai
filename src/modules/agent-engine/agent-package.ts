@@ -29,6 +29,7 @@ export const agentPackageSchema = z.object({
     systemPrompt: z.string().max(100_000),
     objective: z.string().max(10_000),
     personaDraft: z.unknown().nullable().default(null),
+    variableDefinitions: z.array(z.object({ key: z.string(), description: z.string() })).max(20).default([]),
     listenAudio: z.boolean(),
     stopOnEmoji: z.boolean(),
     speakReplies: z.boolean(),

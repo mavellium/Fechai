@@ -21,6 +21,8 @@ export type CreateAppointmentInput = {
   leadId?: string | null;
   conversationId?: string | null;
   title: string;
+  /** Pessoa atendida; pode ser diferente do contato que conversou no WhatsApp. */
+  patientName?: string;
   notes?: string | null;
   startsAt: Date;
   durationMinutes: number;
@@ -187,6 +189,7 @@ export async function createAppointment(input: CreateAppointmentInput) {
       leadId: input.leadId ?? null,
       conversationId: input.conversationId ?? null,
       title: input.title,
+      patientName: input.patientName ?? null,
       notes: input.notes ?? null,
       startsAt: input.startsAt,
       endsAt,
@@ -222,6 +225,7 @@ export async function createAppointment(input: CreateAppointmentInput) {
     }),
     pushAppointmentToClinicorp(input.tenantId, {
       title: input.title,
+      patientName: input.patientName,
       notes: input.notes,
       startsAt: input.startsAt,
       endsAt,
@@ -306,7 +310,12 @@ export async function rescheduleAppointment(input: {
   const event = { title: previous.title, startsAt: input.startsAt, endsAt, timeZone: input.timezone };
   const [googleEventId, clinicorpSync] = await Promise.all([
     googleRemoved ? pushEventToGoogle(input.tenantId, { ...event, description: previous.notes ?? undefined }) : Promise.resolve(previous.googleEventId),
-    clinicorpRemoved ? pushAppointmentToClinicorp(input.tenantId, { ...event, notes: previous.notes, lead })
+    clinicorpRemoved ? pushAppointmentToClinicorp(input.tenantId, {
+      ...event,
+      patientName: previous.patientName ?? undefined,
+      notes: previous.notes,
+      lead,
+    })
       : Promise.resolve({ status: "failed", error: "Não foi possível remover o horário anterior no Clinicorp." } as const),
   ]);
   // Preserva o ID antigo se sua remoção falhou: não cria duplicata nem perde

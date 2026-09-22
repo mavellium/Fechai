@@ -150,8 +150,56 @@ describe("retorno de contato com consulta", () => {
     expect(db.appointment.findMany).toHaveBeenCalledWith({ where: { tenantId: ctx.tenantId, leadId: ctx.leadId, status: "scheduled", startsAt: { gte: expect.any(Date) } }, orderBy: { startsAt: "asc" } });
   });
   it("não cria duplicata para confirmar ou contornar reagendamento", async () => {
-    expect(await runToolHandler("schedule_meeting", ctx, { date: "2026-09-18", time: "14:00" })).toContain("já tem consulta");
+    expect(await runToolHandler("schedule_meeting", ctx, { date: "2026-09-18", time: "14:00", patientName: "Cliente" })).toContain("já tem consulta");
     expect(db.appointment.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("nome da pessoa atendida", () => {
+  it("expõe e exige patientName na ferramenta", () => {
+    const schema = getToolSchemas(["schedule_meeting"], cfg).find((tool) => tool.name === "schedule_meeting")!;
+    expect(schema.parameters.required).toContain("patientName");
+    expect(schema.parameters.properties).toHaveProperty("patientName");
+  });
+
+  it("recusa marcar sem saber quem é o paciente", async () => {
+    db.appointment.findMany.mockResolvedValue([]);
+    expect(await runToolHandler("schedule_meeting", ctx, { date: "2026-09-17", time: "14:00" }))
+      .toContain("nome da pessoa que será atendida");
+    expect(db.appointment.create).not.toHaveBeenCalled();
+  });
+
+  it("grava a paciente no título e no campo próprio, sem usar o nome do contato", async () => {
+    db.appointment.findMany.mockResolvedValue([]);
+    db.appointment.findFirst.mockResolvedValue(null);
+    db.appointment.create.mockResolvedValue({ id: "nova-consulta" });
+    db.appointment.update.mockResolvedValue({});
+    db.lead.findUnique.mockResolvedValue({ name: "Thalita", phone: "5511999999999", isTest: false });
+    db.lead.update.mockResolvedValue({});
+
+    const result = await runToolHandler("schedule_meeting", ctx, {
+      date: "2026-09-17", time: "14:00", patientName: "Maria Souza", notes: "Primeira consulta",
+    });
+
+    expect(result).toContain("Agendado");
+    expect(db.appointment.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ title: "Maria Souza", patientName: "Maria Souza", notes: "Primeira consulta" }),
+    }));
+    expect(mirrors.clinicorpPush).toHaveBeenCalledWith(ctx.tenantId, expect.objectContaining({
+      patientName: "Maria Souza", lead: expect.objectContaining({ name: "Thalita" }),
+    }));
+  });
+
+  it("preserva o nome da paciente ao reagendar", async () => {
+    db.appointment.findFirst.mockImplementation(async ({ where }) =>
+      where.id === appointment.id ? { ...appointment, patientName: "Maria Souza" } : null,
+    );
+    db.lead.findFirst.mockResolvedValue({ name: "Thalita", phone: "5511999999999", isTest: false });
+
+    expect(await reschedule()).toContain("reagendada");
+    expect(mirrors.clinicorpPush).toHaveBeenCalledWith(ctx.tenantId, expect.objectContaining({
+      patientName: "Maria Souza", lead: expect.objectContaining({ name: "Thalita" }),
+    }));
   });
 });
 
@@ -245,7 +293,7 @@ describe("horários livres antes de sugerir", () => {
   it("recusa por conflito já traz os livres do dia e não grava", async () => {
     db.appointment.findMany.mockResolvedValueOnce([]).mockResolvedValue([appointment]);
     mirrors.clinicorpConflict.mockResolvedValue(true);
-    const result = await runToolHandler("schedule_meeting", ctx, { date: "2026-09-17", time: "14:00" });
+    const result = await runToolHandler("schedule_meeting", ctx, { date: "2026-09-17", time: "14:00", patientName: "Cliente" });
     expect(result).toContain("ocupado");
     expect(result).toContain("Livres no mesmo dia: 09:00, 10:30");
     expect(db.appointment.create).not.toHaveBeenCalled();

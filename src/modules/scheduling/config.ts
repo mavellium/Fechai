@@ -97,6 +97,8 @@ export type ReminderRule = {
    * escolher a unidade; ela é só a forma de digitar.
    */
   minutesBefore: number;
+  /** Horário local no dia calculado pela antecedência; ausente = duração exata. */
+  sendTime?: string;
   /** Texto deste disparo, com as variáveis de `REMINDER_VARIABLES`. */
   template: string;
 };
@@ -404,6 +406,7 @@ function parseReminders(c: Record<string, unknown>): ReminderRule[] {
         if (minutes === null || minutes < 1 || minutes > MAX_REMINDER_MINUTES) return [];
         return [{
           minutesBefore: minutes,
+          ...(isValidReminderSendTime(r.sendTime, minutes) ? { sendTime: r.sendTime as string } : {}),
           template: typeof r.template === "string" && r.template.trim()
             ? r.template.trim().slice(0, 500)
             : DEFAULT_REMINDER_TEMPLATE,
@@ -473,6 +476,9 @@ export function validateReminders(reminders: ReminderRule[]): string | null {
     if (r.minutesBefore > MAX_REMINDER_MINUTES) {
       return `A antecedência máxima de um lembrete é ${formatReminderLead(MAX_REMINDER_MINUTES)}.`;
     }
+    if (r.sendTime !== undefined && !isValidReminderSendTime(r.sendTime, r.minutesBefore)) {
+      return "O horário fixo exige dias ou semanas inteiros e deve estar entre 00:00 e 23:59.";
+    }
     if (!r.template.trim()) {
       return "Escreva a mensagem de cada lembrete.";
     }
@@ -484,6 +490,12 @@ export function validateReminders(reminders: ReminderRule[]): string | null {
     seen.add(r.minutesBefore);
   }
   return null;
+}
+
+export function isValidReminderSendTime(value: unknown, minutesBefore: number): value is string {
+  return typeof value === "string"
+    && /^([01]\d|2[0-3]):[0-5]\d$/.test(value)
+    && minutesBefore % (24 * 60) === 0;
 }
 
 /**
@@ -506,9 +518,10 @@ export function validateReminders(reminders: ReminderRule[]): string | null {
  */
 export function renderReminder(
   template: string,
-  vars: { nome: string; data: string; hora: string; local?: string },
+  vars: { nome: string; data: string; hora: string; local?: string; extras?: Record<string, string> },
 ): string {
   const values: Record<string, string> = {
+    ...vars.extras,
     nome: vars.nome.trim(),
     data: vars.data,
     hora: vars.hora,
@@ -516,7 +529,7 @@ export function renderReminder(
     local: vars.local?.trim() ? ` ${vars.local.trim()}` : "",
   };
   return template
-    .replace(/\{\{\s*(\w+)\s*\}\}/g, (_, key: string) => values[key.toLowerCase()] ?? "")
+    .replace(/\{\{\s*([^{}\r\n]{1,80})\s*\}\}/g, (_, key: string) => values[key.trim().toLowerCase()] ?? "")
     .replace(/[ \t]+([,.!?;:])/g, "$1")
     .replace(/[ \t]{2,}/g, " ")
     .replace(/[ \t]+$/gm, "")
@@ -531,7 +544,7 @@ export function renderReminder(
 function describeReminders(cfg: ScheduleConfig): string {
   if (!cfg.reminderEnabled || cfg.reminders.length === 0) return "";
   const [first] = cfg.reminders;
-  if (cfg.reminders.length === 1) return ` · lembrete ${formatReminderLead(first.minutesBefore)} antes`;
+  if (cfg.reminders.length === 1) return ` · lembrete ${formatReminderLead(first.minutesBefore)} antes${first.sendTime ? ` às ${first.sendTime}` : ""}`;
   return ` · ${cfg.reminders.length} lembretes (a partir de ${formatReminderLead(first.minutesBefore)} antes)`;
 }
 
@@ -594,6 +607,7 @@ export function scheduleSystemContext(cfg: ScheduleConfig, now = new Date()): st
     "- Toda data, dia da semana ou horário recusado pelo contato vira uma restrição para o restante da conversa. Passe datas específicas em excludeDates e dias recorrentes em excludeWeekdays; não os ofereça de novo nem insista na mesma opção. Se a pessoa disser que não pode quinta nem sexta, use excludeWeekdays [4, 5] e avance automaticamente para o próximo dia com expediente cadastrado e vaga real.",
     "- Nunca invente data ou hora. Se nenhuma opção pesquisada servir, avance a busca para os dias seguintes com list_available_slots; não volte às datas rejeitadas. Se o contato indicar manhã/tarde/noite, priorize os horários livres desse período e, se não houver, explique e ofereça os mais próximos.",
     "- Converta o que o contato disser ('amanhã às 15h') para data e hora exatas antes de chamar a ação schedule_meeting.",
+    "- Antes de marcar, identifique o nome da pessoa que será atendida. Quem conversa no WhatsApp pode estar marcando para outra pessoa. Passe o nome do paciente em patientName; não use o nome do contato nem guarde o nome do paciente só em notes. Se não estiver claro, pergunte.",
     "- Nunca confirme um horário sem antes chamar schedule_meeting e receber a confirmação.",
     "- Depois que schedule_meeting confirmar um horário, não chame de novo para confirmar. Para trocar uma consulta use reschedule_meeting, nunca crie outra consulta no lugar da existente.",
     cfg.recognizeExisting ? "- Reconheça consultas já marcadas: acolha o retorno ou a resposta a um lembrete, agradeça a confirmação e se coloque à disposição. Não reinicie o agendamento nem ofereça novos horários sem pedido do contato." : "",

@@ -1,18 +1,20 @@
 "use client";
 
 import { useState } from "react";
-import { Check, MessageSquareText, Ban, BrainCircuit, Sparkles, Mic, Rocket } from "lucide-react";
+import { Check, MessageSquareText, Ban, BrainCircuit, Sparkles, Mic, Rocket, Braces } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { PersonaAnswers } from "@/modules/agent-engine/persona";
 import type { ScheduleConfig } from "@/modules/scheduling/config";
 import type { FollowUpConfig } from "@/modules/follow-up/config";
 import type { HandoffConfig } from "@/modules/agent-engine/handoff";
+import type { VariableDefinition } from "@/modules/agent-engine/variables";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { InfoHint } from "@/components/ui/info-hint";
 import { Sandbox } from "@/app/(dashboard)/conversas/Sandbox";
 import { PersonaForm } from "../PersonaForm";
 import { RulesForm } from "../RulesForm";
+import { VariablesSettings } from "../VariablesSettings";
 import { KnowledgeManager } from "../KnowledgeManager";
 import { ActionsToggles } from "../ActionsToggles";
 import { BehaviorSettings } from "../BehaviorSettings";
@@ -42,6 +44,13 @@ const STEPS = [
     icon: Ban,
     title: "O que ele nunca faz",
     help: "Limites diretos: algo que o agente nunca deve fazer, prometer ou dizer. Opcional, mas evita surpresa. Fatos que mudam (preço, horário, cardápio) vão na Base de conhecimento, não aqui.",
+  },
+  {
+    key: "variaveis",
+    label: "Variáveis",
+    icon: Braces,
+    title: "Dados que o agente guarda",
+    help: "Defina dados adicionais que o agente deve lembrar em cada conversa. Nome, número e endereço já estão disponíveis por padrão.",
   },
   {
     key: "cerebro",
@@ -89,6 +98,7 @@ export function AgentWizard({
   agentId,
   persona,
   rules,
+  variableDefinitions,
   documents,
   enabledKeys,
   planLimit,
@@ -111,6 +121,7 @@ export function AgentWizard({
   persona: Partial<PersonaAnswers>;
   /** `avoid` cru do personaDraft — uma regra por linha (ver RulesForm). */
   rules: string;
+  variableDefinitions: VariableDefinition[];
   documents: Doc[];
   enabledKeys: string[];
   planLimit: number;
@@ -140,7 +151,7 @@ export function AgentWizard({
   // preencheu persona e quer seguir direto para Cérebro) e testar não tem
   // conclusão própria.
   const blocking = STEPS.filter(
-    (s) => s.key !== "regras" && s.key !== "testar" && s.key !== "comportamento",
+    (s) => s.key !== "regras" && s.key !== "variaveis" && s.key !== "testar" && s.key !== "comportamento",
   );
   const firstPendingKey = blocking.find((s) => !done[s.key])?.key;
   const initialStep =
@@ -220,6 +231,7 @@ export function AgentWizard({
         {/* Passo próprio de novo (era sub-aba dentro de Personalidade) — o
             design original tinha 5 passos no topo, com Regras separado. */}
         {current.key === "regras" && <RulesForm agentId={agentId} initial={rules} />}
+        {current.key === "variaveis" && <VariablesSettings agentId={agentId} initial={variableDefinitions} />}
         {current.key === "cerebro" && (
           <KnowledgeManager agentId={agentId} documents={documents} />
         )}

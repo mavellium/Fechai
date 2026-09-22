@@ -14,6 +14,7 @@ import { getHandoffConfig } from "@/modules/agent-engine/handoff";
 import { isFishAudioConfigured } from "@/modules/voice/fish";
 import { catalogVoiceByReferenceId } from "@/modules/voice/catalog";
 import type { PersonaAnswers } from "@/modules/agent-engine/persona";
+import { parseVariableDefinitions } from "@/modules/agent-engine/variables";
 import { AgentWizard } from "./AgentWizard";
 import { AgentHeader } from "./AgentHeader";
 
@@ -62,6 +63,7 @@ export default async function AgentePage({ params }: { params: Promise<{ id: str
     // nenhuma) — só informativo aqui, nunca trava o avanço no stepper.
     personalidade: agent.systemPrompt.length > 0,
     regras: rules.trim().length > 0,
+    variaveis: parseVariableDefinitions(agent.variableDefinitions).length > 0,
     cerebro: documents.length > 0,
     habilidades: actions.length > 0,
     comportamento: true, // já vem configurado por padrão
@@ -93,6 +95,7 @@ export default async function AgentePage({ params }: { params: Promise<{ id: str
         agentId={agent.id}
         persona={(agent.personaDraft as Partial<PersonaAnswers> | null) ?? {}}
         rules={rules}
+        variableDefinitions={parseVariableDefinitions(agent.variableDefinitions)}
         documents={documents}
         enabledKeys={actions.map((a) => a.key)}
         planLimit={planOf(tenant?.planKey).maxActiveActions}

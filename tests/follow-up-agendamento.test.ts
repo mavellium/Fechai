@@ -96,4 +96,21 @@ describe("follow-up com consulta marcada", () => {
       "Posso ajudar?",
     );
   });
+
+  it("substitui variáveis conhecidas e omite campo não informado", async () => {
+    db.tenantAction.findMany.mockResolvedValue([{
+      tenantId: "tenant-1", agentId: "agente-1",
+      config: { delayMinutes: 60, message: "Oi {{nome}}! Endereço: {{endereco}}." },
+    }]);
+    db.conversation.findMany.mockResolvedValue([{
+      ...conversation(), variables: { nome: "Alcides" },
+    }]);
+
+    await scanAndSendFollowUps(NOW);
+
+    expect(provider.sendMessage).toHaveBeenCalledWith("instancia-1", "5511999999999", "Oi Alcides!");
+    expect(db.message.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ content: "Oi Alcides!" }),
+    }));
+  });
 });

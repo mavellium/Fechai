@@ -17,6 +17,7 @@ import {
   MAX_REMINDER_MINUTES,
   formatReminderLead,
   validateReminders,
+  type ReminderRule,
 } from "@/modules/scheduling/config";
 import { serializeReminderOverride } from "@/modules/scheduling/reminder-override";
 import { parseLocalDateTime } from "@/modules/scheduling/time";
@@ -147,6 +148,7 @@ const reminderRuleSchema = z.object({
     .min(1, "A antecedência mínima de um lembrete é 1 minuto.")
     .max(MAX_REMINDER_MINUTES, `A antecedência máxima de um lembrete é ${formatReminderLead(MAX_REMINDER_MINUTES)}.`),
   template: z.string().trim().max(500),
+  sendTime: z.string().optional(),
 });
 
 /**
@@ -160,7 +162,7 @@ const reminderRuleSchema = z.object({
  */
 export async function saveAppointmentRemindersAction(
   id: string,
-  reminders: { minutesBefore: number; template: string }[] | null,
+  reminders: ReminderRule[] | null,
 ): Promise<Result> {
   const { tenantId } = await requireTenant();
 

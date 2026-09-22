@@ -8,6 +8,13 @@ import {
   type LlmMessage,
 } from "@/modules/ai";
 import { recordUsage } from "@/modules/ai/usage";
+import { splitSummaryAndVariables, variableExtractionPrompt } from "./summary-variables";
+import {
+  allVariableDefinitions,
+  parseConversationVariables,
+  parseVariableDefinitions,
+  withContactDefaults,
+} from "./variables";
 
 /**
  * Resumo de conversa — "o que rolou aqui, em 30 segundos".
@@ -29,6 +36,12 @@ import { recordUsage } from "@/modules/ai/usage";
  *   velho é pior do que resumo nenhum.
  * - **Sem tools.** É uma chamada de leitura pura; passar os schemas de ação
  *   abriria espaço para o modelo tentar agendar reunião no meio de um resumo.
+ * - **Preenche as variáveis da conversa de quebra.** As variáveis só se
+ *   preenchem quando o agente chama `remember_variables` durante o turno, então
+ *   conversa antiga (ou atendida à mão, ou anterior à variável ser criada)
+ *   fica com tudo "não informado" mesmo tendo o dado escrito no histórico.
+ *   Resumir já relê a conversa inteira: pedir os valores no MESMO retorno
+ *   recupera esse passado sem uma segunda chamada paga. Ver `extractVariables`.
  */
 
 /** Abaixo disto não há o que resumir — ler as mensagens é mais rápido. */
@@ -67,7 +80,9 @@ export async function summarizeConversation(
     where: { id: conversationId, tenantId },
     select: {
       id: true,
-      lead: { select: { name: true } },
+      variables: true,
+      lead: { select: { name: true, phone: true } },
+      agent: { select: { id: true, variableDefinitions: true } },
       _count: { select: { messages: true } },
     },
   });
@@ -99,8 +114,18 @@ export async function summarizeConversation(
     })
     .join("\n");
 
+  // Só pede o que esta conversa ainda não sabe: variável já preenchida pelo
+  // agente durante o turno vale mais que uma releitura, e listá-la só gastaria
+  // tokens para receber de volta o que já está no banco.
+  const known = withContactDefaults(
+    parseConversationVariables(conversation.variables),
+    conversation.lead,
+  );
+  const missing = allVariableDefinitions(parseVariableDefinitions(conversation.agent?.variableDefinitions))
+    .filter((item) => item.key !== "numero" && !known[item.key]);
+
   const messages: LlmMessage[] = [
-    { role: "system", content: SYSTEM_PROMPT },
+    { role: "system", content: SYSTEM_PROMPT + variableExtractionPrompt(missing) },
     { role: "user", content: `Conversa a resumir:\n\n${transcript}` },
   ];
 
@@ -113,7 +138,7 @@ export async function summarizeConversation(
     return { ok: false, error: err.userMessage };
   }
 
-  const summary = text.trim();
+  const { summary, values } = splitSummaryAndVariables(text, missing);
   if (!summary) return { ok: false, error: "A IA não devolveu um resumo. Tente de novo." };
 
   const summaryAt = new Date();
@@ -129,6 +154,30 @@ export async function summarizeConversation(
         "summaryMsgCount" = ${conversation._count.messages}
     WHERE "id" = ${conversationId} AND "tenantId" = ${tenantId}
   `;
+
+  // Depois do resumo, e nunca no lugar dele: a extração é um brinde da mesma
+  // chamada, então falha dela não pode derrubar o que o dono pediu. `known`
+  // vem por último de propósito — se o agente guardou o valor ao vivo durante
+  // a geração, é ele que vale, não a releitura.
+  if (Object.keys(values).length) {
+    try {
+      await prisma.conversation.updateMany({
+        where: { id: conversationId, tenantId },
+        data: { variables: { ...values, ...known } },
+      });
+      // Mesma regra de `rememberConversationVariables`: {{nome}} e o nome do
+      // contato são a mesma informação em dois lugares. Gravar só a variável
+      // deixaria a lista de contatos com o nome antigo do perfil.
+      if (values.nome && !known.nome) {
+        await prisma.lead.updateMany({
+          where: { tenantId, conversation: { id: conversationId } },
+          data: { name: values.nome },
+        });
+      }
+    } catch (err) {
+      console.error(`[summary] variáveis extraídas não foram salvas em ${conversationId}`, err);
+    }
+  }
 
   return { ok: true, summary, summaryAt, messageCount: conversation._count.messages };
 }

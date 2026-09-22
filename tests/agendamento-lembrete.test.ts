@@ -48,6 +48,7 @@ import {
 import { parseReminderOverride, serializeReminderOverride } from "@/modules/scheduling/reminder-override";
 import {
   dueReminders,
+  reminderDueAt,
   remindersFor,
   scanAndSendReminders,
   staleReminders,
@@ -83,6 +84,17 @@ describe("Leitura da config (parseScheduleConfig)", () => {
       reminders: [{ minutesBefore: UM_DIA, template: "novo" }],
     });
     expect(cfg.reminders).toEqual([{ minutesBefore: UM_DIA, template: "novo" }]);
+  });
+
+  it("preserva o horário fixo válido e ignora um horário inválido na leitura", () => {
+    const cfg = parseScheduleConfig({ reminders: [
+      { minutesBefore: UM_DIA, sendTime: "08:30", template: "confirme" },
+      { minutesBefore: 120, sendTime: "08:30", template: "em duas horas" },
+    ] });
+    expect(cfg.reminders).toEqual([
+      { minutesBefore: UM_DIA, sendTime: "08:30", template: "confirme" },
+      { minutesBefore: 120, template: "em duas horas" },
+    ]);
   });
 
   it("ordena do mais distante para o mais próximo — a ordem dos disparos", () => {
@@ -184,6 +196,15 @@ describe("Validação da lista (validateReminders)", () => {
     expect(validateReminders([{ minutesBefore: MAX_REMINDER_MINUTES + 1, template: "oi" }]))
       .toContain("máxima");
   });
+
+  it("aceita horário fixo na véspera e recusa horários inválidos", () => {
+    expect(validateReminders([{ minutesBefore: UM_DIA, sendTime: "08:30", template: "Confirme" }]))
+      .toBeNull();
+    expect(validateReminders([{ minutesBefore: 120, sendTime: "08:30", template: "Confirme" }]))
+      .toContain("dias ou semanas");
+    expect(validateReminders([{ minutesBefore: UM_DIA, sendTime: "25:00", template: "Confirme" }]))
+      .toContain("00:00");
+  });
 });
 
 describe("Texto do lembrete (renderReminder)", () => {
@@ -211,6 +232,14 @@ describe("Texto do lembrete (renderReminder)", () => {
   it("apaga token desconhecido em vez de mandá-lo cru ao paciente", () => {
     const texto = renderReminder("Consulta com {{medico}} {{data}}.", vars);
     expect(texto).not.toContain("{{");
+  });
+
+  it("usa variável da conversa e remove tokens desconhecidos com acento ou hífen", () => {
+    const texto = renderReminder("Oi {{nome}}! {{procedimento}} {{médico}} {{sem-valor}}", {
+      ...vars,
+      extras: { procedimento: "Limpeza" },
+    });
+    expect(texto).toBe("Oi Maria! Limpeza");
   });
 
   it("o template padrão usa só variáveis que existem", () => {
@@ -278,9 +307,31 @@ describe("Lembretes de uma consulta (override)", () => {
     expect(serializeReminderOverride(null)).toBeNull();
     expect(serializeReminderOverride([])).toEqual([]);
   });
+
+  it("preserva o horário fixo no lembrete próprio da consulta", () => {
+    const rules = [{ minutesBefore: UM_DIA, sendTime: "08:30", template: "Confirme" }];
+    expect(parseReminderOverride(serializeReminderOverride(rules))).toEqual(rules);
+  });
 });
 
 describe("Quais disparos estão vencidos (dueReminders)", () => {
+  it("envia um dia antes às 08:30 no fuso da agenda, qualquer que seja a hora da consulta", () => {
+    const rule = { minutesBefore: UM_DIA, sendTime: "08:30", template: "Confirme sua consulta" };
+    const startsAt = new Date("2026-09-23T18:00:00.000Z"); // 15h em São Paulo
+    expect(reminderDueAt(startsAt, rule, "America/Sao_Paulo").toISOString())
+      .toBe("2026-09-22T11:30:00.000Z");
+    const appt = { status: "scheduled", startsAt, remindersSent: [] };
+    expect(dueReminders(appt, [rule], new Date("2026-09-22T11:29:00.000Z"))).toEqual([]);
+    expect(dueReminders(appt, [rule], new Date("2026-09-22T11:30:00.000Z"))).toEqual([rule]);
+  });
+
+  it("calcula o dia anterior no calendário local mesmo na virada de mês", () => {
+    const rule = { minutesBefore: UM_DIA, sendTime: "08:30", template: "Confirme" };
+    const startsAt = new Date("2026-10-01T02:00:00.000Z"); // 30/09 às 23h em São Paulo
+    expect(reminderDueAt(startsAt, rule, "America/Sao_Paulo").toISOString())
+      .toBe("2026-09-29T11:30:00.000Z");
+  });
+
   const regras = [
     { minutesBefore: UMA_SEMANA, template: "semana" },
     { minutesBefore: UM_DIA, template: "dia" },
@@ -410,6 +461,19 @@ describe("Varredura (scanAndSendReminders)", () => {
         data: expect.objectContaining({ remindersSent: { set: [UMA_SEMANA, UM_DIA] } }),
       }),
     );
+  });
+
+  it("inclui consulta noturna na busca e envia às 08:30 da véspera", async () => {
+    acaoConfigurada({ reminders: [{ minutesBefore: UM_DIA, sendTime: "08:30", template: "Confirme, {{nome}}." }] });
+    const now = new Date("2026-09-22T11:30:00.000Z");
+    consultas([{ ...consultaAmanha(), startsAt: new Date("2026-09-24T02:00:00.000Z") }]);
+
+    const result = await scanAndSendReminders(now);
+
+    expect(result.sent).toBe(1);
+    expect(provider.sendMessage).toHaveBeenCalledTimes(1);
+    const query = db.appointment.findMany.mock.calls[0][0];
+    expect(query.where.OR[0].startsAt.lte.getTime() - now.getTime()).toBe(2 * UM_DIA * 60_000);
   });
 
   it("um disparo enviado não cala os seguintes", async () => {

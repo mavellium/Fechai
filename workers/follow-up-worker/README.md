@@ -59,7 +59,9 @@ Regras que não são óbvias:
 - **A busca tem teto**: a maior antecedência configurada entre os agentes com
   lembrete ligado. Sem ele, a varredura carregaria a agenda do ano inteiro para
   descartar quase tudo em memória. Consultas com lembretes próprios entram por
-  um `OR`, porque a antecedência delas pode passar desse teto.
+  um `OR`, porque a antecedência delas pode passar desse teto. Lembretes com
+  horário fixo acrescentam até um dia de margem, pois a manhã da véspera pode
+  ficar mais de 24 horas antes de uma consulta noturna.
 - **A mensagem entra na conversa** (`role: "assistant"`). É isso que faz a
   resposta do paciente cair no `runAgentTurn` normal — "não vou poder" vira
   reagendamento pelo fluxo que já existe, em vez de chegar como conversa nova.

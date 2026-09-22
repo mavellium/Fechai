@@ -5,6 +5,7 @@ import { dateTimeLabel, phoneLabel, relativeTime, waLink } from "@/lib/format";
 import { leadStatusLabel } from "./leadStatus";
 import { ConversationSummary } from "./ConversationSummary";
 import { ResolveButton } from "./ResolveButton";
+import type { ConversationVariables as Values, VariableDefinition } from "@/modules/agent-engine/variables";
 
 export type LeadPanelData = {
   id: string;
@@ -19,6 +20,8 @@ export type LeadPanelData = {
   summary: string | null;
   summaryAt: Date | null;
   summaryMsgCount: number | null;
+  variableDefinitions: VariableDefinition[];
+  variables: Values;
 };
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {

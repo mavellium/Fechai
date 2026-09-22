@@ -4,6 +4,8 @@ import {
   WHATSAPP_PROVIDER_SELECT,
 } from "../../src/modules/whatsapp/meta-config";
 import { parseFollowUpConfig, type FollowUpConfig } from "../../src/modules/follow-up/config";
+import { sanitizeUnresolvedPlaceholders } from "../../src/modules/agent-engine/reply-sanitizer";
+import { parseConversationVariables, withContactDefaults } from "../../src/modules/agent-engine/variables";
 
 // Regra pura de elegibilidade — fácil de testar sem banco.
 export function isEligible(
@@ -95,6 +97,13 @@ export async function scanAndSendFollowUps(now: Date = new Date()) {
       hasActiveAppointment: c.lead.appointments.length > 0,
     }, cutoff)) continue;
 
+    const values = withContactDefaults(parseConversationVariables(c.variables), c.lead);
+    const text = sanitizeUnresolvedPlaceholders(config.message, values);
+    if (!text) {
+      await prisma.conversation.update({ where: { id: c.id }, data: { followUpSentAt: now } });
+      continue;
+    }
+
     let keyId: string | null = null;
     if (!c.lead.isTest) {
       const instance = await prisma.whatsappInstance.findUnique({
@@ -105,7 +114,7 @@ export async function scanAndSendFollowUps(now: Date = new Date()) {
         try {
           const provider = getWhatsAppProviderForInstance(instance);
           if (provider.isConfigured()) {
-            keyId = await provider.sendMessage(instance.externalId, c.lead.phone, config.message);
+            keyId = await provider.sendMessage(instance.externalId, c.lead.phone, text);
           }
         } catch (err) {
           console.error("[follow-up] falha ao enviar", c.id, err);
@@ -117,7 +126,7 @@ export async function scanAndSendFollowUps(now: Date = new Date()) {
       data: {
         conversationId: c.id,
         role: "assistant",
-        content: config.message,
+        content: text,
         whatsappMessageId: keyId ?? undefined,
       },
     });

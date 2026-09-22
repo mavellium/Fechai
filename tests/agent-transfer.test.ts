@@ -22,6 +22,7 @@ const portable: AgentPackage = {
     systemPrompt: "Atenda com clareza.",
     objective: "Agendar",
     personaDraft: { tone: "acolhedor" },
+    variableDefinitions: [{ key: "convenio", description: "Convênio informado pelo contato" }],
     listenAudio: true,
     stopOnEmoji: true,
     speakReplies: true,

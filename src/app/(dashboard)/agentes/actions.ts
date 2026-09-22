@@ -31,6 +31,7 @@ import { listClinicorpCategories } from "@/modules/scheduling/clinicorp";
 import { getCalendarFeatures } from "@/modules/scheduling/features";
 import { MAX_FOLLOWUP_DELAY_MINUTES, saveFollowUpConfig } from "@/modules/follow-up/config";
 import { normalizeGroupId, saveHandoffConfig } from "@/modules/agent-engine/handoff";
+import { validateVariableDefinitions, type VariableDefinition } from "@/modules/agent-engine/variables";
 import {
   ingestDocument,
   deleteDocument,
@@ -62,6 +63,19 @@ import {
 
 export type Result = { ok: boolean; error?: string; info?: string };
 export type AgentCopyResult = Result & { agentId?: string; warnings?: string[] };
+
+export async function saveAgentVariables(agentId: string, definitions: VariableDefinition[]): Promise<Result> {
+  const { tenantId, agent } = await requireAgent(agentId);
+  if (!agent) return { ok: false, error: "Agente não encontrado." };
+  const parsed = z.array(z.object({ key: z.string(), description: z.string() })).safeParse(definitions);
+  if (!parsed.success) return { ok: false, error: "Variáveis inválidas." };
+  const error = validateVariableDefinitions(parsed.data);
+  if (error) return { ok: false, error };
+  const normalized = parsed.data.map(({ key, description }) => ({ key: key.trim().toLowerCase(), description: description.trim() }));
+  await prisma.agent.updateMany({ where: { id: agentId, tenantId }, data: { variableDefinitions: normalized } });
+  revalidatePath(`/agentes/${agentId}`);
+  return { ok: true, info: "Variáveis salvas." };
+}
 
 /**
  * Todas as actions recebem `agentId` e passam por `requireAgent`: o id vem da
@@ -870,6 +884,7 @@ const scheduleConfigSchema = z.object({
       .min(1, "A antecedência mínima de um lembrete é 1 minuto.")
       .max(MAX_REMINDER_MINUTES, `A antecedência máxima de um lembrete é ${formatReminderLead(MAX_REMINDER_MINUTES)}.`),
     template: z.string().trim().max(500),
+    sendTime: z.string().optional(),
   })),
   // Datas bloqueadas (feriado, recesso). Data inválida é recusada em vez de
   // descartada em silêncio: a pessoa digitou aquele dia esperando fechar, e

@@ -36,6 +36,7 @@ export type ReminderDraft = {
   amount: number;
   unit: ReminderUnit;
   template: string;
+  sendTime?: string;
 };
 
 /** Converte a config salva (minutos) para as linhas editáveis da tela. */
@@ -43,6 +44,7 @@ export function toDrafts(reminders: ReminderRule[]): ReminderDraft[] {
   return reminders.map((r) => ({
     ...splitReminderLead(r.minutesBefore),
     template: r.template,
+    sendTime: r.sendTime,
   }));
 }
 
@@ -51,6 +53,7 @@ export function fromDrafts(drafts: ReminderDraft[]): ReminderRule[] {
   return drafts.map((d) => ({
     minutesBefore: draftMinutes(d),
     template: d.template,
+    ...(d.sendTime ? { sendTime: d.sendTime } : {}),
   }));
 }
 
@@ -103,7 +106,12 @@ export function ReminderList({
     const from = REMINDER_UNITS.find((u) => u.value === current.unit)!;
     const to = REMINDER_UNITS.find((u) => u.value === next)!;
     const minutes = (Number.isFinite(current.amount) ? current.amount : 0) * from.minutes;
-    update(index, { unit: next, amount: Math.max(1, Math.round(minutes / to.minutes)) });
+    const amount = Math.max(1, Math.round(minutes / to.minutes));
+    update(index, {
+      unit: next,
+      amount,
+      ...((amount * to.minutes) % 1440 !== 0 ? { sendTime: undefined } : {}),
+    });
   }
 
   function add() {
@@ -158,7 +166,15 @@ export function ReminderList({
                   step={1}
                   className="mt-1.5"
                   value={Number.isFinite(draft.amount) ? draft.amount : ""}
-                  onChange={(e) => update(index, { amount: e.target.valueAsNumber })}
+                  onChange={(e) => {
+                    const amount = e.target.valueAsNumber;
+                    update(index, {
+                      amount,
+                      ...((amount * (REMINDER_UNITS.find((u) => u.value === draft.unit)?.minutes ?? 1)) % 1440 !== 0
+                        ? { sendTime: undefined }
+                        : {}),
+                    });
+                  }}
                   required
                 />
               </div>
@@ -184,6 +200,24 @@ export function ReminderList({
                 Você já tem outro lembrete {formatReminderLead(minutes)} antes. Escolha outro
                 momento.
               </p>
+            )}
+
+            {minutes > 0 && minutes % 1440 === 0 && (
+              <div className="flex flex-wrap items-center gap-2">
+                <label htmlFor={`${id}-horario`} className="text-sm font-medium text-white/85">
+                  Horário do envio
+                </label>
+                <Input
+                  id={`${id}-horario`}
+                  type="time"
+                  className="w-32"
+                  value={draft.sendTime ?? ""}
+                  onChange={(e) => update(index, { sendTime: e.target.value || undefined })}
+                />
+                <span className="text-sm text-white/50">
+                  {draft.sendTime ? "no fuso da agenda" : "Em branco: antecedência exata"}
+                </span>
+              </div>
             )}
 
             <div>

@@ -68,6 +68,25 @@ describe("envio de agendamentos ao Clinicorp", () => {
     expect(db.clinicorpIntegration.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ lastError: null, lastSyncAt: expect.any(Date) }) }));
   });
 
+  it("usa o nome da paciente mesmo quando outra pessoa conversa pelo WhatsApp", async () => {
+    const result = await createAppointment({
+      tenantId: "tenant-1", leadId: "lead-1", title: "Maria Souza", patientName: "Maria Souza",
+      notes: "Primeira consulta", startsAt: event.startsAt, durationMinutes: 15,
+      source: "agent", timezone: event.timeZone,
+    });
+    expect(result.clinicorpSync.status).toBe("synced");
+    expect(db.appointment.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ title: "Maria Souza", patientName: "Maria Souza", notes: "Primeira consulta" }),
+    }));
+    expect(fetchMock.mock.calls.some(([url]) => url.pathname.includes("/patient/get"))).toBe(false);
+    const [, init] = fetchMock.mock.calls.find(([url]) => url.pathname.endsWith("/create_appointment_by_api"))! as unknown as [URL, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(body.PatientName).toBe("Maria Souza");
+    expect(body.Patient_PersonId).toBeUndefined();
+    expect(body.MobilePhone).toBeUndefined();
+    expect(body.Notes).toBe("Primeira consulta");
+  });
+
   it.each([null, [], {}, [{ Status: "CREATED" }], [{ Status: "ERROR", id: 7 }], { error: "recusado" }])("não registra sucesso para resposta 200 sem criação válida: %j", async (body) => {
     integration.categoryDescription = null;
     fetchMock.mockImplementation(async (url: URL) => url.pathname.endsWith("/patient/get") ? json({ PatientId: 33 }) : json(body));

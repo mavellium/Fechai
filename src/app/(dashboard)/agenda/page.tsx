@@ -267,7 +267,7 @@ export default async function AgendaPage({
             ) : (
               <ul className="space-y-3">
                 {dayAppointments.map((appointment) => {
-                  const leadDisplayName = appointment.lead?.name || appointment.lead?.phone || appointment.title;
+                  const leadDisplayName = appointment.patientName || appointment.lead?.name || appointment.lead?.phone || appointment.title;
                   const avatarInitial = leadDisplayName.slice(0, 1).toUpperCase();
 
                   // Status visual sutil como no módulo de conversas (sem pílulas chamativas)
@@ -321,7 +321,7 @@ export default async function AgendaPage({
                             <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-white/60">
                               <span className="flex items-center gap-1 font-mono text-micro uppercase tracking-wider text-white/70">
                                 <User size={12} aria-hidden className="text-white/40" />
-                                {appointment.lead.name || appointment.lead.phone}
+                                Contato: {appointment.lead.name || appointment.lead.phone}
                               </span>
                               <Link
                                 href={`/conversas?q=${encodeURIComponent(appointment.lead.phone)}`}

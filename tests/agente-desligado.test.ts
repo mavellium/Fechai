@@ -21,6 +21,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const db = vi.hoisted(() => ({
   conversation: {
     findUnique: vi.fn(),
+    findFirst: vi.fn(async () => ({ variables: {}, lead: { name: null, phone: "sandbox:test" } })),
     update: vi.fn(async () => ({})),
     updateMany: vi.fn(async () => ({})),
   },

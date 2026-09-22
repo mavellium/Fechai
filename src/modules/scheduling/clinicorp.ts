@@ -328,12 +328,13 @@ function digits(phone: string): string {
 }
 
 /**
- * Acha o paciente pelo telefone; cria se não existir.
+ * Acha o paciente pelo telefone; cria se não existir. Só deve ser usado
+ * quando o contato do WhatsApp é a própria pessoa atendida.
  *
  * O vínculo com o cadastro é o que faz o agendamento valer alguma coisa para a
  * clínica — sem `Patient_PersonId` o horário entra solto, sem prontuário nem
  * histórico. Quando a busca falha (API fora, telefone estranho), devolve null e
- * o agendamento segue só com nome e telefone, que a API também aceita.
+ * o agendamento segue sem vínculo com o prontuário.
  */
 async function resolvePatientId(
   integration: ClinicorpIntegration,
@@ -385,6 +386,8 @@ async function resolvePatientId(
 
 export type ClinicorpEventInput = {
   title: string;
+  /** Nome do paciente, que pode ser diferente de quem enviou a mensagem. */
+  patientName?: string;
   notes?: string | null;
   startsAt: Date;
   endsAt: Date;
@@ -427,7 +430,7 @@ export async function pushAppointmentToClinicorp(
   // recebe só o motivo, porque já tem o próprio contexto na mão.
   const who = isTest
     ? "do chat de teste"
-    : `de ${input.lead?.name?.trim() || input.lead?.phone || "contato sem nome"}`;
+    : `de ${input.patientName?.trim() || input.lead?.name?.trim() || input.lead?.phone || "contato sem nome"}`;
   const context = `Agendamento ${who} para ${formatInZone(input.startsAt, input.timeZone)}, salvo só no fechai`;
   const failed = async (error: string): Promise<ClinicorpSyncResult> => {
     await recordOutcome(tenantId, `${context}. ${error}`);
@@ -466,7 +469,11 @@ export async function pushAppointmentToClinicorp(
       }
     }
 
-    const patientId = input.lead && !isTest ? await resolvePatientId(integration, input.lead) : null;
+    const patientName = input.patientName?.trim() || input.lead?.name?.trim() || input.title;
+    // O telefone do contato pode ser da pessoa que marcou para outra. Nesse
+    // caso não vincule o prontuário encontrado pelo telefone ao paciente novo.
+    const samePerson = !input.patientName || patientName.localeCompare(input.lead?.name?.trim() ?? "", "pt-BR", { sensitivity: "base" }) === 0;
+    const patientId = input.lead && !isTest && samePerson ? await resolvePatientId(integration, input.lead) : null;
     if (patientId && (!/^\d+$/.test(patientId) || !Number.isSafeInteger(Number(patientId)) || Number(patientId) <= 0)) {
       return await failed("O identificador do paciente é inválido ou excede a precisão suportada.");
     }
@@ -478,8 +485,8 @@ export async function pushAppointmentToClinicorp(
         Clinic_BusinessId: Number(integration.businessId),
         ...(integration.dentistId ? { Dentist_PersonId: Number(integration.dentistId) } : {}),
         ...(patientId ? { Patient_PersonId: Number(patientId) } : {}),
-        PatientName: isTest ? "TESTE fechai (chat de teste do agente)" : input.lead?.name?.trim() || input.title,
-        ...(!isTest && input.lead?.phone ? { MobilePhone: digits(input.lead.phone) } : {}),
+        PatientName: isTest ? "TESTE fechai (chat de teste do agente)" : patientName,
+        ...(!isTest && samePerson && input.lead?.phone ? { MobilePhone: digits(input.lead.phone) } : {}),
         // A data vai como o dia local em ISO. Mandar o instante UTC cru faria o
         // agendamento cair no dia anterior para horários da manhã no Brasil.
         date: `${localDate(input.startsAt, input.timeZone)}T00:00:00.000Z`,

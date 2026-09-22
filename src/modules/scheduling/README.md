@@ -124,6 +124,15 @@ minutos"). Teto por lembrete: `MAX_REMINDER_MINUTES` (8 semanas).
 e no servidor): "1 dia" e "24 horas" digitados sem perceber que são a mesma
 coisa chegariam como duas mensagens coladas.
 
+Lembretes com antecedência em dias ou semanas podem ter `sendTime` (`HH:mm`):
+o disparo ocorre nesse horário do dia local calculado antes da consulta, usando o fuso
+da agenda. Por exemplo, `minutesBefore: 1440` e `sendTime: "08:30"` disparam
+às 08h30 da véspera, mesmo que a consulta seja às 15h. Sem `sendTime`, a
+antecedência continua sendo uma duração exata, como nas configs antigas. O
+worker amplia o teto da busca em até um dia para incluir consultas noturnas
+cujo lembrete fixo vence na manhã da véspera. `remindersSent` continua usando
+`minutesBefore` como identidade do disparo.
+
 **Configs antigas continuam valendo.** Antes o lembrete era um só, em
 `reminderMinutesBefore` + `reminderTemplate`. `parseScheduleConfig` lê os dois
 formatos e converte na leitura, dando preferência à lista. **Não remova esse
@@ -209,6 +218,13 @@ preserva o ID antigo para uma tentativa posterior de cancelamento.
 
 `schedule_meeting` recusa duplicar uma consulta existente, salvo pedido de uma
 consulta adicional (`additionalAppointment: true`); trocar data usa reagendamento.
+O agente exige `patientName`: quem conversa no WhatsApp pode marcar para outra
+pessoa. Esse nome vai em `Appointment.patientName`, no título da agenda e em
+`PatientName` no Clinicorp; `Lead.name` continua sendo o nome do contato. Quando
+os dois nomes diferem, a integração não associa o prontuário encontrado pelo
+telefone do contato à paciente nem grava esse telefone como sendo dela. Se o
+Clinicorp exigir telefone do paciente, o espelho pode falhar; a consulta local
+permanece e a falha aparece no painel. Reagendar preserva o nome salvo na consulta.
 Regressões: `tests/agendamento-config.test.ts` e `tests/agendamento-tools.test.ts`.
 
 ## Onde cada coisa acontece
