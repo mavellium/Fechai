@@ -37,7 +37,17 @@ export async function getOrCreateConversation(
       },
       include: { conversation: true },
     });
-  } else if (!lead.conversation) {
+  } else if (!lead.name && name?.trim() && !lead.isTest) {
+    // Uma conversa iniciada pelo atendente nasce sem nome. O primeiro perfil
+    // recebido do próprio contato pode completar esse dado.
+    lead = await prisma.lead.update({
+      where: { id: lead.id },
+      data: { name: name.trim() },
+      include: { conversation: true },
+    });
+  }
+
+  if (!lead.conversation) {
     const conversation = await prisma.conversation.create({
       data: { tenantId, leadId: lead.id, isTest: lead.isTest },
     });

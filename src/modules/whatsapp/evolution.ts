@@ -350,7 +350,9 @@ export class EvolutionProvider implements WhatsAppProvider {
     return {
       instanceExternalId: p.instance ?? "",
       fromPhone,
-      fromName: data.pushName,
+      // Em mensagens enviadas pela própria conta, pushName é o nome do
+      // WhatsApp conectado, não o nome do destinatário.
+      fromName: data.key?.fromMe ? undefined : data.pushName,
       text,
       // Grupos têm JID com sufixo @g.us (ex: 5511999999999-1615000000@g.us).
       isGroup,

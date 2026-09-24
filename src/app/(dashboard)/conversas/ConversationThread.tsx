@@ -43,12 +43,12 @@ export function ConversationThread({
   voiceReady?: boolean;
 }) {
   const status = leadStatusLabel(conversation.lead.status);
-  const name = conversation.lead.name ?? "Cliente sem nome";
+  const name = conversation.lead.name?.trim() || phoneLabel(conversation.lead.phone);
 
   // Quem escreveu cada mensagem: o lead ("user"), a IA ("assistant" de
   // "agent") ou o dono da conta respondendo à mão ("assistant" de "human").
   function senderLabel(m: ThreadMessage) {
-    if (m.role === "user") return conversation.lead.name ?? "cliente";
+    if (m.role === "user") return name;
     return m.sentBy === "human" ? "você" : "agente";
   }
 
