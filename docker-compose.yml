@@ -25,7 +25,9 @@
 # Detalhes e passo a passo completo em README.docker.md.
 
 x-web-common: &web-common
-  image: fechai-app:prod
+  # APP_IMAGE vem do GitHub Actions (imagem pronta no GHCR, a VPS só baixa).
+  # Sem ela, cai no build local — útil só em emergência, é o que derruba a VPS.
+  image: ${APP_IMAGE:-fechai-app:prod}
   build:
     context: .
     dockerfile: Dockerfile
@@ -129,7 +131,7 @@ services:
       - "traefik.http.services.fechai-green.loadbalancer.healthcheck.interval=5s"
 
   worker:
-    image: fechai-app:prod
+    image: ${APP_IMAGE:-fechai-app:prod}
     build:
       context: .
       dockerfile: Dockerfile

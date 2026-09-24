@@ -7,8 +7,8 @@ import { FormFeedback } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { maskPhone } from "@/lib/br-lead";
 import { formatBlockedPhone } from "@/modules/whatsapp/blocklist";
+import { formatBlockedPhoneInput } from "@/modules/whatsapp/blocklist-input";
 import { blockWhatsappNumber, unblockWhatsappNumber } from "./actions";
 
 export type BlockedRow = { id: string; phone: string; label: string | null };
@@ -85,8 +85,8 @@ export function WhatsappBlocklist({ blocked }: { blocked: BlockedRow[] }) {
             inputMode="tel"
             autoComplete="off"
             placeholder="(11) 98765-4321"
-            value={phone}
-            onChange={(e) => setPhone(maskPhone(e.target.value))}
+            value={formatBlockedPhoneInput(phone)}
+            onChange={(e) => setPhone(e.target.value)}
             disabled={pending}
           />
         </Field>
@@ -119,6 +119,11 @@ export function WhatsappBlocklist({ blocked }: { blocked: BlockedRow[] }) {
                 {/* Mono: é um dado a conferir dígito a dígito, não texto corrido. */}
                 <p className="font-mono text-sm text-white">{formatBlockedPhone(row.phone)}</p>
                 {row.label && <p className="mt-0.5 truncate text-xs text-white/55">{row.label}</p>}
+                {/^55\d{9}$/.test(row.phone) && (
+                  <p className="mt-1 text-xs text-danger">
+                    Este número parece incompleto. Remova e cadastre novamente com DDD.
+                  </p>
+                )}
               </div>
               <Button
                 type="button"

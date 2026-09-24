@@ -67,6 +67,9 @@ Regras que não são óbvias:
   reagendamento pelo fluxo que já existe, em vez de chegar como conversa nova.
 - **Conversa de teste fica de fora** (`lead.isTest`), como no follow-up: o
   telefone do sandbox é sintético.
+- **Número bloqueado não recebe lembrete.** Os disparos vencidos são fechados
+  em `remindersSent`, sem mensagem e sem `reminderSentAt`, para não voltarem
+  depois de desbloquear o contato nem aparecerem como enviados na agenda.
 - **WhatsApp desconectado não impede marcar** como enviado. A janela do
   lembrete passa; insistir nos ciclos seguintes mandaria "é amanhã" na véspera
   errada.
@@ -124,4 +127,6 @@ automáticas relacionadas à consulta são responsabilidade dos lembretes.
   `Appointment.remindersSent` nos lembretes — um por antecedência).
 - Não responde ao que o contato escrever de volta: a mensagem entra na conversa
   e quem conduz dali em diante é o `runAgentTurn`, pelo webhook.
+- Não envia follow-up para números bloqueados. Não preenche `followUpSentAt`
+  nesses casos porque a tela e o relatório tratam a data como envio real.
 - Não roda dentro do Next — é um processo à parte (deploy no Railway/Fly.io).

@@ -29,10 +29,10 @@ COPY prisma ./prisma
 RUN npm ci --include=dev
 
 # ---------- builder ----------
+# Reaproveita o node_modules do estágio deps (já com o Prisma Client gerado pelo
+# postinstall) em vez de rodar um segundo `npm ci` — era o passo mais lento.
 FROM base AS builder
-COPY package.json package-lock.json ./
-COPY prisma ./prisma
-RUN npm ci --include=dev
+COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 # NEXT_PUBLIC_* é inlined no bundle em build time — precisa chegar como build arg,
 # não só como env de runtime do container final.

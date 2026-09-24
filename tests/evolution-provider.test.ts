@@ -174,3 +174,87 @@ describe("Webhook da instância", () => {
     expect(chamadas).toHaveLength(0);
   });
 });
+
+describe("Telefone do contato no webhook", () => {
+  function mensagem(key: {
+    remoteJid: string;
+    remoteJidAlt?: string;
+    senderPn?: string;
+    fromMe?: boolean;
+  }) {
+    return {
+      instance: "tenant_abc",
+      data: { key: { ...key, id: "MSG1" }, message: { conversation: "Oi" } },
+    };
+  }
+
+  it("usa o telefone principal quando o JID já contém o número", async () => {
+    const provider = await novoProvider();
+    expect(provider.parseWebhook(mensagem({
+      remoteJid: "5511987654321@s.whatsapp.net",
+      remoteJidAlt: "123456789012345@lid",
+    }))).toMatchObject({ fromPhone: "5511987654321", isGroup: false });
+  });
+
+  it("usa o telefone alternativo quando a Evolution entrega um LID", async () => {
+    const provider = await novoProvider();
+    expect(provider.parseWebhook(mensagem({
+      remoteJid: "123456789012345@lid",
+      remoteJidAlt: "5511987654321@s.whatsapp.net",
+    }))).toMatchObject({ fromPhone: "5511987654321", isGroup: false });
+  });
+
+  it("também resolve mensagens enviadas à mão para um contato com LID", async () => {
+    const provider = await novoProvider();
+    expect(provider.parseWebhook(mensagem({
+      remoteJid: "123456789012345@lid",
+      remoteJidAlt: "5511987654321@c.us",
+      fromMe: true,
+    }))).toMatchObject({ fromPhone: "5511987654321", isFromMe: true });
+  });
+
+  it("aceita senderPn de uma mensagem recebida quando falta JID alternativo", async () => {
+    const provider = await novoProvider();
+    expect(provider.parseWebhook(mensagem({
+      remoteJid: "123456789012345@lid",
+      senderPn: "5511987654321@s.whatsapp.net",
+      fromMe: false,
+    }))).toMatchObject({ fromPhone: "5511987654321", isFromMe: false });
+  });
+
+  it("não confunde senderPn de mensagem fromMe com o telefone do contato", async () => {
+    const provider = await novoProvider();
+    expect(provider.parseWebhook(mensagem({
+      remoteJid: "123456789012345@lid",
+      senderPn: "5511999999999@s.whatsapp.net",
+      fromMe: true,
+    }))).toBeNull();
+  });
+
+  it("ignora JID alternativo sem telefone e usa senderPn válido", async () => {
+    const provider = await novoProvider();
+    expect(provider.parseWebhook(mensagem({
+      remoteJid: "123456789012345@lid",
+      remoteJidAlt: "invalido@s.whatsapp.net",
+      senderPn: "5511987654321@s.whatsapp.net",
+      fromMe: false,
+    }))).toMatchObject({ fromPhone: "5511987654321" });
+  });
+
+  it("não trata LID sem telefone alternativo como número de contato", async () => {
+    const provider = await novoProvider();
+    expect(provider.parseWebhook(mensagem({ remoteJid: "123456789012345@lid" }))).toBeNull();
+    expect(provider.parseWebhook(mensagem({
+      remoteJid: "123456789012345@lid",
+      remoteJidAlt: "987654321012345@lid",
+    }))).toBeNull();
+  });
+
+  it("preserva a identificação de grupos", async () => {
+    const provider = await novoProvider();
+    expect(provider.parseWebhook(mensagem({ remoteJid: "120363123456789@g.us" }))).toMatchObject({
+      fromPhone: "120363123456789",
+      isGroup: true,
+    });
+  });
+});

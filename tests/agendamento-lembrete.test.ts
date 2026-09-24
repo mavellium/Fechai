@@ -20,6 +20,7 @@ const db = vi.hoisted(() => ({
   tenantAction: { findMany: vi.fn() },
   appointment: { findMany: vi.fn(), update: vi.fn() },
   whatsappInstance: { findUnique: vi.fn() },
+  whatsappBlockedNumber: { findUnique: vi.fn() },
   message: { create: vi.fn() },
 }));
 const provider = vi.hoisted(() => ({
@@ -398,6 +399,7 @@ describe("Varredura (scanAndSendReminders)", () => {
     provider.isConfigured.mockReturnValue(true);
     provider.sendMessage.mockResolvedValue("wamid-1");
     db.whatsappInstance.findUnique.mockResolvedValue({ externalId: "inst-1", status: "connected" });
+    db.whatsappBlockedNumber.findUnique.mockResolvedValue(null);
   });
 
   function acaoConfigurada(over: { enabled?: boolean; reminderEnabled?: boolean; reminders?: unknown } = {}) {
@@ -496,6 +498,26 @@ describe("Varredura (scanAndSendReminders)", () => {
 
     expect(r.sent).toBe(0);
     expect(provider.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("fecha lembretes de número bloqueado sem enviar nem registrar mensagem", async () => {
+    acaoConfigurada();
+    consultas([consultaAmanha()]);
+    db.whatsappBlockedNumber.findUnique.mockResolvedValue({ id: "bloqueio-1" });
+
+    const r = await scanAndSendReminders(AGORA);
+
+    expect(r.sent).toBe(0);
+    expect(db.whatsappBlockedNumber.findUnique).toHaveBeenCalledWith({
+      where: { tenantId_phone: { tenantId: "tenant-1", phone: "1199990000" } },
+      select: { id: true },
+    });
+    expect(provider.sendMessage).not.toHaveBeenCalled();
+    expect(db.message.create).not.toHaveBeenCalled();
+    expect(db.appointment.update).toHaveBeenCalledWith({
+      where: { id: "appt-1" },
+      data: { remindersSent: { set: [UMA_SEMANA, UM_DIA] } },
+    });
   });
 
   it("respeita os lembretes próprios da consulta", async () => {

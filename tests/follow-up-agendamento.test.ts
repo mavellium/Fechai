@@ -4,6 +4,7 @@ const db = vi.hoisted(() => ({
   tenantAction: { findMany: vi.fn() },
   conversation: { findMany: vi.fn(), update: vi.fn() },
   whatsappInstance: { findUnique: vi.fn() },
+  whatsappBlockedNumber: { findUnique: vi.fn() },
   message: { create: vi.fn() },
 }));
 const provider = vi.hoisted(() => ({
@@ -48,6 +49,7 @@ beforeEach(() => {
   });
   db.message.create.mockResolvedValue({ id: "mensagem-1" });
   db.conversation.update.mockResolvedValue({});
+  db.whatsappBlockedNumber.findUnique.mockResolvedValue(null);
 });
 
 describe("follow-up com consulta marcada", () => {
@@ -95,6 +97,21 @@ describe("follow-up com consulta marcada", () => {
       "5511999999999",
       "Posso ajudar?",
     );
+  });
+
+  it("não envia nem registra follow-up para número bloqueado", async () => {
+    db.conversation.findMany.mockResolvedValue([conversation()]);
+    db.whatsappBlockedNumber.findUnique.mockResolvedValue({ id: "bloqueio-1" });
+
+    await expect(scanAndSendFollowUps(NOW)).resolves.toEqual({ scanned: 1, sent: 0 });
+
+    expect(db.whatsappBlockedNumber.findUnique).toHaveBeenCalledWith({
+      where: { tenantId_phone: { tenantId: "tenant-1", phone: "1199999999" } },
+      select: { id: true },
+    });
+    expect(provider.sendMessage).not.toHaveBeenCalled();
+    expect(db.message.create).not.toHaveBeenCalled();
+    expect(db.conversation.update).not.toHaveBeenCalled();
   });
 
   it("substitui variáveis conhecidas e omite campo não informado", async () => {

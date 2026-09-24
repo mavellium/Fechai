@@ -12,6 +12,7 @@ import {
 } from "../../src/modules/scheduling/config";
 import { parseReminderOverride } from "../../src/modules/scheduling/reminder-override";
 import { parseConversationVariables } from "../../src/modules/agent-engine/variables";
+import { isPhoneBlocked } from "../../src/modules/whatsapp/blocklist";
 import { dateInZone, partsInZone, timeInZone, zonedTimeToUtc } from "../../src/modules/scheduling/time";
 
 /**
@@ -181,6 +182,14 @@ export async function scanAndSendReminders(now: Date = new Date()) {
     const closing = due.map((r) => r.minutesBefore);
 
     if (!appt.lead?.phone) {
+      await markSent(appt.id, appt.remindersSent, closing, null);
+      continue;
+    }
+
+    // Uma consulta anterior ao bloqueio ainda aparece nesta varredura.
+    // Fecha os disparos sem envio para não surgir lembrete atrasado depois de
+    // desbloquear, preservando reminderSentAt como registro de envio real.
+    if (await isPhoneBlocked(appt.tenantId, appt.lead.phone)) {
       await markSent(appt.id, appt.remindersSent, closing, null);
       continue;
     }

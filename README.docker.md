@@ -170,17 +170,33 @@ docker compose down -v
 
 ```bash
 git pull --ff-only origin main
-./deploy.sh all
+docker login ghcr.io            # uma vez, com um token read:packages
+APP_IMAGE=ghcr.io/mavellium/fechai:prod ./deploy.sh all
 ```
+
+**A imagem não é construída na VPS.** O `next build` consumia a máquina de
+produção por 30+ minutos e derrubava o que estava no ar, com ou sem blue/green.
+O GitHub Actions compila e publica no GHCR; a VPS só baixa. Rodar
+`./deploy.sh` **sem** `APP_IMAGE` ainda funciona (build local com `nice`/`ionice`),
+mas é só para emergência — é exatamente o caminho que derrubava o servidor.
 
 ### O que acontece ao fazer push para `main`
 
 Com os secrets do GitHub Actions configurados, o workflow `.github/workflows/deploy.yml`:
 
-1. executa TypeScript, lint e testes;
-2. conecta na VPS e faz `git pull --ff-only origin main`;
-3. constrói uma nova imagem e recria o slot web inativo;
-4. depois de o novo web ficar saudável, troca o tráfego e recria o worker.
+1. executa TypeScript, lint e testes **e**, em paralelo, constrói a imagem no
+   runner do GitHub (cache de camadas `type=gha`) e publica em
+   `ghcr.io/mavellium/fechai:<sha>` e `:prod`;
+2. conecta na VPS, faz `git pull --ff-only origin main` (só compose/scripts) e
+   login no GHCR com o `GITHUB_TOKEN` do próprio job (expira ao fim do job);
+3. baixa a imagem e recria o slot web inativo;
+4. depois de o novo web ficar saudável, troca o tráfego, recria o worker e
+   apaga imagens do GHCR com mais de 3 dias que nenhum container usa.
+
+Os `NEXT_PUBLIC_*` entram no bundle em build time, então precisam estar em
+**Settings › Secrets and variables › Actions › Variables** (`NEXT_PUBLIC_SITE_URL`,
+`NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`, `NEXT_PUBLIC_BUNNY_PULL_ZONE`) — o `.env` da
+VPS não chega mais ao build.
 
 Ele **não cria nem recria o Postgres**, não cria o banco `saas_test` e não apaga
 o volume `pgdata`. O container de produção existente continua sendo usado e os
@@ -205,7 +221,7 @@ não compartilha containers, rede interna ou volumes com produção. O Traefik
 exige `TEST_BASIC_AUTH` antes de mostrar o login do app, porque as contas do
 seed usam credenciais públicas de demonstração.
 
-O deploy usa dois slots. Ele compila a nova imagem enquanto o slot atual atende, sobe o slot
+O deploy usa dois slots. Ele baixa a nova imagem enquanto o slot atual atende, sobe o slot
 inativo, espera seu `/api/health`, aguarda o Traefik descobri-lo e só então para o anterior. Se o
 build, o boot ou o health check falhar, a versão atual continua no ar. Os comandos disponíveis são:
 

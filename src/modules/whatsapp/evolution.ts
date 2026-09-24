@@ -5,6 +5,11 @@ import type {
   WhatsAppStatus,
 } from "./provider";
 
+function isPhoneJid(value: unknown): value is string {
+  return typeof value === "string" &&
+    /^\d{8,15}@(s\.whatsapp\.net|c\.us)$/.test(value);
+}
+
 // Adapter da Evolution API (self-hosted). Docs variam por versão; os endpoints
 // abaixo seguem a v2 (/instance/create, /instance/connect, /message/sendText).
 export class EvolutionProvider implements WhatsAppProvider {
@@ -292,7 +297,13 @@ export class EvolutionProvider implements WhatsAppProvider {
     const p = payload as {
       instance?: string;
       data?: {
-        key?: { remoteJid?: string; fromMe?: boolean; id?: string };
+        key?: {
+          remoteJid?: string;
+          remoteJidAlt?: string;
+          senderPn?: string;
+          fromMe?: boolean;
+          id?: string;
+        };
         pushName?: string;
         message?: {
           conversation?: string;
@@ -321,8 +332,19 @@ export class EvolutionProvider implements WhatsAppProvider {
       "";
     // Voz (pttMessage) e arquivo de áudio (audioMessage) têm a mesma forma.
     const hasAudio = Boolean(data.message?.audioMessage ?? data.message?.pttMessage);
-    const jid = data.key?.remoteJid ?? "";
-    const fromPhone = jid.split("@")[0];
+    const jid = typeof data.key?.remoteJid === "string" ? data.key.remoteJid : "";
+    const isGroup = jid.endsWith("@g.us");
+    // O identificador @lid não é um telefone. Em chats privados a Evolution
+    // pode trazer o número no JID alternativo. Em versões antigas, senderPn é
+    // o telefone do remetente recebido; em mensagens fromMe pode ser o nosso.
+    const phoneJid = jid.endsWith("@lid")
+      ? [data.key?.remoteJidAlt, data.key?.fromMe ? null : data.key?.senderPn].find(isPhoneJid)
+      : jid;
+    // Sem telefone não há como associar a mensagem a um bloqueio nem responder
+    // com segurança ao contato correto.
+    const contactJid = isGroup ? jid : phoneJid;
+    if (!contactJid || (!isGroup && !isPhoneJid(contactJid))) return null;
+    const fromPhone = contactJid.split("@")[0];
     if ((!text && !hasAudio) || !fromPhone) return null;
 
     return {
@@ -331,7 +353,7 @@ export class EvolutionProvider implements WhatsAppProvider {
       fromName: data.pushName,
       text,
       // Grupos têm JID com sufixo @g.us (ex: 5511999999999-1615000000@g.us).
-      isGroup: jid.endsWith("@g.us"),
+      isGroup,
       hasAudio,
       messageKeyId: data.key?.id,
       isReaction: Boolean(reaction),

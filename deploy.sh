@@ -20,6 +20,32 @@ fi
 
 COMPOSE=(docker compose --profile blue --profile green)
 
+# Imagem pronta (GHCR, construída no GitHub Actions) ou build local. O build do
+# Next consome a VPS inteira por dezenas de minutos e derruba o que está no ar;
+# com APP_IMAGE a VPS só baixa as camadas que mudaram.
+IMAGE_PULLED=0
+prepare_image() {
+  local service="$1"
+  if [[ -n "${APP_IMAGE:-}" ]]; then
+    if [[ "${IMAGE_PULLED}" == "0" ]]; then
+      echo "==> Baixando imagem pronta ${APP_IMAGE}..."
+      docker pull "${APP_IMAGE}"
+      IMAGE_PULLED=1
+    fi
+  else
+    echo "==> APP_IMAGE não definida: construindo ${service} NA VPS (lento e pesado)..." >&2
+    nice -n 19 ionice -c3 "${COMPOSE[@]}" build "${service}"
+  fi
+}
+
+# Imagens antigas do GHCR que nenhum container (nem o parado do rollback) usa.
+prune_old_images() {
+  [[ -n "${APP_IMAGE:-}" ]] || return 0
+  docker image prune -af \
+    --filter "label=org.opencontainers.image.source=https://github.com/mavellium/Fechai" \
+    --filter "until=72h" >/dev/null || true
+}
+
 running_web() {
   "${COMPOSE[@]}" ps --status running --services 2>/dev/null |
     grep -E '^web-(blue|green)$' | head -n 1 || true
@@ -76,8 +102,8 @@ deploy_web() {
   if [[ "${active}" == "web-blue" ]]; then candidate="web-green"; else candidate="web-blue"; fi
 
   echo "==> Versão ativa: ${active:-legada ou primeira instalação}"
-  echo "==> Construindo ${candidate}; a aplicação atual continua atendendo..."
-  "${COMPOSE[@]}" build "${candidate}"
+  echo "==> Preparando ${candidate}; a aplicação atual continua atendendo..."
+  prepare_image "${candidate}"
 
   if [[ "${DEPLOY_DB_PUSH:-0}" == "1" ]]; then
     echo "==> Aplicando schema antes da troca (use somente mudanças retrocompatíveis)..."
@@ -85,7 +111,7 @@ deploy_web() {
   fi
 
   echo "==> Subindo ${candidate} em paralelo..."
-  if ! "${COMPOSE[@]}" up -d --no-deps --force-recreate "${candidate}"; then
+  if ! "${COMPOSE[@]}" up -d --no-deps --no-build --force-recreate "${candidate}"; then
     echo "A nova versão não iniciou; a atual continua atendendo." >&2
     exit 1
   fi
@@ -116,8 +142,8 @@ deploy_web() {
 
 deploy_worker() {
   echo "==> Atualizando worker; jobs pendentes permanecem no Redis..."
-  "${COMPOSE[@]}" build worker
-  "${COMPOSE[@]}" up -d --no-deps --force-recreate --wait --wait-timeout 180 worker
+  prepare_image worker
+  "${COMPOSE[@]}" up -d --no-deps --no-build --force-recreate --wait --wait-timeout 180 worker
 }
 
 "${COMPOSE[@]}" config -q
@@ -128,3 +154,5 @@ case "${MODE}" in
   worker) ensure_infra; deploy_worker ;;
   all) ensure_infra; deploy_web; deploy_worker ;;
 esac
+
+[[ "${MODE}" == "rollback" ]] || prune_old_images

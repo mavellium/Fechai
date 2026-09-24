@@ -6,6 +6,7 @@ import {
 import { parseFollowUpConfig, type FollowUpConfig } from "../../src/modules/follow-up/config";
 import { sanitizeUnresolvedPlaceholders } from "../../src/modules/agent-engine/reply-sanitizer";
 import { parseConversationVariables, withContactDefaults } from "../../src/modules/agent-engine/variables";
+import { isPhoneBlocked } from "../../src/modules/whatsapp/blocklist";
 
 // Regra pura de elegibilidade — fácil de testar sem banco.
 export function isEligible(
@@ -96,6 +97,11 @@ export async function scanAndSendFollowUps(now: Date = new Date()) {
       lastRole: c.messages[0]?.role,
       hasActiveAppointment: c.lead.appointments.length > 0,
     }, cutoff)) continue;
+
+    // O webhook barra novas mensagens desse contato, mas a conversa antiga
+    // continua elegível aqui. Não registrar um follow-up que não foi enviado:
+    // followUpSentAt também alimenta a tela e o relatório de recuperação.
+    if (await isPhoneBlocked(c.tenantId, c.lead.phone)) continue;
 
     const values = withContactDefaults(parseConversationVariables(c.variables), c.lead);
     const text = sanitizeUnresolvedPlaceholders(config.message, values);

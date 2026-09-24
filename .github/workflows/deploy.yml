@@ -35,22 +35,83 @@ jobs:
       - run: npm run lint
       - run: npm test
 
-  deploy:
-    needs: verificacoes
+  # O build roda aqui, no runner do GitHub, e não na VPS: `next build` consumia
+  # a máquina de produção por 30+ minutos e derrubava o que estava no ar. A VPS
+  # só baixa a imagem pronta (e só as camadas que mudaram).
+  #
+  # Roda em paralelo com as verificações para não somar tempo; o deploy espera
+  # os dois. Imagem de commit reprovado fica no GHCR, mas nunca vai para a VPS.
+  imagem:
+    name: Imagem
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.nome.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: nome
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/fechai:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # NEXT_PUBLIC_* entram no bundle em build time — por isso precisam existir
+      # aqui (Settings › Secrets and variables › Actions › Variables), não só no
+      # .env da VPS. São públicas por natureza, então vão como variables.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.nome.outputs.image }}
+            ghcr.io/${{ github.repository_owner }}/fechai:prod
+          labels: |
+            org.opencontainers.image.source=https://github.com/mavellium/Fechai
+            org.opencontainers.image.revision=${{ github.sha }}
+          build-args: |
+            NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=${{ vars.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY }}
+            NEXT_PUBLIC_BUNNY_PULL_ZONE=${{ vars.NEXT_PUBLIC_BUNNY_PULL_ZONE }}
+            NEXT_PUBLIC_SITE_URL=${{ vars.NEXT_PUBLIC_SITE_URL }}
+          cache-from: type=gha,scope=fechai-prod
+          cache-to: type=gha,mode=max,scope=fechai-prod
+
+  deploy:
+    needs: [verificacoes, imagem]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
 
     steps:
+      # O GITHUB_TOKEN vale só durante este job: a VPS faz login no GHCR com ele,
+      # baixa a imagem e sai — nenhum token de longa duração fica no servidor.
       - name: Executando deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          APP_IMAGE: ${{ needs.imagem.outputs.image }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           host: ${{ secrets.HOST_IP }}
           username: ${{ secrets.HOST_USERNAME }}
           key: ${{ secrets.HOST_SSH_KEY }}
           port: 22
-          command_timeout: 30m
+          command_timeout: 15m
+          envs: APP_IMAGE,GHCR_USER,GHCR_TOKEN
           script: |
+            set -e
             cd /var/www/Fechai
             git pull --ff-only origin main
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
             chmod +x deploy.sh
-            ./deploy.sh all
-            
+            APP_IMAGE="$APP_IMAGE" ./deploy.sh all
+            docker logout ghcr.io
+

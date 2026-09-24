@@ -21,6 +21,7 @@ import {
   isBlockablePhone,
   isPhoneBlocked,
 } from "@/modules/whatsapp/blocklist";
+import { formatBlockedPhoneInput } from "@/modules/whatsapp/blocklist-input";
 
 beforeEach(() => {
   findUnique.mockReset();
@@ -51,6 +52,34 @@ describe("Forma canônica do número (canonicalPhone)", () => {
 
   it("não inventa nada a partir de texto sem dígitos", () => {
     expect(canonicalPhone("sem número")).toBe("");
+  });
+});
+
+describe("Entrada da lista de bloqueio", () => {
+  it("preserva todos os dígitos ao colar +55 ou 55 e casa com o webhook", () => {
+    const fromWebhook = canonicalPhone("5511987654321");
+    for (const pasted of ["+55 11 98765-4321", "5511987654321"]) {
+      const formatted = formatBlockedPhoneInput(pasted);
+      expect(formatted.replace(/\D/g, "")).toBe("5511987654321");
+      expect(canonicalPhone(formatted)).toBe(fromWebhook);
+    }
+  });
+
+  it("mantém todos os dígitos ao digitar +55 ou 55", () => {
+    for (const number of ["+5511987654321", "5511987654321"]) {
+      let typed = "";
+      for (const character of number) {
+        typed = formatBlockedPhoneInput(typed + character);
+      }
+      expect(typed.replace(/\D/g, "")).toBe("5511987654321");
+      expect(canonicalPhone(typed)).toBe("1187654321");
+    }
+  });
+
+  it("não corta números estrangeiros ou entradas mais longas", () => {
+    expect(formatBlockedPhoneInput("+1 415 555 0199")).toBe("+1 415 555 0199");
+    expect(formatBlockedPhoneInput("551198765432199").replace(/\D/g, ""))
+      .toBe("551198765432199");
   });
 });
 

@@ -158,6 +158,18 @@ bloquear outra pessoa. É a forma canônica que vai para a coluna
 `WhatsappBlockedNumber.phone` (única por tenant), então a consulta do webhook é
 um lookup por chave.
 
+O campo da lista preserva todos os dígitos digitados, inclusive quando alguém
+cola `+55 11 ...` ou `5511...`. A máscara de telefone do cadastro corta em 11
+dígitos e não serve para esta entrada: ela já fez a tela confirmar bloqueios
+com o número truncado. Linhas antigas truncadas não podem ser reparadas sem o
+dígito perdido; precisam ser removidas e cadastradas outra vez. A lista avisa
+quando encontra a forma brasileira truncada mais comum.
+
+Na Evolution, `remoteJid` pode ser um identificador `@lid`, que **não é o
+telefone**. O parser usa `remoteJidAlt` e, em mensagem recebida, `senderPn`
+quando carregam um JID telefônico. Sem telefone confiável, descarta o evento; extrair os
+dígitos do LID faria o bloqueio falhar e ainda criaria um contato incorreto.
+
 Tabela e não coluna Json no Tenant porque isso roda **a cada mensagem que
 entra**; e não uma flag no `Lead` porque o caso comum é bloquear quem ainda
 **não** escreveu (o ex-fornecedor, o número de spam que já incomodou o
@@ -170,6 +182,10 @@ mentira. Vale também para `isFromMe` — o dono respondendo à mão num chat
 bloqueado não pode ressuscitar a conversa que o bloqueio existe para não ter.
 Grupo não passa por aqui: tem dono próprio (`whatsappIgnoreGroups`) e JID de
 grupo não é telefone.
+
+As duas saídas automáticas do worker (follow-up e lembretes) também consultam
+a lista. Respostas enviadas manualmente por um atendente seguem sob controle
+dele em Conversas.
 
 Duas regras que os testes travam:
 
