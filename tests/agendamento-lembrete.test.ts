@@ -500,6 +500,16 @@ describe("Varredura (scanAndSendReminders)", () => {
     expect(provider.sendMessage).not.toHaveBeenCalled();
   });
 
+  it("lembra consulta à meia-noite às 23h da véspera", () => {
+    const rule = { minutesBefore: UM_DIA, sendTime: "23:00", template: "Confirme" };
+    const startsAt = new Date("2026-09-24T03:00:00.000Z");
+    expect(reminderDueAt(startsAt, rule, "America/Sao_Paulo").toISOString())
+      .toBe("2026-09-24T02:00:00.000Z");
+    const appt = { status: "scheduled", startsAt, remindersSent: [] };
+    expect(dueReminders(appt, [rule], new Date("2026-09-24T02:02:00.000Z"))).toEqual([rule]);
+    expect(dueReminders(appt, [rule], startsAt)).toEqual([]);
+  });
+
   it("fecha lembretes de número bloqueado sem enviar nem registrar mensagem", async () => {
     acaoConfigurada();
     consultas([consultaAmanha()]);
@@ -618,7 +628,7 @@ describe("Varredura (scanAndSendReminders)", () => {
     expect(call?.[0].data.reminderSentAt).toBeUndefined();
   });
 
-  it("WhatsApp desconectado não impede marcar — não repete na varredura seguinte", async () => {
+  it("WhatsApp desconectado não consome o lembrete: tenta novamente antes da consulta", async () => {
     acaoConfigurada();
     consultas([consultaAmanha()]);
     db.whatsappInstance.findUnique.mockResolvedValue({ externalId: "inst-1", status: "disconnected" });
@@ -626,6 +636,20 @@ describe("Varredura (scanAndSendReminders)", () => {
     const r = await scanAndSendReminders(AGORA);
 
     expect(provider.sendMessage).not.toHaveBeenCalled();
-    expect(r.sent).toBe(1);
+    expect(r.sent).toBe(0);
+    expect(db.message.create).not.toHaveBeenCalled();
+    expect(db.appointment.update).not.toHaveBeenCalled();
+  });
+
+  it("falha temporária no envio não registra mensagem nem consome o lembrete", async () => {
+    acaoConfigurada();
+    consultas([consultaAmanha()]);
+    provider.sendMessage.mockRejectedValue(new Error("WhatsApp indisponível"));
+
+    const r = await scanAndSendReminders(AGORA);
+
+    expect(r.sent).toBe(0);
+    expect(db.message.create).not.toHaveBeenCalled();
+    expect(db.appointment.update).not.toHaveBeenCalled();
   });
 });

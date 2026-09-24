@@ -11,11 +11,9 @@ relógio, não por uma resposta do contato:
 | **follow-up** | silêncio do lead sem consulta atual/futura | tenants com a ação `follow_up` ativa |
 | **lembretes** | consultas chegando | tenants com `schedule_meeting` ativa **e** lembrete configurado |
 
-As duas vivem no mesmo ciclo porque a cadência serve às duas; um segundo
-processo custaria outro deploy para não ganhar nada. São independentes de
-verdade: o job usa `Promise.allSettled` e só falha se **as duas** falharem —
-o lembrete de uma consulta de amanhã não pode depender do follow-up ter dado
-certo, e reprocessar a metade que funcionou não ajudaria ninguém.
+Cada varredura tem sua própria fila: follow-up roda a cada 15 minutos e
+lembretes a cada minuto por padrão. Assim um lembrete configurado para 23h
+não espera o próximo ciclo do follow-up. As falhas de uma fila não param a outra.
 
 ## Arquivos
 
@@ -27,7 +25,7 @@ certo, e reprocessar a metade que funcionou não ajudaria ninguém.
   - `staleReminders(appt, reminders, now)` — quais perderam a janela e são fechados sem envio.
   - `remindersFor(appt, cfg)` — os da consulta, ou os do agente.
   - `scanAndSendReminders(now?)` — varre consultas próximas e marca `Appointment.remindersSent`.
-- `index.ts` — cria a Queue, agenda o job repetível `scan` (`upsertJobScheduler`) e roda o `Worker`.
+- `index.ts` — cria as filas, agenda os jobs repetíveis (`upsertJobScheduler`) e roda os workers.
 
 ## Lembretes de consulta (`reminders.ts`)
 
@@ -70,9 +68,9 @@ Regras que não são óbvias:
 - **Número bloqueado não recebe lembrete.** Os disparos vencidos são fechados
   em `remindersSent`, sem mensagem e sem `reminderSentAt`, para não voltarem
   depois de desbloquear o contato nem aparecerem como enviados na agenda.
-- **WhatsApp desconectado não impede marcar** como enviado. A janela do
-  lembrete passa; insistir nos ciclos seguintes mandaria "é amanhã" na véspera
-  errada.
+- **Falha ou desconexão do WhatsApp não marca como enviado.** A varredura tenta
+  novamente enquanto a consulta ainda não começou. Depois dela, os disparos
+  pendentes são fechados sem enviar mensagem atrasada.
 
 Regressões: `tests/agendamento-lembrete.test.ts`.
 

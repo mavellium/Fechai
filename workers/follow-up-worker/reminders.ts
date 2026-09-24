@@ -57,7 +57,7 @@ export function dueReminders(
   timezone = "America/Sao_Paulo",
 ): ReminderRule[] {
   if (appt.status !== "scheduled") return [];
-  if (appt.startsAt.getTime() < now.getTime()) return [];
+  if (appt.startsAt.getTime() <= now.getTime()) return [];
   const sent = new Set(appt.remindersSent);
   return reminders
     .filter((r) => !sent.has(r.minutesBefore))
@@ -209,6 +209,7 @@ export async function scanAndSendReminders(now: Date = new Date()) {
     }
 
     let keyId: string | null = null;
+    let delivered = false;
     {
       const instance = await prisma.whatsappInstance.findUnique({
         where: { tenantId: appt.tenantId },
@@ -219,12 +220,17 @@ export async function scanAndSendReminders(now: Date = new Date()) {
           const provider = getWhatsAppProviderForInstance(instance);
           if (provider.isConfigured()) {
             keyId = await provider.sendMessage(instance.externalId, appt.lead.phone, text);
+            delivered = true;
           }
         } catch (err) {
           console.error("[lembrete] falha ao enviar", appt.id, err);
         }
       }
     }
+
+    // Uma falha temporária de conexão não pode consumir o lembrete. Enquanto
+    // a consulta ainda não começou, a próxima varredura tenta novamente.
+    if (!delivered) continue;
 
     // A mensagem entra na conversa como fala do agente. É isso que faz a
     // resposta do paciente ("não vou poder") cair no `runAgentTurn` normal,
