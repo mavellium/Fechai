@@ -151,11 +151,13 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
   return <Context.Provider value={value}>
     {children}
     <dialog ref={dialog} aria-labelledby={titleId} data-surface="dark"
-      className="m-auto w-[calc(100%-2rem)] max-w-md rounded-surface border border-white/15 bg-ink p-6 text-white backdrop:bg-ink/70"
+      className="m-auto w-[calc(100%-2rem)] max-w-lg rounded-surface border border-white/15 bg-ink p-6 text-white backdrop:bg-ink/70"
       onClose={() => { nextAction.current = null; activeScope.current = null; }}>
       <h2 id={titleId} className="font-display text-lg font-semibold">Alterações não salvas</h2>
       <p className="mt-2 text-sm leading-relaxed text-white/65">Você fez alterações que ainda não foram salvas. Deseja continuar mesmo assim?</p>
-      <div className="mt-6 flex flex-wrap justify-end gap-2">
+      {/* Empilhados no celular com a ação principal em cima (`col-reverse`);
+          em linha a partir de `sm`, na ordem Voltar · sem salvar · salvar. */}
+      <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
         <Button
           type="button"
           variant="ghost"
@@ -166,6 +168,19 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
           }}
         >
           Voltar
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => {
+            const proceed = nextAction.current;
+            nextAction.current = null;
+            activeScope.current = null;
+            dialog.current?.close();
+            proceed?.();
+          }}
+        >
+          Continuar sem salvar
         </Button>
         <Button
           type="button"
