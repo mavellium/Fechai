@@ -18,17 +18,36 @@ const db = vi.hoisted(() => ({
   tenantAction: { findUnique: vi.fn(), upsert: vi.fn() },
   whatsappInstance: { findUnique: vi.fn() },
 }));
-const provider = vi.hoisted(() => ({ addParticipantToGroup: vi.fn(async () => {}) }));
+const provider = vi.hoisted(() => ({
+  addParticipantToGroup: vi.fn(async () => {}),
+  isConfigured: vi.fn(() => true),
+  listGroups: vi.fn(async (): Promise<{ id: string; name: string; size: number | null }[]> => []),
+}));
+// A conexão da Meta não tem `listGroups`: é assim que a tela sabe que grupo
+// não existe ali.
+const metaProvider = vi.hoisted(() => ({
+  addParticipantToGroup: vi.fn(async () => {}),
+  isConfigured: vi.fn(() => true),
+}));
 
 vi.mock("@/lib/prisma", () => ({ prisma: db }));
-vi.mock("@/modules/whatsapp", () => ({ getWhatsAppProvider: () => provider }));
+vi.mock("@/modules/whatsapp", () => ({
+  getWhatsAppProvider: (name: string) => (name === "meta" ? metaProvider : provider),
+}));
 
 import {
   addLeadToHandoffGroup,
   describeHandoff,
+  handoffToolDescription,
+  listWhatsAppGroups,
+  MAX_GROUP_NAME,
+  MAX_GROUP_REASON,
   normalizeGroupId,
   parseHandoffConfig,
+  type HandoffConfig,
 } from "@/modules/agent-engine/handoff";
+import { getToolSchemas } from "@/modules/agent-engine/tools";
+import { EvolutionProvider } from "@/modules/whatsapp/evolution";
 
 const TENANT = "tenant-1";
 const AGENTE = "agente-1";
@@ -77,23 +96,91 @@ describe("ID do grupo (normalizeGroupId)", () => {
   });
 });
 
+/** Config completa, ligada ao grupo, salvo indicação contrária. */
+function config(over: Partial<HandoffConfig> = {}): HandoffConfig {
+  return { addToGroup: true, groupId: GRUPO, groupName: "Recepção", groupReason: "", ...over };
+}
+
 describe("Leitura da config (parseHandoffConfig)", () => {
   it("nasce desligada quando a ação nunca foi configurada", () => {
-    expect(parseHandoffConfig(null)).toEqual({ addToGroup: false, groupId: null });
+    expect(parseHandoffConfig(null)).toEqual({
+      addToGroup: false,
+      groupId: null,
+      groupName: null,
+      groupReason: "",
+    });
+  });
+
+  it("lê config de antes do nome e do motivo existirem", () => {
+    expect(parseHandoffConfig({ addToGroup: true, groupId: GRUPO })).toEqual({
+      addToGroup: true,
+      groupId: GRUPO,
+      groupName: null,
+      groupReason: "",
+    });
   });
 
   it("não deixa ficar ligada sem grupo — um toggle ligado que não faz nada faz a tela mentir", () => {
     expect(parseHandoffConfig({ addToGroup: true, groupId: "" }).addToGroup).toBe(false);
   });
 
-  it("descarta um grupo inválido salvo à mão no banco", () => {
-    const cfg = parseHandoffConfig({ addToGroup: true, groupId: "não é grupo" });
-    expect(cfg).toEqual({ addToGroup: false, groupId: null });
+  it("descarta um grupo inválido salvo à mão no banco, e o nome junto", () => {
+    const cfg = parseHandoffConfig({ addToGroup: true, groupId: "não é grupo", groupName: "Recepção" });
+    expect(cfg).toMatchObject({ addToGroup: false, groupId: null, groupName: null });
   });
 
-  it("resume no card o que está valendo", () => {
-    expect(describeHandoff({ addToGroup: true, groupId: GRUPO })).toContain("grupo");
-    expect(describeHandoff({ addToGroup: false, groupId: null })).toContain("precisa de você");
+  it("corta nome e motivo compridos demais editados à mão", () => {
+    const cfg = parseHandoffConfig({
+      addToGroup: true,
+      groupId: GRUPO,
+      groupName: "n".repeat(MAX_GROUP_NAME + 50),
+      groupReason: "m".repeat(MAX_GROUP_REASON + 50),
+    });
+    expect(cfg.groupName).toHaveLength(MAX_GROUP_NAME);
+    expect(cfg.groupReason).toHaveLength(MAX_GROUP_REASON);
+  });
+
+  it("resume no card o que está valendo, pelo nome do grupo quando existe", () => {
+    expect(describeHandoff(config())).toContain("“Recepção”");
+    expect(describeHandoff(config({ groupName: null }))).toContain("grupo");
+    expect(describeHandoff(config({ addToGroup: false }))).toContain("precisa de você");
+  });
+});
+
+describe("Motivo na descrição da tool (handoffToolDescription)", () => {
+  const MOTIVO = "o paciente quiser fechar o orçamento";
+
+  it("sem config, fica a descrição de sempre", () => {
+    expect(handoffToolDescription()).toBe("Transfere a conversa para um atendente humano.");
+  });
+
+  it("com grupo ligado e motivo, diz ao agente quando transferir", () => {
+    const d = handoffToolDescription(config({ groupReason: MOTIVO }));
+    expect(d).toContain(`Use sempre que: ${MOTIVO}.`);
+    expect(d).toContain("grupo");
+  });
+
+  it("não duplica a pontuação final nem leva quebra de linha para o LLM", () => {
+    const d = handoffToolDescription(config({ groupReason: `${MOTIVO};\nou reclamar.` }));
+    expect(d).toContain(`Use sempre que: ${MOTIVO}; ou reclamar.`);
+    expect(d).not.toContain("..");
+    expect(d).not.toContain("\n");
+  });
+
+  it("motivo guardado com o grupo desligado não tem efeito", () => {
+    expect(handoffToolDescription(config({ addToGroup: false, groupReason: MOTIVO }))).toBe(
+      "Transfere a conversa para um atendente humano.",
+    );
+  });
+
+  it("sem motivo, o agente decide sozinho como antes", () => {
+    expect(handoffToolDescription(config())).toBe("Transfere a conversa para um atendente humano.");
+  });
+
+  it("é o texto que chega ao LLM pela lista de tools", () => {
+    const tool = getToolSchemas(["handoff_human"], undefined, undefined, config({ groupReason: MOTIVO }))
+      .find((s) => s.name === "handoff_human");
+    expect(tool?.description).toContain(MOTIVO);
   });
 });
 
@@ -110,21 +197,28 @@ const schema = z
       .optional()
       .transform((v) => v === "on" || v === "true"),
     groupId: z.string().trim().optional().default(""),
+    groupName: z.string().trim().optional().default(""),
+    groupReason: z.string().trim().max(MAX_GROUP_REASON).optional().default(""),
   })
   .superRefine((data, ctx) => {
     if (data.addToGroup && !normalizeGroupId(data.groupId)) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["groupId"], message: "ID inválido" });
     }
   })
-  .transform((data) => {
-    const groupId = data.addToGroup ? normalizeGroupId(data.groupId) : null;
-    return { addToGroup: data.addToGroup && Boolean(groupId), groupId };
+  .transform((data): HandoffConfig => {
+    const groupId = normalizeGroupId(data.groupId);
+    return {
+      addToGroup: data.addToGroup && Boolean(groupId),
+      groupId,
+      groupName: groupId && data.groupName ? data.groupName.slice(0, MAX_GROUP_NAME) : null,
+      groupReason: data.groupReason,
+    };
   });
 
 describe("Envio do formulário de transferência", () => {
-  it("aceita ligado com grupo válido", () => {
-    const r = schema.safeParse({ addToGroup: "on", groupId: GRUPO });
-    expect(r.success && r.data).toEqual({ addToGroup: true, groupId: GRUPO });
+  it("aceita ligado com grupo válido, nome e motivo", () => {
+    const r = schema.safeParse({ addToGroup: "on", groupId: GRUPO, groupName: "Recepção", groupReason: " orçamento " });
+    expect(r.success && r.data).toEqual(config({ groupReason: "orçamento" }));
   });
 
   it("RECUSA ligado com grupo inválido, em vez de salvar desligado calado", () => {
@@ -132,14 +226,94 @@ describe("Envio do formulário de transferência", () => {
     expect(schema.safeParse({ addToGroup: "on", groupId: "" }).success).toBe(false);
   });
 
-  it("desligado guarda o estado sem exigir grupo", () => {
-    const r = schema.safeParse({ addToGroup: "", groupId: GRUPO });
-    expect(r.success && r.data).toEqual({ addToGroup: false, groupId: null });
+  it("desligado NÃO apaga grupo nem motivo — desligar é pausar", () => {
+    const r = schema.safeParse({ addToGroup: "", groupId: GRUPO, groupName: "Recepção", groupReason: "orçamento" });
+    expect(r.success && r.data).toEqual(config({ addToGroup: false, groupReason: "orçamento" }));
+  });
+
+  it("recusa motivo acima do limite", () => {
+    const r = schema.safeParse({ addToGroup: "on", groupId: GRUPO, groupReason: "m".repeat(MAX_GROUP_REASON + 1) });
+    expect(r.success).toBe(false);
   });
 
   it("trata como desligado o que não é 'on' — 'false' não pode virar ligado", () => {
     expect(schema.safeParse({ addToGroup: "false", groupId: "" }).success).toBe(true);
     expect(schema.safeParse({ addToGroup: "off", groupId: "" }).success).toBe(true);
+  });
+});
+
+describe("Grupos do número conectado (listWhatsAppGroups)", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("lista os grupos da Evolution quando o número está conectado", async () => {
+    whatsappConectado();
+    provider.listGroups.mockResolvedValueOnce([{ id: GRUPO, name: "Recepção", size: 4 }]);
+    await expect(listWhatsAppGroups(TENANT)).resolves.toEqual({
+      ok: true,
+      groups: [{ id: GRUPO, name: "Recepção", size: 4 }],
+    });
+    expect(provider.listGroups).toHaveBeenCalledWith("tenant_tenant-1");
+  });
+
+  it("número desconectado: avisa em vez de tentar", async () => {
+    db.whatsappInstance.findUnique.mockResolvedValue({ externalId: "tenant_tenant-1", status: "disconnected" });
+    await expect(listWhatsAppGroups(TENANT)).resolves.toMatchObject({ ok: false, reason: "disconnected" });
+    expect(provider.listGroups).not.toHaveBeenCalled();
+  });
+
+  it("conexão da Meta: grupo não existe ali, e a tela não oferece o ID à mão", async () => {
+    db.whatsappInstance.findUnique.mockResolvedValue({
+      provider: "meta",
+      externalId: "phone-1",
+      status: "connected",
+      metaPhoneNumberId: "phone-1",
+      metaBusinessAccountId: null,
+      metaAccessTokenEncrypted: null,
+    });
+    await expect(listWhatsAppGroups(TENANT)).resolves.toMatchObject({ ok: false, reason: "unsupported" });
+  });
+
+  it("nunca lança: Evolution fora do ar vira aviso, e a pessoa ainda pode colar o ID", async () => {
+    whatsappConectado();
+    provider.listGroups.mockRejectedValueOnce(new Error("Evolution fora do ar"));
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(listWhatsAppGroups(TENANT)).resolves.toMatchObject({ ok: false, reason: "failed" });
+    log.mockRestore();
+  });
+});
+
+describe("Resposta da Evolution (EvolutionProvider.listGroups)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("fica só com grupos, usa o ID quando não há nome e ordena por nome", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify([
+            { id: "120363000000000002@g.us", subject: "Vendas", size: 3 },
+            { id: "5511999990000@s.whatsapp.net", subject: "Não é grupo" },
+            { id: "120363000000000001@g.us", subject: "  Atendimento  " },
+            { id: "120363000000000003@g.us", subject: "" },
+          ]),
+        ),
+      ),
+    );
+    const groups = await new EvolutionProvider().listGroups("tenant_tenant-1");
+    expect(groups).toEqual([
+      { id: "120363000000000003@g.us", name: "120363000000000003@g.us", size: null },
+      { id: "120363000000000001@g.us", name: "Atendimento", size: null },
+      { id: "120363000000000002@g.us", name: "Vendas", size: 3 },
+    ]);
+  });
+
+  it("lança em resposta de erro — quem decide o que mostrar é listWhatsAppGroups", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("erro", { status: 500 })));
+    await expect(new EvolutionProvider().listGroups("tenant_tenant-1")).rejects.toThrow("500");
   });
 });
 

@@ -211,6 +211,7 @@ parece "instância não existe" — foi o que produzia `Evolution logout falhou
 | `/message/sendText/{id}`, `/message/sendWhatsAppAudio/{id}` | POST |
 | `/chat/getBase64FromMediaMessage/{id}` | POST |
 | `/group/updateParticipant/{id}?groupJid=` | POST |
+| `/group/fetchAllGroups/{id}?getParticipants=false` | GET |
 | `/webhook/set/{id}` | POST |
 | `/instance/connectionState/{id}` | GET |
 

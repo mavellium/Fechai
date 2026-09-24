@@ -30,6 +30,8 @@ composeSystemPrompt(answers): string; ACTION_CATALOG: ActionDef[]
 getHandoffConfig(agentId) -> HandoffConfig            // para a tela preencher o formulário
 saveHandoffConfig(tenantId, agentId, config) -> void
 addLeadToHandoffGroup(tenantId, agentId, phone, { isTest? }) -> void  // nunca lança
+listWhatsAppGroups(tenantId) -> { ok: true, groups } | { ok: false, reason, error }  // nunca lança
+handoffToolDescription(config?) -> string              // descrição de handoff_human com o motivo
 ```
 
 Consumidores: `api/webhooks/whatsapp` (WhatsApp real) e `api/sandbox` (chat de teste).
@@ -250,11 +252,47 @@ cliente e mensagem que contém apenas emoji não pausam o agente.
 
 **A config da ação vive em `TenantAction.config`** (chave `handoff_human`),
 mesmo padrão de `follow-up/config.ts` e `scheduling/config.ts` — por agente,
-sem coluna nova. Hoje ela guarda só o grupo:
+sem coluna nova. Ela guarda o grupo e quando mandar para ele:
 
 ```ts
-type HandoffConfig = { addToGroup: boolean; groupId: string | null }
+type HandoffConfig = {
+  addToGroup: boolean;
+  groupId: string | null;   // JID "...@g.us" — é o que vale
+  groupName: string | null; // só exibição (card fechado, grupo que sumiu da lista)
+  groupReason: string;      // "quando mandar para este grupo", nas palavras do dono
+}
 ```
+
+**O grupo é escolhido numa lista**, não colado: `listWhatsAppGroups(tenantId)`
+pergunta à Evolution (`GET /group/fetchAllGroups?getParticipants=false`) de
+quais grupos o número conectado participa. A tela busca **sob demanda**, só
+com a opção de grupo ligada — numa conta com muitos grupos a Evolution leva
+segundos. A lista é conveniência, não requisito, e a função **nunca lança**:
+
+| resultado | a tela mostra |
+| --- | --- |
+| lista | `SelectMenu` com os grupos + "Atualizar lista" |
+| lista vazia | como criar o grupo (este número como admin) + "Atualizar lista" |
+| `disconnected` / `failed` | aviso + "Tentar de novo" + campo para colar o ID, como antes |
+| `unsupported` (Meta) | só o aviso: a Cloud API não tem grupos, colar o ID não adiantaria |
+
+O grupo salvo que não aparece mais na lista (o número saiu dele) continua como
+opção marcada "não encontrado": sem isso o menu cairia em "Escolha um grupo" e
+o próximo salvar apagaria a escolha sem ninguém pedir. O número conectado
+precisa ser **administrador** do grupo, senão o WhatsApp recusa o convite — a
+lista não filtra por isso (exigiria buscar os participantes de todos os
+grupos), a dica do campo avisa.
+
+**O motivo vira a descrição da tool.** `handoffToolDescription(cfg)` acrescenta
+"Use sempre que: <motivo>" à descrição de `handoff_human`, e é por ela que o
+agente fica sabendo quando transferir e mandar para o grupo — antes isso
+dependia de alguém repetir a regra na persona. "Sempre que", não "só quando":
+o motivo acrescenta um gatilho sem proibir os outros (quem pede para falar com
+uma pessoa continua sendo transferido). Vale só com o grupo ligado, porque o
+campo mora dentro dessa opção; desligada, o texto fica guardado e sem efeito.
+Em branco, a descrição é a de sempre. A reação do atendente (o outro caminho
+da tabela acima) não passa pelo LLM e adiciona ao grupo independentemente do
+motivo — ali quem decidiu foi uma pessoa.
 
 Ligado, `addLeadToHandoffGroup` adiciona o telefone do contato a um **grupo
 fixo** do WhatsApp — normalmente o grupo onde a equipe de atendimento já está.
@@ -269,10 +307,11 @@ Regras que não são óbvias:
   `transform` — depois, o ID inválido já teria virado `addToGroup: false` e a
   tela diria "salvo" com a opção silenciosamente desligada). Um toggle ligado
   que não faz nada faz a tela mentir, igual à regra de `speakReplies` sem voz.
-- **Desligar a opção não apaga o `groupId`.** O campo fica escondido, não
-  desmontado, e continua no envio — desligar é pausar, não descadastrar (mesma
-  distinção de desabilitar × desconectar em `/integracoes`). Desmontando, um
-  desligar/ligar obrigava a ir buscar o ID no WhatsApp de novo.
+- **Desligar a opção não apaga o grupo nem o motivo.** Os campos ficam
+  escondidos, não desmontados, e continuam no envio — e o schema da action
+  grava o `groupId` mesmo com a opção desligada (antes o `transform` o zerava,
+  e o campo escondido não servia de nada). Desligar é pausar, não descadastrar
+  (mesma distinção de desabilitar × desconectar em `/integracoes`).
 - **A ação desligada não adiciona ninguém.** Quem age lê por
   `getActiveHandoffConfig`, que checa `TenantAction.enabled`; `getHandoffConfig`
   (sem a checagem) é só para a tela preencher o formulário, porque desligar a
@@ -283,7 +322,7 @@ Regras que não são óbvias:
 - **Nunca lança, e o `try` cobre o banco também**, não só a chamada de rede.
   No webhook, uma exceção escapando viraria 500 e a Evolution reentregaria a
   mesma mensagem em laço. A transferência já aconteceu; o grupo é o extra.
-- **O ID do grupo aceita as duas formas** que a pessoa consegue copiar:
+- **O ID colado à mão aceita as duas formas** que a pessoa consegue copiar:
   `120363...@g.us` ou só os dígitos (`normalizeGroupId` completa o sufixo).
   Um telefone de pessoa (`@s.whatsapp.net`) é recusado.
 

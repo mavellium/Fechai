@@ -36,7 +36,15 @@ import {
   saveFollowUpConfig,
   validateFollowUpConfig,
 } from "@/modules/follow-up/config";
-import { normalizeGroupId, saveHandoffConfig } from "@/modules/agent-engine/handoff";
+import {
+  MAX_GROUP_NAME,
+  MAX_GROUP_REASON,
+  listWhatsAppGroups,
+  normalizeGroupId,
+  saveHandoffConfig,
+  type GroupListResult,
+  type HandoffConfig,
+} from "@/modules/agent-engine/handoff";
 import { validateVariableDefinitions, type VariableDefinition } from "@/modules/agent-engine/variables";
 import {
   ingestDocument,
@@ -1154,6 +1162,13 @@ const handoffConfigSchema = z
       .optional()
       .transform((v) => v === "on" || v === "true"),
     groupId: z.string().trim().optional().default(""),
+    groupName: z.string().trim().optional().default(""),
+    groupReason: z
+      .string()
+      .trim()
+      .max(MAX_GROUP_REASON, `O motivo pode ter até ${MAX_GROUP_REASON} caracteres.`)
+      .optional()
+      .default(""),
   })
   // A recusa vem ANTES da normalização, não depois: se `transform` rodasse
   // primeiro, um ID inválido já teria virado `addToGroup: false` e o `refine`
@@ -1165,18 +1180,37 @@ const handoffConfigSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["groupId"],
-        message: "Cole o ID do grupo (ex.: 120363012345678901@g.us) ou desligue a opção.",
+        message: "Escolha o grupo do WhatsApp (ou cole o ID dele) ou desligue a opção.",
       });
     }
   })
-  .transform((data) => {
-    const groupId = data.addToGroup ? normalizeGroupId(data.groupId) : null;
-    return { addToGroup: data.addToGroup && Boolean(groupId), groupId };
+  // Desligado, grupo e motivo continuam gravados: desligar é pausar, não
+  // descadastrar. Antes o grupo virava null aqui, e o campo escondido que a
+  // tela mantinha no envio justamente para preservá-lo não servia de nada.
+  .transform((data): HandoffConfig => {
+    const groupId = normalizeGroupId(data.groupId);
+    return {
+      addToGroup: data.addToGroup && Boolean(groupId),
+      groupId,
+      groupName: groupId && data.groupName ? data.groupName.slice(0, MAX_GROUP_NAME) : null,
+      groupReason: data.groupReason,
+    };
   });
 
 /**
+ * Grupos do número conectado, para a tela da transferência escolher em vez de
+ * colar o ID. Sob demanda (quando a opção de grupo está ligada), não a cada
+ * render de /agentes: a Evolution leva segundos para listar numa conta com
+ * muitos grupos.
+ */
+export async function loadWhatsAppGroupsAction(): Promise<GroupListResult> {
+  const { tenantId } = await requireTenant();
+  return listWhatsAppGroups(tenantId);
+}
+
+/**
  * Config da ação "Transferir para humano" (ver módulo `agent-engine/handoff`):
- * hoje só o grupo do WhatsApp que recebe o contato transferido.
+ * o grupo do WhatsApp que recebe o contato transferido e quando mandá-lo para lá.
  */
 export async function saveHandoffConfigAction(
   _prev: Result | null,

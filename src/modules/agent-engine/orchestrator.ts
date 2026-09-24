@@ -20,6 +20,7 @@ import {
 import { recordUsage } from "@/modules/ai/usage";
 import { parseScheduleConfig, scheduleSystemContext } from "@/modules/scheduling/config";
 import { getToolSchemas, runToolHandler, type ToolContext } from "./tools";
+import { parseHandoffConfig } from "./handoff";
 import { leadAppointmentsContext } from "./scheduling-tools";
 import { appendMessage, getRecentMessages } from "./conversation";
 import { sanitizeUnresolvedPlaceholders } from "./reply-sanitizer";
@@ -200,7 +201,13 @@ export async function runAgentTurn(input: {
     ...history.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
   ];
 
-  const toolSchemas = getToolSchemas(actions.map((a) => a.key), scheduleConfig, agent ? variableDefinitions : undefined);
+  const handoff = actions.find((a) => a.key === "handoff_human");
+  const toolSchemas = getToolSchemas(
+    actions.map((a) => a.key),
+    scheduleConfig,
+    agent ? variableDefinitions : undefined,
+    handoff ? parseHandoffConfig(handoff.config) : undefined,
+  );
   const ctx: ToolContext = { tenantId, conversationId, leadId, agentId: agent?.id ?? null };
   // A cadeia de fallback vem do painel (/admin/ia): o admin monta a ordem e
   // aponta cada degrau para uma credencial. Sem nada cadastrado, cai no padrão

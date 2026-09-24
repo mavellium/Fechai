@@ -28,6 +28,14 @@ export type IncomingMessage = {
   mediaId?: string;
 };
 
+export type WhatsAppGroup = {
+  /** JID do grupo (`...@g.us`). */
+  id: string;
+  name: string;
+  /** Participantes, quando o provedor informa. */
+  size: number | null;
+};
+
 export interface WhatsAppProvider {
   readonly name: string;
   isConfigured(): boolean;
@@ -81,6 +89,12 @@ export interface WhatsAppProvider {
    * atendimento por causa de um grupo).
    */
   addParticipantToGroup(externalId: string, groupId: string, phone: string): Promise<void>;
+  /**
+   * Grupos de que o número conectado participa, para a tela escolher o grupo da
+   * transferência em vez de pedir o ID colado. Opcional porque a Cloud API da
+   * Meta não expõe grupos. Lança na falha; quem chama decide o que mostrar.
+   */
+  listGroups?(externalId: string): Promise<WhatsAppGroup[]>;
   // onMessageReceived é implementado via webhook (ver api/webhooks/whatsapp).
   // O provider expõe apenas o parser do payload recebido.
   parseWebhook(payload: unknown): IncomingMessage | null;

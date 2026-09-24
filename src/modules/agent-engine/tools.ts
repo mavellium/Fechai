@@ -10,7 +10,7 @@ import {
 } from "@/modules/scheduling/repository";
 import { formatInZone, parseLocalDateTime } from "@/modules/scheduling/time";
 import { DISQUALIFY_REASONS, parseReason } from "./disqualify";
-import { addLeadToHandoffGroup } from "./handoff";
+import { addLeadToHandoffGroup, handoffToolDescription, type HandoffConfig } from "./handoff";
 import { ACTION_BY_KEY, type ActionKey } from "./actions";
 import { freeSlotsHint, runSchedulingTool, SCHEDULING_TOOLS, schedulingToolAllowed } from "./scheduling-tools";
 import { allVariableDefinitions, parseVariableDefinitions, rememberConversationVariables, type VariableDefinition } from "./variables";
@@ -31,13 +31,21 @@ function str(v: unknown): string | undefined {
 }
 
 // Definições das tools por ação. O orquestrador expõe ao LLM só as ativas.
-export function getToolSchemas(activeKeys: string[], scheduleConfig?: ScheduleConfig, variableDefinitions?: VariableDefinition[]): LlmToolSchema[] {
+export function getToolSchemas(
+  activeKeys: string[],
+  scheduleConfig?: ScheduleConfig,
+  variableDefinitions?: VariableDefinition[],
+  handoffConfig?: HandoffConfig,
+): LlmToolSchema[] {
   const schemas = activeKeys
     // Desativadas temporariamente não são expostas ao LLM mesmo se o tenant
     // ainda tiver a linha enabled no banco.
     .filter((k) => ACTION_BY_KEY[k as ActionKey]?.status !== "disabled")
     .map((k) => TOOLS[k as ActionKey]?.schema)
-    .filter((s): s is LlmToolSchema => Boolean(s));
+    .filter((s): s is LlmToolSchema => Boolean(s))
+    .map((s) =>
+      s.name === "handoff_human" ? { ...s, description: handoffToolDescription(handoffConfig) } : s,
+    );
   if (activeKeys.includes("schedule_meeting")) {
     const cfg = scheduleConfig ?? parseScheduleConfig(null);
     schemas.push(...SCHEDULING_TOOLS.filter((tool) => schedulingToolAllowed(tool.name, cfg)));
@@ -310,7 +318,7 @@ const TOOLS: Record<ActionKey, ToolDef> = {
   handoff_human: {
     schema: {
       name: "handoff_human",
-      description: "Transfere a conversa para um atendente humano.",
+      description: handoffToolDescription(),
       parameters: {
         type: "object",
         properties: { reason: { type: "string", description: "Motivo do repasse" } },

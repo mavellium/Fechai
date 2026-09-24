@@ -10,7 +10,10 @@ const mirrors = vi.hoisted(() => ({ googlePush: vi.fn(), googleDelete: vi.fn(), 
 vi.mock("@/lib/prisma", () => ({ prisma: db }));
 vi.mock("@/modules/scheduling/google", () => ({ pushEventToGoogle: mirrors.googlePush, deleteEventFromGoogle: mirrors.googleDelete }));
 vi.mock("@/modules/scheduling/clinicorp", () => ({ pushAppointmentToClinicorp: mirrors.clinicorpPush, cancelAppointmentInClinicorp: mirrors.clinicorpCancel, hasClinicorpConflict: mirrors.clinicorpConflict, listClinicorpBusyBlocks: mirrors.clinicorpBusy }));
-vi.mock("@/modules/agent-engine/handoff", () => ({ addLeadToHandoffGroup: vi.fn() }));
+vi.mock("@/modules/agent-engine/handoff", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/modules/agent-engine/handoff")>()),
+  addLeadToHandoffGroup: vi.fn(),
+}));
 
 import { getToolSchemas, runToolHandler } from "@/modules/agent-engine/tools";
 import { parseScheduleConfig } from "@/modules/scheduling/config";

@@ -2,6 +2,7 @@ import type {
   WhatsAppProvider,
   CreateInstanceResult,
   IncomingMessage,
+  WhatsAppGroup,
   WhatsAppStatus,
 } from "./provider";
 
@@ -229,6 +230,34 @@ export class EvolutionProvider implements WhatsAppProvider {
         `Evolution updateParticipant falhou (${res.status}): ${(await res.text().catch(() => "")).slice(0, 200)}`,
       );
     }
+  }
+
+  async listGroups(externalId: string): Promise<WhatsAppGroup[]> {
+    // `getParticipants=false` é obrigatório na v2 e deixa a resposta leve: com
+    // participantes, uma conta com muitos grupos grandes demora dezenas de
+    // segundos. O timeout maior que o padrão é pelo mesmo motivo.
+    const res = await this.fetchWithTimeout(
+      `${this.baseUrl}/group/fetchAllGroups/${externalId}?getParticipants=false`,
+      { headers: this.headers() },
+      20_000,
+    );
+    if (!res.ok) {
+      throw new Error(
+        `Evolution fetchAllGroups falhou (${res.status}): ${(await res.text().catch(() => "")).slice(0, 200)}`,
+      );
+    }
+    const data = (await res.json()) as unknown;
+    if (!Array.isArray(data)) throw new Error("Evolution fetchAllGroups devolveu uma resposta inesperada");
+
+    return data
+      .map((g: { id?: unknown; subject?: unknown; size?: unknown }) => ({
+        id: typeof g?.id === "string" ? g.id : "",
+        name: typeof g?.subject === "string" ? g.subject.trim() : "",
+        size: typeof g?.size === "number" ? g.size : null,
+      }))
+      .filter((g) => g.id.endsWith("@g.us"))
+      .map((g) => ({ ...g, name: g.name || g.id }))
+      .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
   }
 
   async disconnect(externalId: string): Promise<void> {
