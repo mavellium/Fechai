@@ -14,7 +14,7 @@ painel, e depois cada resposta em áudio é sintetizada com esse modelo.
 | `speech-text.ts` | `toSpeech()` — o que é pronunciável no texto da resposta (tira risada escrita, emoji, formatação e a lista do agente). |
 | `../../app/(dashboard)/agentes/VoiceStyleSelect.tsx` | O menu "Como ele fala" no passo Comportamento. |
 | `../../app/(dashboard)/agentes/SpeechBlocklistForm.tsx` | A lista "o que ele não fala" (`Agent.speechBlocklist`) no passo Comportamento. |
-| `storage.ts` | `storeVoiceMessage()` — guarda o áudio enviado na CDN para dar play no histórico. |
+| `storage.ts` | `storeVoiceMessage()` — guarda áudios enviados e recebidos na CDN para dar play no histórico. |
 | `../../app/(dashboard)/agentes/VoiceRecorder.tsx` | Gravação da voz do dono (`MediaRecorder`) + upload de arquivo. |
 | `../../app/(dashboard)/agentes/actions.ts` | `saveAgentVoice`, `deleteAgentVoice` e o toggle em `setAgentBehavior`. |
 | `../../app/(dashboard)/conversas/VoiceMessageRecorder.tsx` | Gravar e mandar a SUA voz numa conversa. |
@@ -218,12 +218,17 @@ fazer sobre a voz de outra pessoa.
 `voiceId` fica **em claro** no banco, ao contrário das credenciais de terceiros
 (`lib/crypto.ts`): é um identificador opaco, inútil sem a chave da plataforma.
 
-O áudio das **mensagens enviadas** é outra coisa: esse fica guardado na CDN
-(`storage.ts`) e a `Message` aponta para ele, para a pessoa reouvir no painel o
-que chegou no WhatsApp do cliente. Guardar é best-effort — falhar não desfaz um
-envio que já aconteceu; a mensagem só fica sem player. O upload acontece
-**depois** do envio, de propósito: se o WhatsApp recusar, não sobra arquivo
-órfão de uma mensagem que nunca existiu.
+O áudio das **mensagens enviadas e recebidas** é outra coisa: esse fica guardado
+na CDN (`storage.ts`) e a `Message` aponta para ele, para a pessoa reouvir no
+painel o que passou pelo WhatsApp. Guardar é best-effort — falhar não desfaz uma
+mensagem que já aconteceu; ela só fica sem player. No envio, o upload acontece
+**depois** do WhatsApp aceitar a mensagem, para não deixar arquivo órfão.
+
+Áudio recebido aparece no histórico mesmo se a opção de escuta da IA estiver
+desligada ou a transcrição falhar. Nesse caso, o conteúdo é `[Áudio]` e não há
+resposta automática. Áudio enviado pelo próprio WhatsApp entra como resposta
+humana; o eco de um áudio enviado pelo painel ou pelo agente é deduplicado pelo
+id da mensagem.
 
 `Message.content` continua sendo o TEXTO mesmo quando há `audioUrl` — é ele que
 vai para o contexto do LLM, o resumo e a busca. `audioUrl` é só a forma de

@@ -474,7 +474,7 @@ model Message {
   /// resposta sairia gravada duas vezes — uma pelo orquestrador, outra pelo
   /// webhook. Null em mensagens de sandbox e nas manuais antes deste campo.
   whatsappMessageId String?      @unique
-  /// Áudio desta mensagem na CDN, quando ela foi enviada como mensagem de voz.
+  /// Áudio desta mensagem na CDN, quando ela foi enviada ou recebida como voz.
   /// Null = mensagem de texto comum (a esmagadora maioria).
   ///
   /// `content` continua sendo o TEXTO da mensagem mesmo quando há áudio — o que

@@ -1,15 +1,14 @@
 /**
- * Onde mora o áudio de uma mensagem de voz depois de enviada.
+ * Onde mora o áudio de uma mensagem de voz enviada ou recebida.
  *
  * O arquivo vai para a CDN (Bunny), a mesma que já guarda os documentos da base
  * de conhecimento, e a `Message` guarda só a URL. Binário no Postgres incharia
  * o banco e todos os backups — o projeto já evitou esse caminho uma vez, no
  * upload da base de conhecimento.
  *
- * Guardar é **best-effort**: falhar aqui não pode cancelar um envio que já
- * chegou no WhatsApp do cliente. Sem URL, a mensagem existe no histórico com o
- * texto (transcrito ou ditado) e sem player — o que se perde é reouvir, não a
- * conversa.
+ * Guardar é **best-effort**: falhar aqui não pode cancelar uma mensagem que já
+ * passou pelo WhatsApp. Sem URL, ela existe no histórico com o texto (ou
+ * marcador de áudio) e sem player — o que se perde é reouvir, não a conversa.
  */
 
 import { uploadToBunny } from "@/lib/bunny";

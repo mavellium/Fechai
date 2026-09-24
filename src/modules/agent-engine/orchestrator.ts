@@ -90,6 +90,10 @@ export async function runAgentTurn(input: {
   conversationId: string;
   leadId: string;
   userMessage: string;
+  /** Mídia da mensagem recebida, quando o contato falou por áudio. */
+  incomingAudioUrl?: string | null;
+  /** Id do áudio no WhatsApp para ignorar reentregas do webhook. */
+  incomingMessageKeyId?: string;
   /** Agente que deve atender. Omitido (webhook do WhatsApp), usa o principal. */
   agentId?: string;
   /** Sandbox: pula a checagem de cota — testar não conta como atendimento. */
@@ -105,7 +109,11 @@ export async function runAgentTurn(input: {
 }): Promise<AgentTurn> {
   const { tenantId, conversationId, leadId, userMessage } = input;
 
-  await appendMessage(conversationId, "user", userMessage);
+  if (input.incomingAudioUrl || input.incomingMessageKeyId) {
+    await appendMessage(conversationId, "user", userMessage, undefined, input.incomingMessageKeyId, input.incomingAudioUrl);
+  } else {
+    await appendMessage(conversationId, "user", userMessage);
+  }
 
   // Humano assumiu esta conversa (respondeu manualmente pelo painel): a
   // mensagem do contato fica registrada, mas a IA não responde por cima —

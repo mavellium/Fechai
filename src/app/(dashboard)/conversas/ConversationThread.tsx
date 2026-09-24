@@ -18,7 +18,7 @@ type ThreadMessage = {
   content: string;
   createdAt: Date;
   sentBy: string | null;
-  /** Mensagem entregue como voz: o player entra junto do texto. */
+  /** Mensagem enviada ou recebida como voz: o player entra junto do texto. */
   audioUrl?: string | null;
 };
 

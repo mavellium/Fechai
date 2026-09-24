@@ -5,12 +5,38 @@ import { addLeadToHandoffGroup } from "@/modules/agent-engine/handoff";
 import { resolveAgent, runAgentTurn } from "@/modules/agent-engine/orchestrator";
 import { transcribeAudio } from "@/modules/ai/transcribe";
 import { speakReply } from "@/modules/voice/reply";
+import { storeVoiceMessage } from "@/modules/voice/storage";
 import { isPhoneBlocked } from "./blocklist";
 import type { IncomingMessage, WhatsAppProvider } from "./provider";
 import { shouldPauseAgentForReaction } from "./reactions";
 
 export type IncomingWebhookResult = { body: Record<string, unknown>; status?: number };
 const ok = (body: Record<string, unknown>): IncomingWebhookResult => ({ body });
+
+async function receiveAudio(input: {
+  incoming: IncomingMessage;
+  provider: WhatsAppProvider;
+  tenantId: string;
+  conversationId: string;
+  transcribe: boolean;
+}): Promise<{ audioUrl: string | null; transcript: string | null }> {
+  const { incoming, provider, tenantId, conversationId } = input;
+  const mediaKey = incoming.mediaId ?? incoming.messageKeyId;
+  if (!mediaKey) return { audioUrl: null, transcript: null };
+
+  let audioUrl: string | null = null;
+  try {
+    const { base64, mime } = await provider.getMediaAsBase64(incoming.instanceExternalId, mediaKey);
+    const audio = Buffer.from(base64, "base64");
+    if (audio.length === 0) throw new Error("áudio vazio");
+    audioUrl = await storeVoiceMessage({ tenantId, conversationId, audio, mime });
+    const transcript = input.transcribe ? await transcribeAudio(base64, mime) : null;
+    return { audioUrl, transcript };
+  } catch (err) {
+    console.error("[whatsapp webhook] falha ao processar áudio", err);
+    return { audioUrl, transcript: null };
+  }
+}
 
 /** Fluxo comum depois que cada provedor autenticou e converteu seu webhook. */
 export async function processIncomingWhatsapp(
@@ -39,27 +65,9 @@ export async function processIncomingWhatsapp(
   }
 
   const agent = await resolveAgent(tenantId);
-  let userMessage = incoming.text;
-  if (incoming.hasAudio) {
-    if (!agent?.listenAudio) return ok({ ignored: "áudio: opção desligada" });
-    const mediaKey = incoming.mediaId ?? incoming.messageKeyId;
-    if (!mediaKey) return ok({ ignored: "áudio: sem chave" });
-    try {
-      const { base64, mime } = await provider.getMediaAsBase64(
-        incoming.instanceExternalId,
-        mediaKey,
-      );
-      const transcript = await transcribeAudio(base64, mime);
-      if (!transcript) return ok({ ignored: "áudio: sem transcrição" });
-      userMessage = transcript;
-    } catch (err) {
-      console.error("[whatsapp webhook] falha ao processar áudio", err);
-      return ok({ ignored: "áudio: falha" });
-    }
-  }
 
   if (incoming.isFromMe) {
-    if (incoming.isGroup || incoming.hasAudio) {
+    if (incoming.isGroup) {
       return ok({ ok: true, silent: "fromMe ignorado" });
     }
 
@@ -90,6 +98,8 @@ export async function processIncomingWhatsapp(
       return ok({ ok: true, silent: "reação do atendente" });
     }
 
+    // Respostas geradas pelo app também voltam como fromMe. Deduplicar antes
+    // de baixar a mídia evita outro upload e outra bolha no histórico.
     if (incoming.messageKeyId) {
       const echo = await prisma.message.findUnique({
         where: { whatsappMessageId: incoming.messageKeyId },
@@ -103,24 +113,31 @@ export async function processIncomingWhatsapp(
       incoming.fromPhone,
       incoming.fromName,
     );
-    const recentEcho = await prisma.message.findFirst({
-      where: {
-        conversationId: conversation.id,
-        role: "assistant",
-        sentBy: "agent",
-        content: incoming.text,
-        createdAt: { gte: new Date(Date.now() - 15_000) },
-      },
-      select: { id: true },
-    });
-    if (recentEcho) return ok({ ok: true, silent: "fromMe eco" });
+    if (!incoming.hasAudio) {
+      const recentEcho = await prisma.message.findFirst({
+        where: {
+          conversationId: conversation.id,
+          role: "assistant",
+          sentBy: "agent",
+          content: incoming.text,
+          createdAt: { gte: new Date(Date.now() - 15_000) },
+        },
+        select: { id: true },
+      });
+      if (recentEcho) return ok({ ok: true, silent: "fromMe eco" });
+    }
+
+    const received = incoming.hasAudio
+      ? await receiveAudio({ incoming, provider, tenantId, conversationId: conversation.id, transcribe: true })
+      : null;
 
     await appendMessage(
       conversation.id,
       "assistant",
-      incoming.text,
+      received?.transcript ?? (incoming.hasAudio ? "[Áudio]" : incoming.text),
       "human",
       incoming.messageKeyId,
+      received?.audioUrl,
     );
     await prisma.conversation.update({
       where: { id: conversation.id },
@@ -136,12 +153,37 @@ export async function processIncomingWhatsapp(
     incoming.fromPhone,
     incoming.fromName,
   );
+  if (incoming.hasAudio && incoming.messageKeyId) {
+    const existing = await prisma.message.findUnique({
+      where: { whatsappMessageId: incoming.messageKeyId },
+      select: { id: true },
+    });
+    if (existing) return ok({ ok: true, silent: "áudio já registrado" });
+  }
+  const received = incoming.hasAudio
+    ? await receiveAudio({
+        incoming,
+        provider,
+        tenantId,
+        conversationId: conversation.id,
+        transcribe: Boolean(agent?.listenAudio),
+      })
+    : null;
+  const userMessage = received?.transcript ?? (incoming.hasAudio ? "[Áudio]" : incoming.text);
+  if (incoming.hasAudio && (!agent?.listenAudio || !received?.transcript)) {
+    await appendMessage(
+      conversation.id, "user", userMessage, undefined, incoming.messageKeyId, received?.audioUrl,
+    );
+    return ok({ ok: true, silent: agent?.listenAudio ? "áudio sem transcrição" : "áudio: opção desligada" });
+  }
   try {
     const { reply, status, replyMessageId } = await runAgentTurn({
       tenantId,
       conversationId: conversation.id,
       leadId: lead.id,
       userMessage,
+      incomingAudioUrl: received?.audioUrl,
+      incomingMessageKeyId: incoming.hasAudio ? incoming.messageKeyId : undefined,
     });
     if (status !== "ok" || !reply) return ok({ ok: true, silent: status });
 
@@ -172,9 +214,20 @@ export async function processIncomingWhatsapp(
     if (!sent) {
       keyId = await provider.sendMessage(incoming.instanceExternalId, incoming.fromPhone, reply);
     }
-    if (keyId && replyMessageId) {
+    const audioUrl = sent && spoken.spoken
+      ? await storeVoiceMessage({
+          tenantId,
+          conversationId: conversation.id,
+          audio: spoken.audio,
+          mime: spoken.mime,
+        })
+      : null;
+    if (replyMessageId && (keyId || audioUrl)) {
       await prisma.message
-        .update({ where: { id: replyMessageId }, data: { whatsappMessageId: keyId } })
+        .update({
+          where: { id: replyMessageId },
+          data: { whatsappMessageId: keyId, audioUrl },
+        })
         .catch(() => {});
     }
   } catch (err) {
