@@ -154,6 +154,24 @@ checagem antes de pôr o contato na esteira de recusa ("pediu para parar" vale
 mesmo com consulta marcada). Depois de agendar, mensagens
 automáticas relacionadas à consulta são responsabilidade dos lembretes.
 
+**Agente pausado ou conversa com humano nunca recebem follow-up.** Duas
+chaves, dois efeitos diferentes, as duas checadas na busca (`where`) e de novo
+em `nextFollowUp` (defesa em memória, mesmo padrão da consulta marcada):
+
+- `Agent.enabled = false` é a pausa geral (ver `prisma/schema.prisma`): o dono
+  desligou o agente inteiro para não atender cliente nenhum. Follow-up é
+  exatamente isso — reengajar cliente — então continuar mandando por trás
+  contradiz a pausa.
+- `Conversation.agentPaused = true` é um humano tendo assumido *esta* conversa
+  pelo painel (`sendManualMessage`). As outras conversas do mesmo agente
+  continuam recebendo follow-up normalmente; só essa aqui não, para a esteira
+  automática não falar por cima de quem está atendendo.
+
+Nenhuma das duas apaga a esteira em andamento — só a pausa enquanto dura.
+Agente religado ou conversa devolvida ao agente voltam a contar do
+`followUpSentAt`/`followUpStep` de onde pararam, como qualquer etapa que
+esperou a janela de envio.
+
 ## O que NÃO faz
 
 - Lembretes nunca passam por IA (template fixo). No follow-up, só a etapa

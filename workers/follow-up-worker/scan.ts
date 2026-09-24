@@ -35,6 +35,8 @@ import { isPhoneBlocked } from "../../src/modules/whatsapp/blocklist";
 
 export type FollowUpCandidate = {
   needsHuman: boolean;
+  /** Humano assumiu esta conversa manualmente (`sendManualMessage`). */
+  agentPaused: boolean;
   lastInboundAt: Date | null;
   followUpSentAt: Date | null;
   followUpStep: number;
@@ -42,6 +44,8 @@ export type FollowUpCandidate = {
   /** Quem falou por último e quando — o silêncio começa aí. */
   lastMessage?: { role: string; createdAt: Date } | null;
   hasActiveAppointment?: boolean;
+  /** Chave geral do agente (`Agent.enabled`). Pausado não reengaja ninguém. */
+  agentEnabled?: boolean;
 };
 
 /** A esteira que vale para a conversa; null quando nenhuma deve sair. */
@@ -72,6 +76,14 @@ export type NextFollowUp = { index: number; step: FollowUpStep; dueAt: Date };
  */
 export function nextFollowUp(conv: FollowUpCandidate, cfg: FollowUpConfig): NextFollowUp | null {
   if (conv.needsHuman) return null;
+  // Humano assumiu a conversa manualmente: a esteira automática não pode
+  // falar por cima de quem está atendendo (mesmo motivo de `needsHuman`).
+  if (conv.agentPaused) return null;
+  // Chave geral do agente desligada: pausar é para ele parar de falar com
+  // cliente, e follow-up é justamente isso. `undefined` (agente sem
+  // `agentId`, chamada antiga do candidato) não bloqueia por si só — quem
+  // decide isso é a varredura, que já filtra pelo agente na consulta.
+  if (conv.agentEnabled === false) return null;
   // Follow-up tenta recuperar uma venda/conversa abandonada. Depois que há
   // consulta atual ou futura, o objetivo já foi alcançado; dali em diante quem
   // fala sozinho são os lembretes da consulta, não uma cobrança genérica.
@@ -155,10 +167,17 @@ export async function scanAndSendFollowUps(now: Date = new Date()) {
   const convos = await prisma.conversation.findMany({
     where: {
       agentId: { in: agentIds },
+      // Agente pausado (chave geral, `Agent.enabled = false`) não deve
+      // reengajar ninguém — pausar é para o agente parar de falar com
+      // cliente, e follow-up é justamente isso.
+      agent: { enabled: true },
       // Conversa de teste não recebe follow-up: ninguém do outro lado para
       // reengajar (antes o filtro era pelo telefone "sandbox", mais abaixo).
       isTest: false,
       needsHuman: false,
+      // Humano assumiu esta conversa manualmente (`sendManualMessage`): a
+      // esteira automática não pode falar por cima de quem está atendendo.
+      agentPaused: false,
       lastInboundAt: { gte: since },
       // Vale para agendamento do agente e manual: ambos se ligam ao Lead. Usar
       // `conversation.appointments` deixaria passar o manual, que não guarda
@@ -170,7 +189,7 @@ export async function scanAndSendFollowUps(now: Date = new Date()) {
       },
     },
     include: {
-      agent: { select: { systemPrompt: true } },
+      agent: { select: { systemPrompt: true, enabled: true } },
       lead: {
         include: {
           // Segunda defesa em memória: mantém a regra explícita em
@@ -204,6 +223,7 @@ export async function scanAndSendFollowUps(now: Date = new Date()) {
       ...c,
       lastMessage: c.messages[0] ?? null,
       hasActiveAppointment: c.lead.appointments.length > 0,
+      agentEnabled: c.agent?.enabled,
     }, config);
     if (!next || now < next.dueAt || isStale(next.dueAt, now)) continue;
 

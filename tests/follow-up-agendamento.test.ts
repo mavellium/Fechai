@@ -61,12 +61,13 @@ function conversation(over: Record<string, unknown> = {}) {
     tenantId: "tenant-1",
     agentId: "agente-1",
     needsHuman: false,
+    agentPaused: false,
     lastInboundAt: ago(120),
     followUpSentAt: null,
     followUpStep: 0,
     followUpReason: null,
     variables: {},
-    agent: { systemPrompt: "Você é a Ana." },
+    agent: { systemPrompt: "Você é a Ana.", enabled: true },
     lead: {
       id: "lead-1",
       name: "Maria",
@@ -143,6 +144,39 @@ describe("follow-up com consulta marcada", () => {
     });
   });
 
+  it("a busca exclui conversa com humano assumido e agente pausado", async () => {
+    db.conversation.findMany.mockResolvedValue([]);
+
+    await scanAndSendFollowUps(NOW);
+
+    expect(db.conversation.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        agentPaused: false,
+        agent: { enabled: true },
+      }),
+    }));
+  });
+
+  it("não envia mesmo se uma conversa com humano assumido escapar da consulta principal", async () => {
+    db.conversation.findMany.mockResolvedValue([conversation({ agentPaused: true })]);
+
+    await expect(scanAndSendFollowUps(NOW)).resolves.toEqual({ scanned: 1, sent: 0 });
+    expect(provider.sendMessage).not.toHaveBeenCalled();
+    expect(db.message.create).not.toHaveBeenCalled();
+    expect(db.conversation.update).not.toHaveBeenCalled();
+  });
+
+  it("não envia mesmo se uma conversa de agente pausado escapar da consulta principal", async () => {
+    db.conversation.findMany.mockResolvedValue([
+      conversation({ agent: { systemPrompt: "Você é a Ana.", enabled: false } }),
+    ]);
+
+    await expect(scanAndSendFollowUps(NOW)).resolves.toEqual({ scanned: 1, sent: 0 });
+    expect(provider.sendMessage).not.toHaveBeenCalled();
+    expect(db.message.create).not.toHaveBeenCalled();
+    expect(db.conversation.update).not.toHaveBeenCalled();
+  });
+
   it("não envia nem registra follow-up para número bloqueado", async () => {
     db.conversation.findMany.mockResolvedValue([conversation()]);
     db.whatsappBlockedNumber.findUnique.mockResolvedValue({ id: "bloqueio-1" });
@@ -215,6 +249,14 @@ describe("esteira (regra pura)", () => {
 
   it("mensagem do contato ainda sem resposta não é silêncio", () => {
     expect(nextFollowUp({ ...conversation(), lastMessage: { role: "user", createdAt: ago(119) } }, ESTEIRA)).toBeNull();
+  });
+
+  it("humano assumiu a conversa manualmente: esteira não fala por cima", () => {
+    expect(nextFollowUp(silent({ agentPaused: true }), ESTEIRA)).toBeNull();
+  });
+
+  it("agente com a chave geral desligada não reengaja", () => {
+    expect(nextFollowUp({ ...silent(), agentEnabled: false }, ESTEIRA)).toBeNull();
   });
 
   it("respeita a janela de envio no fuso da agenda", () => {
