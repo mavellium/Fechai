@@ -17,9 +17,11 @@ não espera o próximo ciclo do follow-up. As falhas de uma fila não param a ou
 
 ## Arquivos
 
-- `scan.ts` — follow-up (testável):
-  - `isEligible(conv, cutoff)` — regra pura: não `needsHuman`, sem `followUpSentAt`, sem consulta atual/futura, `lastInboundAt` antigo, última msg do agente.
-  - `scanAndSendFollowUps(now?)` — varre elegíveis, envia via WhatsApp (se conectado), grava a mensagem e marca `followUpSentAt`. Retorna `{ scanned, sent }`.
+- `scan.ts` — follow-up em esteira (testável; ver seção abaixo):
+  - `nextFollowUp(conv, cfg)` — regra pura: qual etapa vem agora e quando vence (null sem esteira, com consulta, `needsHuman` ou última msg do contato).
+  - `stepsSentInRun(conv)` — quantas etapas desta esteira já saíram (`followUpStep`, só enquanto `followUpSentAt >= lastInboundAt`).
+  - `isWithinFollowUpWindow(now, window, tz)` e `isStale(dueAt, now)` — janela de horas locais e etapa velha demais.
+  - `scanAndSendFollowUps(now?)` — varre, compõe (IA quando a etapa pede), envia e marca `followUpSentAt` + `followUpStep`. Retorna `{ scanned, sent }`.
 - `reminders.ts` — lembretes pré-consulta (ver seção abaixo):
   - `dueReminders(appt, reminders, now)` — regra pura: quais disparos venceram.
   - `staleReminders(appt, reminders, now)` — quais perderam a janela e são fechados sem envio.
@@ -35,6 +37,14 @@ ver `src/modules/scheduling/README.md`), e uma consulta pode ter os seus
 próprios (`Appointment.reminderOverride`).
 
 Regras que não são óbvias:
+
+- **A config geral é da conta, não do `agentId` da consulta.** Vale a do
+  agente principal (o que atende o WhatsApp, mesma ordem de `resolveAgent`),
+  que é a que `/agenda` mostra como "Do agente". Ler pelo `agentId` gravado
+  fazia consulta marcada antes de trocar o agente do WhatsApp — ou de agente
+  apagado, com `agentId` null — seguir outra config (ou nenhuma), e ela só
+  disparava depois de alguém salvar lembretes próprios. Só o override muda o
+  que uma consulta recebe.
 
 - **`Appointment.remindersSent` é uma lista, não um booleano.** Uma consulta
   tem vários disparos ("1 semana antes", "1 dia antes", "2 horas antes") e
@@ -83,45 +93,72 @@ npm run worker       # tsx workers/follow-up-worker/index.ts
 
 Env: `REDIS_URL`, `FOLLOWUP_SCAN_EVERY_MINUTES` (intervalo da varredura, padrão 15).
 
-O silêncio até o follow-up e o texto da mensagem são configurados por agente
-(não são mais env/constante global) — `TenantAction.config` da chave
-`follow_up`, editado em `/agentes/[id]` → Ações → Follow-up automático (ver
-`src/modules/follow-up/config.ts`). Padrão: 24h, mensagem genérica de reengajamento.
+## Follow-up em esteira (`scan.ts`)
 
-`FollowUpConfig.delayMinutes` é guardado em **minutos**, não horas — a tela
-deixa escolher a unidade (minutos ou horas) porque um follow-up de vendas
-rápidas às vezes precisa de "15 minutos", não "1 hora" arredondado para cima.
-O campo guarda o total em minutos e a unidade é só como a pessoa digita: ao
-reabrir, o formulário mostra horas quando o valor é hora cheia (24h é mais
-legível que 1440) e minutos quando não é.
+Configurado por agente em `/agentes/[id]` → Ações → Follow-up automático
+(`TenantAction.config` da chave `follow_up`, ver `src/modules/follow-up/config.ts`).
+São **duas esteiras** de mensagens espaçadas, mais uma janela de envio:
 
-**Configs antigas continuam valendo.** Antes o campo era `delayHours`, e toda
-conta com follow-up ligado tem um no banco. `parseFollowUpConfig` lê os dois e
-converte na leitura (`delayHours: 24` → `1440`), dando preferência a
-`delayMinutes` quando ambos existem. Não houve migração de dados: a linha só é
-reescrita quando alguém salva o formulário. **Não remova esse fallback** sem
-antes migrar as linhas existentes — sem ele, todo intervalo escolhido volta
-silenciosamente para o padrão de 24h.
+- `noReply` — o contato parou de responder. Padrão: 10 mensagens em ~29 dias,
+  a primeira em 30 minutos.
+- `declined` — o contato disse que não quer agendar agora. Padrão: 1, 4, 11 e
+  26 dias. Quem põe a conversa aqui é o agente, pela tool `follow_up`
+  (`Conversation.followUpReason = "declined"`); `"stop"` (pediu para parar)
+  não recebe esteira nenhuma.
 
-Um intervalo configurado abaixo de `FOLLOWUP_SCAN_EVERY_MINUTES` dispara no
-próximo ciclo de varredura, não no minuto exato — a cadência do scan é o
-retardo mínimo real, então diminuir o intervalo configurado só ajuda até esse
-teto. Teto do próprio intervalo: `MAX_FOLLOWUP_DELAY_MINUTES` (30 dias).
+Regras que não são óbvias:
 
-Regressões da conversão em `tests/follow-up-intervalo.test.ts`.
+- **Não há coluna de "esteira ativa".** A esteira é o silêncio: começa na
+  última fala do agente sem resposta, avança uma etapa por envio
+  (`followUpStep`, com `followUpSentAt` no último) e acaba quando o contato
+  escreve — `followUpStep` só vale enquanto `followUpSentAt >= lastInboundAt`,
+  então a próxima esteira recomeça da etapa 1 sem ninguém zerar nada.
+- **A espera da primeira etapa conta da última fala do agente**, não da
+  mensagem do contato: quando quem respondeu foi um humano dias depois, contar
+  do contato faria a etapa já nascer velha. As seguintes contam do envio
+  anterior, para que duas etapas atrasadas pela janela não saiam juntas.
+- **Janela de envio** (`window`, horas locais no fuso da agenda do agente,
+  padrão 6h–22h): fora dela a etapa espera.
+- **Etapa vencida há mais de `FOLLOWUP_STALE_AFTER_MINUTES` (26h) não sai**, e
+  a esteira para ali até o contato escrever. Cobre o worker parado e a conta
+  que acabou de ligar a ação — sem isso, toda conversa antiga e silenciosa
+  receberia a primeira mensagem de uma vez. A busca também só olha conversas
+  cujo último contato cabe na esteira mais longa configurada.
+- **WhatsApp desconectado ou envio com falha não consome a etapa**: a próxima
+  varredura tenta de novo, até a etapa ficar velha. A conexão é checada
+  **antes** da IA, para não pagar por texto que não tem como sair.
+- **Etapa com `ai: true`** é reescrita pela IA a partir da conversa
+  (`src/modules/follow-up/compose.ts`) e grava `sentBy: "agent"` — conta na
+  cota do plano, como resposta do atendimento. Sem cota, IA fora do ar ou
+  resposta vazia, sai o texto fixo, que não conta.
+- **Configs antigas continuam valendo.** Antes era uma mensagem só
+  (`delayMinutes`, ou `delayHours` ainda antes, + `message`).
+  `parseFollowUpConfig` converte numa esteira `noReply` de uma etapa, com o
+  intervalo e o texto escolhidos. **Não remova esse fallback** sem migrar as
+  linhas — sem ele, todo follow-up já configurado viraria em silêncio a
+  esteira padrão de 10 mensagens.
+
+A cadência da varredura (`FOLLOWUP_SCAN_EVERY_MINUTES`) é o retardo mínimo
+real: uma espera menor que ela sai no próximo ciclo. Teto de cada espera:
+`MAX_FOLLOWUP_DELAY_MINUTES` (30 dias); de mensagens por esteira:
+`MAX_FOLLOWUP_STEPS` (15).
+
+Regressões: `tests/follow-up-agendamento.test.ts` (varredura),
+`tests/follow-up-intervalo.test.ts` (config) e `tests/follow-up-compose.test.ts` (IA).
 
 **Consulta marcada encerra o reengajamento.** O worker ignora a conversa quando
 o lead tem um `Appointment` com status `scheduled` que ainda não terminou. A
 checagem é pelo `leadId`, e não só por `conversationId`, para cobrir também uma
-consulta marcada manualmente em `/agenda`. A própria tool `follow_up` faz a
-mesma checagem antes de sinalizar o follow-up. Depois de agendar, mensagens
+consulta marcada manualmente em `/agenda`. A tool `follow_up` faz a mesma
+checagem antes de pôr o contato na esteira de recusa ("pediu para parar" vale
+mesmo com consulta marcada). Depois de agendar, mensagens
 automáticas relacionadas à consulta são responsabilidade dos lembretes.
 
 ## O que NÃO faz
 
-- Não gera texto por IA em nenhuma das duas varreduras (texto fixo salvo na
-  config, não um LLM) — por isso nada daqui consome a cota do plano.
-- Não reenvia mais de uma vez (`followUpSentAt` no follow-up,
+- Lembretes nunca passam por IA (template fixo). No follow-up, só a etapa
+  marcada com `ai: true` passa — e só ela consome a cota do plano.
+- Não repete uma etapa (`followUpStep` no follow-up,
   `Appointment.remindersSent` nos lembretes — um por antecedência).
 - Não responde ao que o contato escrever de volta: a mensagem entra na conversa
   e quem conduz dali em diante é o `runAgentTurn`, pelo webhook.

@@ -391,6 +391,25 @@ describe("Jeito de falar (modules/voice/style.ts)", () => {
  * ganancioso. Metade dos casos abaixo existe para provar que isso não acontece.
  */
 describe("Texto que vira fala (modules/voice/speech-text.ts)", () => {
+  it("fala datas brasileiras e meia-noite de forma natural", async () => {
+    const { toSpeech } = await import("../src/modules/voice/speech-text");
+    expect(toSpeech("Seu horário: *quinta (24/09), às 00h*.")).toBe(
+      "Seu horário: quinta (24 de setembro), à meia-noite.",
+    );
+    expect(toSpeech("Dia 01/01/2027 às 00:00.")).toBe(
+      "Dia 1 de janeiro de 2027 à meia-noite.",
+    );
+    expect(toSpeech("Encontro em 24/09 às 00h30.")).toBe(
+      "Encontro em 24 de setembro à meia-noite e meia.",
+    );
+  });
+
+  it("preserva frações, datas inválidas e horários diurnos", async () => {
+    const { toSpeech } = await import("../src/modules/voice/speech-text");
+    expect(toSpeech("Parcela 1/2 e código 123/09.")).toBe("Parcela 1/2 e código 123/09.");
+    expect(toSpeech("Consulta 31/02 às 14h.")).toBe("Consulta 31/02 às 14h.");
+  });
+
   it("tira risada escrita em todas as formas que aparecem no WhatsApp", async () => {
     const { toSpeech } = await import("../src/modules/voice/speech-text");
 

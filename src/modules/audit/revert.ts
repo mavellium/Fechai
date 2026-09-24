@@ -66,6 +66,7 @@ const REVERTIBLE_MODELS: Record<string, RevertibleModel> = {
       "listenAudio",
       "stopOnEmoji",
       "speakReplies",
+      "voicePrompt",
       "isPrimary",
       "archived",
     ],

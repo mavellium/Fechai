@@ -34,6 +34,7 @@ export const agentPackageSchema = z.object({
     stopOnEmoji: z.boolean(),
     speakReplies: z.boolean(),
     voiceStyle: z.string().max(100),
+    voicePrompt: z.string().max(1200).default(""),
     speechBlocklist: z.string().max(20_000),
     /** Só voz pronta. Modelos gravados são pessoais e não são portáveis. */
     catalogVoiceKey: z.string().max(100).nullable(),

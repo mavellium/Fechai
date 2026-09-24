@@ -31,6 +31,7 @@ export async function buildAgentPackage(
       voiceId: true,
       voiceSource: true,
       voiceStyle: true,
+      voicePrompt: true,
       speechBlocklist: true,
       tenant: { select: { name: true } },
       actions: {
@@ -63,6 +64,7 @@ export async function buildAgentPackage(
       stopOnEmoji: agent.stopOnEmoji,
       speakReplies: agent.speakReplies,
       voiceStyle: agent.voiceStyle,
+      voicePrompt: agent.voicePrompt,
       speechBlocklist: agent.speechBlocklist,
       catalogVoiceKey: catalogVoice?.key ?? null,
     },
@@ -154,6 +156,7 @@ export async function createAgentFromPackage(input: {
         voiceSource: voice ? "catalog" : null,
         voiceCreatedAt: voice ? new Date() : null,
         voiceStyle: input.package.agent.voiceStyle,
+        voicePrompt: input.package.agent.voicePrompt,
         speechBlocklist: input.package.agent.speechBlocklist,
         actions: { create: actions },
       },

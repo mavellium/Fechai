@@ -83,6 +83,32 @@ const ENFASE = /([*_~`])(\S|\S[^*_~`]*?\S)\1/g;
 /** Linha que sobrou só com pontuação depois das remoções ("!!!", "— ", ":"). */
 const SO_PONTUACAO = /^[\s.,!?;:…\-—–"'()[\]{}*_~`]+$/;
 
+const MONTHS = ["", "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+  "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+
+/** Só expande padrões inequívocos para não transformar telefones ou frações. */
+function expandDatesAndMidnight(value: string): string {
+  const dates = value.replace(
+    /(?<![\d/])(\d{1,2})\/(\d{2})(?:\/(\d{4}))?(?![\d/])/g,
+    (match, dayRaw: string, monthRaw: string, yearRaw?: string) => {
+      const day = Number(dayRaw);
+      const month = Number(monthRaw);
+      const year = yearRaw ? Number(yearRaw) : 2024;
+      if (month < 1 || month > 12 || day < 1 ||
+        day > new Date(Date.UTC(year, month, 0)).getUTCDate()) return match;
+      return `${day} de ${MONTHS[month]}${yearRaw ? ` de ${yearRaw}` : ""}`;
+    },
+  );
+  return dates
+    .replace(/\b0{1,2}(?:h|:)([0-5]\d)?\b/gi, (match, minuteRaw?: string) => {
+      if (match.includes(":") && minuteRaw === undefined) return match;
+      const minute = Number(minuteRaw ?? 0);
+      return minute === 0 ? "meia-noite" : minute === 30
+        ? "meia-noite e meia" : `meia-noite e ${minute} minutos`;
+    })
+    .replace(/às\s+meia-noite/gi, "à meia-noite");
+}
+
 /**
  * Teto da lista por agente. Não é limite de produto — é limite de trabalho: são
  * regex rodando em cada resposta falada, e uma lista de centenas de termos
@@ -144,6 +170,7 @@ export function toSpeech(text: string, blocklist: string | string[] = ""): strin
   for (const risada of RISADA_ESCRITA) out = out.replace(risada, " ");
   out = out.replace(EMOJI, " ");
   out = out.replace(ENFASE, "$2");
+  out = expandDatesAndMidnight(out);
 
   // A lista do agente entra depois da limpeza padrão: os termos dela são o que
   // aquele negócio não quer ouvir, não o que todo mundo não quer.

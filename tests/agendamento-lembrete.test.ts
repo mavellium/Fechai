@@ -18,6 +18,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const db = vi.hoisted(() => ({
   tenantAction: { findMany: vi.fn() },
+  agent: { findMany: vi.fn() },
   appointment: { findMany: vi.fn(), update: vi.fn() },
   whatsappInstance: { findUnique: vi.fn() },
   whatsappBlockedNumber: { findUnique: vi.fn() },
@@ -56,6 +57,7 @@ import {
 } from "../workers/follow-up-worker/reminders";
 
 const AGENTE = "agente-1";
+const CONTA = "tenant-1";
 const AGORA = new Date("2026-09-16T12:00:00.000Z");
 const UM_DIA = 24 * 60;
 const UMA_SEMANA = 7 * 24 * 60;
@@ -403,9 +405,12 @@ describe("Varredura (scanAndSendReminders)", () => {
   });
 
   function acaoConfigurada(over: { enabled?: boolean; reminderEnabled?: boolean; reminders?: unknown } = {}) {
+    // `AGENTE` é o principal da conta — o que atende o WhatsApp.
+    db.agent.findMany.mockResolvedValue([{ id: AGENTE, tenantId: CONTA }]);
     db.tenantAction.findMany.mockResolvedValue(
       (over.enabled ?? true)
         ? [{
+            tenantId: CONTA,
             agentId: AGENTE,
             config: {
               reminderEnabled: over.reminderEnabled ?? true,
@@ -585,6 +590,46 @@ describe("Varredura (scanAndSendReminders)", () => {
     expect(provider.sendMessage).not.toHaveBeenCalled();
   });
 
+  // O bug: a consulta seguia a config do `agentId` gravado nela, e a agenda
+  // mostrava a do principal. Só disparava depois de salvar lembretes próprios.
+  it("consulta de outro agente (ou sem agente) segue os lembretes gerais da conta", async () => {
+    acaoConfigurada();
+    consultas([
+      { ...consultaAmanha(), id: "appt-agente-antigo", agentId: "agente-antigo" },
+      { ...consultaAmanha(), id: "appt-sem-agente", agentId: null },
+    ]);
+
+    const r = await scanAndSendReminders(AGORA);
+
+    expect(r.sent).toBe(2);
+    expect(db.appointment.findMany).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        where: expect.objectContaining({ tenantId: { in: [CONTA] } }),
+      }),
+    );
+  });
+
+  it("lembrete configurado em agente que não atende o WhatsApp não vale", async () => {
+    // A agenda mostra a config do principal; um secundário com lembrete
+    // ligado não pode mandar o que a tela não mostra.
+    db.agent.findMany.mockResolvedValue([
+      { id: "agente-principal", tenantId: CONTA },
+      { id: AGENTE, tenantId: CONTA },
+    ]);
+    db.tenantAction.findMany.mockResolvedValue([{
+      tenantId: CONTA,
+      agentId: AGENTE,
+      config: { reminderEnabled: true, reminders: [{ minutesBefore: UM_DIA, template: "Oi" }] },
+    }]);
+    consultas([consultaAmanha()]);
+
+    const r = await scanAndSendReminders(AGORA);
+
+    expect(r.sent).toBe(0);
+    expect(db.appointment.findMany).not.toHaveBeenCalled();
+  });
+
   it("a busca no banco exclui conversa de teste e consulta já passada", async () => {
     acaoConfigurada();
     consultas([]);
@@ -610,6 +655,7 @@ describe("Varredura (scanAndSendReminders)", () => {
     acaoConfigurada();
     consultas([], [{
       id: "appt-velha",
+      tenantId: CONTA,
       agentId: AGENTE,
       status: "scheduled",
       startsAt: new Date("2026-09-16T09:00:00.000Z"),

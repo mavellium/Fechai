@@ -38,7 +38,8 @@ export function AppointmentReminders({
   override,
   agentReminders,
   location,
-  sentCount,
+  lastSentAt,
+  closedCount,
 }: {
   id: string;
   title: string;
@@ -47,8 +48,10 @@ export function AppointmentReminders({
   /** O padrão do agente, mostrado quando não há override. */
   agentReminders: ReminderRule[];
   location: string;
-  /** Quantos disparos já saíram — o que não dá para desfazer. */
-  sentCount: number;
+  /** Só é preenchido quando houve envio real pelo WhatsApp. */
+  lastSentAt: Date | null;
+  /** Disparos já encerrados, inclusive os que não puderam ser enviados. */
+  closedCount: number;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -114,10 +117,14 @@ export function AppointmentReminders({
         }
       >
         <fieldset ref={contentRef} disabled={pending} className="min-w-0 space-y-4">
-          {sentCount > 0 && (
+          {lastSentAt && (
             <Alert tone="info">
-              {sentCount === 1 ? "1 lembrete já foi enviado" : `${sentCount} lembretes já foram enviados`}{" "}
-              para este contato. Mudar a lista não reenvia o que já saiu.
+              Já houve envio de lembrete para este contato. Mudar a lista não reenvia o que já saiu.
+            </Alert>
+          )}
+          {!lastSentAt && closedCount > 0 && (
+            <Alert tone="info">
+              O horário de um lembrete passou sem confirmação de envio pelo WhatsApp.
             </Alert>
           )}
 

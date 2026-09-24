@@ -1,138 +1,304 @@
 "use client";
 
 import { useActionState, useId, useMemo, useState } from "react";
+import { Trash2 } from "lucide-react";
 import {
+  FOLLOWUP_UNITS,
   MAX_FOLLOWUP_DELAY_MINUTES,
+  MAX_FOLLOWUP_MESSAGE_LENGTH,
+  MAX_FOLLOWUP_STEPS,
+  cumulativeDelays,
   formatDelay,
+  splitFollowUpDelay,
   type FollowUpConfig,
+  type FollowUpSequence,
+  type FollowUpSequenceKey,
+  type FollowUpUnit,
 } from "@/modules/follow-up/config";
 import { FormFeedback } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Field, fieldProps } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { SelectMenu } from "@/components/ui/select-menu";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { saveFollowUpConfigAction } from "./actions";
 import { UnsavedForm } from "@/components/ui/unsaved-changes";
 
-type Unit = "minutes" | "hours";
-
-const UNIT_OPTIONS = [
-  { value: "minutes" as const, label: "minutos" },
-  { value: "hours" as const, label: "horas" },
-];
-
 /**
- * Intervalo da ação "Follow-up automático".
+ * As esteiras da ação "Follow-up automático" e a janela de envio.
  *
  * Fica embaixo do próprio toggle, como o horário de atendimento do
- * agendamento: a pergunta "depois de quanto tempo ele reengaja?" só faz
- * sentido pra quem acabou de ligar o follow-up.
+ * agendamento: "o que ele manda, e quando?" só faz sentido para quem acabou de
+ * ligar o follow-up.
  *
- * O valor é guardado em minutos (`FollowUpConfig.delayMinutes`), mas nem todo
- * intervalo é natural em minutos — "3 dias de silêncio" vira "4320" e ninguém
- * bate o olho e sabe o que é. Por isso a pessoa escolhe a unidade (minutos ou
- * horas) e o campo escreve o número que faz sentido nela; a conversão para
- * minutos acontece só no envio, num campo oculto.
+ * São duas esteiras porque "sumiu" e "disse que não" pedem conversas
+ * diferentes (ver `modules/follow-up/config.ts`). Cada espera é guardada em
+ * minutos, mas digitada na unidade que faz sentido — "3 dias" em vez de
+ * "4320" — e a conversão acontece só no envio, num campo JSON oculto.
  */
+
+type StepDraft = { amount: number; unit: FollowUpUnit; message: string; ai: boolean };
+type SequenceDraft = { enabled: boolean; steps: StepDraft[] };
+
+const UNIT_OPTIONS = FOLLOWUP_UNITS.map((u) => ({ value: u.value, label: u.label }));
+const START_HOURS = Array.from({ length: 24 }, (_, h) => ({ value: String(h), label: `${h}h` }));
+const END_HOURS = Array.from({ length: 24 }, (_, i) => ({ value: String(i + 1), label: `${i + 1}h` }));
+
+const SEQUENCES: Array<{ key: FollowUpSequenceKey; title: string; hint: string }> = [
+  {
+    key: "noReply",
+    title: "Quando o contato para de responder",
+    hint: "Começa cedo: quem some no meio da conversa costuma só ter se distraído.",
+  },
+  {
+    key: "declined",
+    title: "Quando o contato diz que não quer agendar agora",
+    hint: "O agente reconhece frases como “vou pensar” ou “agora não dá”. Aqui o espaço é de dias, para não soar como cobrança. Quem pede para não receber mais mensagens não recebe nenhuma.",
+  },
+];
+
+function unitMinutes(unit: FollowUpUnit): number {
+  return FOLLOWUP_UNITS.find((u) => u.value === unit)?.minutes ?? 1;
+}
+
+function stepMinutes(d: StepDraft): number {
+  return Math.round((Number.isFinite(d.amount) ? d.amount : 0) * unitMinutes(d.unit));
+}
+
+function toDraft(seq: FollowUpSequence): SequenceDraft {
+  return {
+    enabled: seq.enabled,
+    steps: seq.steps.map((s) => ({ ...splitFollowUpDelay(s.delayMinutes), message: s.message, ai: s.ai })),
+  };
+}
+
+function fromDraft(seq: SequenceDraft): FollowUpSequence {
+  return {
+    enabled: seq.enabled,
+    steps: seq.steps.map((d) => ({ delayMinutes: stepMinutes(d), message: d.message, ai: d.ai })),
+  };
+}
+
 export function FollowUpSettings({ agentId, config }: { agentId: string; config: FollowUpConfig }) {
   const [state, formAction, pending] = useActionState(saveFollowUpConfigAction, null);
-  const delayId = useId();
+  const baseId = useId();
 
-  // Começa em horas quando o valor salvo é uma hora "redonda" (o caso comum,
-  // ex.: 24h) e em minutos quando não é (ex.: 90min não é hora cheia) — assim
-  // reabrir o formulário mostra o número do jeito que a pessoa mais provavelmente
-  // digitou da última vez, em vez de sempre converter para minutos.
-  const initialUnit: Unit = config.delayMinutes % 60 === 0 ? "hours" : "minutes";
-  const [unit, setUnit] = useState<Unit>(initialUnit);
-  const [amount, setAmount] = useState<number>(
-    initialUnit === "hours" ? config.delayMinutes / 60 : config.delayMinutes,
-  );
+  const [sequences, setSequences] = useState<Record<FollowUpSequenceKey, SequenceDraft>>(() => ({
+    noReply: toDraft(config.noReply),
+    declined: toDraft(config.declined),
+  }));
+  const [sendWindow, setSendWindow] = useState(config.window);
 
-  const delayMinutes = useMemo(
-    () => Math.round(unit === "hours" ? amount * 60 : amount),
-    [unit, amount],
-  );
+  const value: FollowUpConfig = useMemo(() => ({
+    noReply: fromDraft(sequences.noReply),
+    declined: fromDraft(sequences.declined),
+    window: sendWindow,
+  }), [sequences, sendWindow]);
 
-  function changeUnit(next: Unit) {
-    // Converte o número já digitado para a nova unidade em vez de zerar —
-    // trocar "horas" por "minutos" com 2 no campo deveria virar 120, não voltar
-    // ao padrão.
-    setAmount((prev) => {
-      if (next === unit || !Number.isFinite(prev)) return prev;
-      // Arredonda para cima na volta para horas: o campo é `step={1}` e um 1,5
-      // (90 minutos vistos em horas) é rejeitado pela validação nativa, que
-      // bloqueia o envio sem dizer o motivo. Mínimo de 1 para "30 minutos" não
-      // virar "0 hora".
-      return next === "hours" ? Math.max(1, Math.round(prev / 60)) : Math.round(prev * 60);
-    });
-    setUnit(next);
+  function updateSequence(key: FollowUpSequenceKey, patch: Partial<SequenceDraft>) {
+    setSequences((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
   }
 
-  return (
-    <UnsavedForm action={formAction} result={state} label="Follow-up" className="space-y-5 border-t border-white/10 pt-5">
-      <input type="hidden" name="agentId" value={agentId} />
-      <input type="hidden" name="delayMinutes" value={delayMinutes} />
+  function updateStep(key: FollowUpSequenceKey, index: number, patch: Partial<StepDraft>) {
+    setSequences((prev) => ({
+      ...prev,
+      [key]: { ...prev[key], steps: prev[key].steps.map((s, i) => (i === index ? { ...s, ...patch } : s)) },
+    }));
+  }
 
-      <div>
-        {/* `<label>` de verdade (não um `<p>`): clicar no rótulo foca o campo e
-            o leitor de tela anuncia os dois juntos. O número e a unidade são
-            dois controles para um valor só, então o rótulo nomeia o número e o
-            menu de unidade se nomeia sozinho (`label` vira `aria-label`). */}
-        <label htmlFor={delayId} className="text-sm font-medium text-ink panel:text-white/85">
-          Reengajar depois de
-        </label>
-        <p id={`${delayId}-hint`} className="mt-1 text-sm text-neutral panel:text-white/55">
-          Passado esse tempo de silêncio desde a última mensagem do agente, ele manda uma mensagem
-          de reengajamento sozinho — só uma vez por conversa. Se o contato já tiver consulta
-          marcada, o follow-up não é enviado; valem apenas os lembretes da consulta.
-        </p>
-        <div className="mt-2 flex items-end gap-2">
-          <div className="w-28">
-            <Input
-              id={delayId}
-              type="number"
-              min={1}
-              max={unit === "hours" ? MAX_FOLLOWUP_DELAY_MINUTES / 60 : MAX_FOLLOWUP_DELAY_MINUTES}
-              step={1}
-              value={Number.isFinite(amount) ? amount : ""}
-              onChange={(event) => setAmount(event.target.valueAsNumber)}
-              aria-describedby={`${delayId}-hint ${delayId}-resultado`}
-              required
-            />
-          </div>
+  function changeUnit(key: FollowUpSequenceKey, index: number, next: FollowUpUnit) {
+    const current = sequences[key].steps[index];
+    if (!current || current.unit === next) return;
+    // Converte o número já digitado em vez de zerar: trocar "dias" por "horas"
+    // com 1 no campo vira 24. Mínimo de 1 para "30 minutos" não virar "0 dia".
+    const amount = Math.max(1, Math.round(stepMinutes(current) / unitMinutes(next)));
+    updateStep(key, index, { unit: next, amount });
+  }
+
+  function addStep(key: FollowUpSequenceKey) {
+    const steps = sequences[key].steps;
+    if (steps.length >= MAX_FOLLOWUP_STEPS) return;
+    updateSequence(key, { steps: [...steps, { amount: 1, unit: "days", message: "", ai: false }] });
+  }
+
+  function removeStep(key: FollowUpSequenceKey, index: number) {
+    updateSequence(key, { steps: sequences[key].steps.filter((_, i) => i !== index) });
+  }
+
+  const windowInvalid = sendWindow.startHour >= sendWindow.endHour;
+
+  return (
+    <UnsavedForm action={formAction} result={state} label="Follow-up" className="space-y-6 border-t border-white/10 pt-5">
+      <input type="hidden" name="agentId" value={agentId} />
+      <input type="hidden" name="config" value={JSON.stringify(value)} />
+
+      <p className="text-sm text-neutral panel:text-white/60">
+        O agente retoma a conversa sozinho, em etapas. A esteira para quando o contato responde ou
+        marca horário — e quem já tem consulta marcada recebe só os lembretes da consulta.
+      </p>
+
+      <fieldset className="min-w-0">
+        <legend className="text-sm font-medium text-ink panel:text-white/85">Horário de envio</legend>
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-neutral panel:text-white/60">
+          <span>Das</span>
           <SelectMenu
-            label="Unidade do intervalo"
-            value={unit}
-            onChange={(v) => changeUnit(v as Unit)}
-            options={UNIT_OPTIONS}
-            className="w-32"
+            label="Início do horário de envio"
+            value={String(sendWindow.startHour)}
+            onChange={(v) => setSendWindow((w) => ({ ...w, startHour: Number(v) }))}
+            options={START_HOURS}
+            className="w-24"
+          />
+          <span>às</span>
+          <SelectMenu
+            label="Fim do horário de envio"
+            value={String(sendWindow.endHour)}
+            onChange={(v) => setSendWindow((w) => ({ ...w, endHour: Number(v) }))}
+            options={END_HOURS}
+            className="w-24"
           />
         </div>
-        {/* O eco do valor final existe porque o campo mostra o número numa
-            unidade e o que vale é o total: "90" em minutos é 1h30min, e ver
-            isso escrito evita salvar um intervalo que não era o pretendido.
-            Some com o campo vazio (`valueAsNumber` é NaN enquanto a pessoa
-            apaga para digitar outro número) em vez de escrever "NaNhNaNmin". */}
-        <p id={`${delayId}-resultado`} className="mt-1.5 text-sm text-neutral panel:text-white/45">
-          {delayMinutes >= 1 ? `= ${formatDelay(delayMinutes)} de silêncio` : " "}
+        <p className={`mt-1.5 text-sm ${windowInvalid ? "text-danger" : "text-neutral panel:text-white/45"}`}>
+          {windowInvalid
+            ? "O horário de envio precisa terminar depois de começar."
+            : "No fuso da agenda do agente. Fora desse horário, a mensagem espera a janela abrir."}
         </p>
-      </div>
+      </fieldset>
 
-      <Field
-        label="Mensagem"
-        htmlFor={`${delayId}-message`}
-        hint="O texto que o agente manda sozinho ao reengajar."
-      >
-        <Textarea
-          {...fieldProps(`${delayId}-message`, { hint: true })}
-          name="message"
-          rows={3}
-          maxLength={500}
-          defaultValue={config.message}
-          required
-        />
-      </Field>
+      {SEQUENCES.map(({ key, title, hint }) => {
+        const seq = sequences[key];
+        const totals = cumulativeDelays(fromDraft(seq).steps);
+        const hintId = `${baseId}-${key}-hint`;
+        return (
+          <fieldset key={key} className="min-w-0 space-y-3 border-t border-white/10 pt-5">
+            <legend className="sr-only">{title}</legend>
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-medium text-ink panel:text-white/85">{title}</p>
+                <p id={hintId} className="mt-1 text-sm text-neutral panel:text-white/55">{hint}</p>
+              </div>
+              <Switch
+                checked={seq.enabled}
+                onCheckedChange={(enabled) => updateSequence(key, { enabled })}
+                label={title}
+                describedBy={hintId}
+              />
+            </div>
+
+            {/* Escondido, não desmontado: desligar a esteira é pausar, não
+                apagar as mensagens que a pessoa escreveu (mesma regra dos
+                lembretes e do grupo do handoff). */}
+            <div className={seq.enabled ? "space-y-3" : "hidden"}>
+              {seq.steps.length === 0 && (
+                <p className="text-sm text-neutral panel:text-white/50">
+                  Nenhuma mensagem. Adicione a primeira ou desligue esta esteira.
+                </p>
+              )}
+
+              <ol className="space-y-3">
+                {seq.steps.map((step, index) => {
+                  const id = `${baseId}-${key}-${index}`;
+                  const minutes = stepMinutes(step);
+                  return (
+                    <li key={index} className="space-y-3 rounded-control border border-white/10 p-3">
+                      <div className="flex flex-wrap items-end gap-2">
+                        <div className="w-24">
+                          <label htmlFor={id} className="text-sm font-medium text-ink panel:text-white/85">
+                            Esperar
+                          </label>
+                          <Input
+                            id={id}
+                            type="number"
+                            min={1}
+                            max={Math.floor(MAX_FOLLOWUP_DELAY_MINUTES / unitMinutes(step.unit))}
+                            step={1}
+                            className="mt-1.5"
+                            value={Number.isFinite(step.amount) ? step.amount : ""}
+                            onChange={(e) => updateStep(key, index, { amount: e.target.valueAsNumber })}
+                            aria-describedby={`${id}-quando`}
+                          />
+                        </div>
+                        <SelectMenu
+                          label={`Unidade da espera da mensagem ${index + 1}`}
+                          value={step.unit}
+                          onChange={(v) => changeUnit(key, index, v as FollowUpUnit)}
+                          options={UNIT_OPTIONS}
+                          className="w-32"
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          aria-label={`Remover mensagem ${index + 1}`}
+                          onClick={() => removeStep(key, index)}
+                        >
+                          <Trash2 size={15} aria-hidden />
+                        </Button>
+                      </div>
+                      {/* O total é o que a pessoa realmente decide ("a 3ª sai
+                          no dia seguinte?"); a espera sozinha não diz isso. */}
+                      <p id={`${id}-quando`} className="text-sm text-neutral panel:text-white/45">
+                        {minutes >= 1
+                          ? `${index === 0 ? "depois da última mensagem do agente" : "depois da mensagem anterior"} · sai ${formatDelay(totals[index])} após o silêncio`
+                          : "Informe a espera."}
+                      </p>
+
+                      <div>
+                        <label htmlFor={`${id}-texto`} className="text-sm font-medium text-ink panel:text-white/85">
+                          Mensagem {index + 1}
+                        </label>
+                        <Textarea
+                          id={`${id}-texto`}
+                          className="mt-1.5"
+                          rows={2}
+                          maxLength={MAX_FOLLOWUP_MESSAGE_LENGTH}
+                          placeholder="Ex: Oi {{nome}}! Ficou alguma dúvida? Posso ver um horário para você."
+                          value={step.message}
+                          onChange={(e) => updateStep(key, index, { message: e.target.value })}
+                        />
+                        {!step.message.trim() && (
+                          <p className="mt-1.5 text-sm text-danger">Escreva o texto desta mensagem.</p>
+                        )}
+                      </div>
+
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <p className="text-sm text-ink panel:text-white/80">A IA adapta à conversa</p>
+                          <p id={`${id}-ia`} className="mt-0.5 text-sm text-neutral panel:text-white/45">
+                            Usa o texto acima como base e retoma o último assunto do contato. Conta 1
+                            mensagem na cota do plano; sem cota, sai o texto como está.
+                          </p>
+                        </div>
+                        <Switch
+                          checked={step.ai}
+                          onCheckedChange={(ai) => updateStep(key, index, { ai })}
+                          label={`A IA adapta a mensagem ${index + 1} à conversa`}
+                          describedBy={`${id}-ia`}
+                        />
+                      </div>
+                    </li>
+                  );
+                })}
+              </ol>
+
+              {seq.steps.length >= MAX_FOLLOWUP_STEPS ? (
+                <p className="text-sm text-neutral panel:text-white/50">
+                  Máximo de {MAX_FOLLOWUP_STEPS} mensagens por esteira — o contato não respondeu
+                  nenhuma das anteriores, e cada uma a mais é mais uma chance de a clínica ser marcada
+                  como spam.
+                </p>
+              ) : (
+                <Button type="button" variant="outline" onClick={() => addStep(key)}>
+                  Adicionar mensagem
+                </Button>
+              )}
+            </div>
+          </fieldset>
+        );
+      })}
+
+      <p className="text-sm text-neutral panel:text-white/45">
+        Use <code className="text-ink panel:text-white/70">{"{{nome}}"}</code> e as outras variáveis
+        do agente. Variável sem valor na conversa some da frase.
+      </p>
 
       <FormFeedback error={state?.error} info={state?.info} />
 

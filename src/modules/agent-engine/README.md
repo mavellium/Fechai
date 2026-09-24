@@ -361,6 +361,6 @@ ações do plano de destino continua valendo.
 ## O que NÃO faz
 
 - Não fala com o WhatsApp — quem envia é o `whatsapp` provider (chamado pelo webhook, ou por `sendManualMessage` numa resposta manual).
-- Não dispara follow-up no tempo — isso é o worker (Milestone 6); a tool só sinaliza.
+- Não dispara follow-up no tempo — isso é o worker (`workers/follow-up-worker/scan.ts`). A tool `follow_up` só registra como o contato deixou a conversa (`followUpReason`: não quer agendar agora, ou pediu para parar), que decide a esteira.
 - Não resume conversa sozinho: `summarizeConversation` só roda quando alguém pede pela interface (ver seção acima).
 - Não decide sozinho quanto vale o tempo economizado pela triagem: a régua (minutos e custo/hora) é declarada pelo dono da conta em /relatorios.

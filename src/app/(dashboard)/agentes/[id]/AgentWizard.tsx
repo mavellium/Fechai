@@ -115,6 +115,7 @@ export function AgentWizard({
   voiceAvailable,
   speechBlocklist,
   voiceStyle,
+  voicePrompt,
   done,
 }: {
   agentId: string;
@@ -143,6 +144,7 @@ export function AgentWizard({
   speechBlocklist: string;
   /** Como a voz se comporta (`Agent.voiceStyle`, ver VoiceStyleSelect). */
   voiceStyle: string;
+  voicePrompt: string;
   done: Record<string, boolean>;
 }) {
   // Abre no primeiro passo pendente — quem volta continua de onde parou em vez
@@ -275,6 +277,7 @@ export function AgentWizard({
                     voiceAvailable={voiceAvailable}
                     speechBlocklist={speechBlocklist}
                     voiceStyle={voiceStyle}
+                    voicePrompt={voicePrompt}
                   />
                 ),
               },

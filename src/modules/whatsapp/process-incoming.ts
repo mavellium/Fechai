@@ -182,6 +182,7 @@ export async function processIncomingWhatsapp(
       conversationId: conversation.id,
       leadId: lead.id,
       userMessage,
+      incomingWasAudio: incoming.hasAudio,
       incomingAudioUrl: received?.audioUrl,
       incomingMessageKeyId: incoming.hasAudio ? incoming.messageKeyId : undefined,
     });

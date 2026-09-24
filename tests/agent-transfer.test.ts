@@ -27,6 +27,7 @@ const portable: AgentPackage = {
     stopOnEmoji: true,
     speakReplies: true,
     voiceStyle: "neutra",
+    voicePrompt: "Use frases curtas.",
     speechBlocklist: "",
     catalogVoiceKey: null,
   },
@@ -53,6 +54,7 @@ describe("criação de agente por cópia/importação", () => {
     expect(result.ok).toBe(true);
     const data = db.agent.create.mock.calls[0][0].data;
     expect(data).toMatchObject({ enabled: false, isPrimary: false, speakReplies: false });
+    expect(data.voicePrompt).toBe("Use frases curtas.");
     expect(data.actions.create.filter((action: { enabled: boolean }) => action.enabled)).toHaveLength(2);
     expect(result).toMatchObject({
       warnings: expect.arrayContaining([

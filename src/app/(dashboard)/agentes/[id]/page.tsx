@@ -120,6 +120,7 @@ export default async function AgentePage({ params }: { params: Promise<{ id: str
         voiceAvailable={isFishAudioConfigured()}
         speechBlocklist={agent.speechBlocklist}
         voiceStyle={agent.voiceStyle}
+        voicePrompt={agent.voicePrompt}
         done={done}
       />
     </div>

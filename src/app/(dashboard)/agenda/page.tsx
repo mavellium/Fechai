@@ -374,9 +374,11 @@ export default async function AgendaPage({
                             id={appointment.id}
                             title={appointment.title}
                             override={parseReminderOverride(appointment.reminderOverride)}
-                            agentReminders={config.reminderEnabled ? config.reminders : []}
+                            // Mesma regra do worker: lembrete só sai com a ação ligada.
+                            agentReminders={scheduleAction?.enabled && config.reminderEnabled ? config.reminders : []}
                             location={config.location}
-                            sentCount={appointment.remindersSent.length}
+                            lastSentAt={appointment.reminderSentAt}
+                            closedCount={appointment.remindersSent.length}
                           />
                           <AppointmentActions id={appointment.id} title={appointment.title} />
                         </div>

@@ -115,7 +115,7 @@ está em jogo é que **quem leva o bloqueio no WhatsApp é o número da clínica
 e um número bloqueado deixa de alcançar também os outros pacientes.
 
 **A antecedência vai de minutos a semanas** (`REMINDER_UNITS`), guardada em
-minutos — a unidade é só a forma de digitar, como em `FollowUpConfig.
+minutos — a unidade é só a forma de digitar, como em `FollowUpStep.
 delayMinutes`. `splitReminderLead()` devolve o valor na maior unidade inteira,
 que é como a tela reabre o que foi salvo (1440 vira "1 dia", não "1440
 minutos"). Teto por lembrete: `MAX_REMINDER_MINUTES` (8 semanas).
@@ -175,6 +175,12 @@ Tratar `[]` como "não configurado" faria a consulta que a clínica marcou para
 não lembrar receber os lembretes do agente assim mesmo. `remindersFor()` é
 quem resolve isso, e o override vale **mesmo com o lembrete desligado no
 agente** — são duas decisões diferentes.
+
+**"Os lembretes do agente" são os gerais da conta**: os do agente principal
+(o que atende o WhatsApp), não os do `Appointment.agentId`. É o que `/agenda`
+mostra no modal, e o worker lê a mesma fonte. Seguir o `agentId` gravado
+deixava sem lembrete a consulta marcada antes de trocar o agente do WhatsApp
+(ou de um agente apagado), até alguém salvar um override nela.
 
 ### O que já foi enviado
 

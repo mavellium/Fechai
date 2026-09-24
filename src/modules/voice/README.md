@@ -13,6 +13,7 @@ painel, e depois cada resposta em áudio é sintetizada com esse modelo.
 | `style.ts` | `VOICE_STYLES` — como a voz se comporta (neutra/calorosa/animada) e os números da Fish por trás de cada uma. |
 | `speech-text.ts` | `toSpeech()` — o que é pronunciável no texto da resposta (tira risada escrita, emoji, formatação e a lista do agente). |
 | `../../app/(dashboard)/agentes/VoiceStyleSelect.tsx` | O menu "Como ele fala" no passo Comportamento. |
+| `../../app/(dashboard)/agentes/VoicePromptForm.tsx` | Instruções do dono para a redação de respostas automáticas em áudio. |
 | `../../app/(dashboard)/agentes/SpeechBlocklistForm.tsx` | A lista "o que ele não fala" (`Agent.speechBlocklist`) no passo Comportamento. |
 | `storage.ts` | `storeVoiceMessage()` — guarda áudios enviados e recebidos na CDN para dar play no histórico. |
 | `../../app/(dashboard)/agentes/VoiceRecorder.tsx` | Gravação da voz do dono (`MediaRecorder`) + upload de arquivo. |
@@ -82,6 +83,17 @@ antes por `toSpeech()` (`speech-text.ts`), e isso tira três coisas:
   sorrindo com olhos de coração"). Nenhum dos dois é fala.
 - **Formatação** — `*negrito*`, `_itálico_`, `~riscado~`, crase. Delimitador é
   coisa de tela.
+
+Antes da síntese, datas no formato brasileiro (`24/09`) viram
+`24 de setembro` e horários à meia-noite (`00h`, `00:00`) viram
+`meia-noite`. A mensagem escrita e o histórico continuam intactos. Essa
+normalização vale também para "enviar como áudio".
+
+As instruções livres em `Agent.voicePrompt` são aplicadas pelo orquestrador
+ao gerar respostas automáticas para contatos que mandaram áudio, quando a voz
+está ligada. A Fish Audio recebe o texto pronto. O campo orienta a redação
+da fala; ele não altera voz, sotaque ou mensagens digitadas pelo usuário em
+"enviar como áudio".
 
 O regex é conservador de propósito: exige repetição (`kk`, não `k`) e só tira
 `rs` minúsculo, porque `RS` maiúsculo é o estado e sumir com ele faria o agente

@@ -265,6 +265,10 @@ model Agent {
   /// sozinha) é surpresa no meio de um atendimento, então quem quer isso
   /// escolhe. Chave desconhecida ou null cai na neutra na leitura.
   voiceStyle      String    @default("neutra")
+  /// Instruções do dono para a redação das respostas automáticas em áudio.
+  /// A Fish não recebe prompts; o agente aplica esta instrução ao compor a
+  /// resposta para quem mandou áudio, sem alterar mensagens escritas.
+  voicePrompt     String    @default("") @db.Text
   /// O que o agente NÃO pronuncia quando a resposta vira áudio — um termo por
   /// linha, no mesmo formato das regras da persona (`personaDraft.avoid`).
   ///
@@ -430,7 +434,22 @@ model Conversation {
   /// Espelha `Lead.isTest` para as consultas de conversa não precisarem de join.
   isTest          Boolean   @default(false)
   lastInboundAt   DateTime?
+  /// Última mensagem de follow-up enviada, de qualquer etapa. Relatório e
+  /// painel leem como "recebeu follow-up"; o worker usa como ponto de partida
+  /// da etapa seguinte.
   followUpSentAt  DateTime?
+  /// Quantas etapas da esteira atual já saíram. Só vale enquanto o contato não
+  /// escreveu depois do último envio (`followUpSentAt >= lastInboundAt`): a
+  /// resposta encerra a esteira sem ninguém precisar zerar a coluna, e o
+  /// próximo silêncio começa da etapa 1. Ver workers/follow-up-worker/scan.ts.
+  followUpStep    Int       @default(0)
+  /// Como o contato deixou a conversa, registrado pelo agente (tool
+  /// `follow_up`): null = só parou de responder (esteira "sem resposta"),
+  /// "declined" = não quer agendar agora (esteira espaçada), "stop" = sem
+  /// interesse / pediu para parar (nenhum follow-up). Persiste entre mensagens
+  /// de propósito: o "obrigado" depois de "vou pensar" não pode devolver o
+  /// contato à esteira de 30 minutos.
+  followUpReason  String?
   /// Resumo em texto do que foi conversado, gerado sob demanda pelo LLM ativo
   /// (`summarizeConversation`). Existe para o dono da conta entender uma
   /// conversa de 60 mensagens sem ler tudo. Null = nunca resumida.

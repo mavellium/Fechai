@@ -263,26 +263,47 @@ const TOOLS: Record<ActionKey, ToolDef> = {
     },
   },
 
+  // Quem some é reengajado pelo worker sozinho (esteira "sem resposta"); a tool
+  // existe para o que só a conversa revela: o contato disse que NÃO quer
+  // agendar agora, ou que não quer mais mensagens. Ver modules/follow-up/config.ts.
   follow_up: {
     schema: {
       name: "follow_up",
-      description: "Programa um follow-up automático caso o contato não responda e ainda não tenha consulta futura marcada. Nunca use depois de schedule_meeting confirmar um horário; consultas marcadas usam lembretes, não follow-up de reengajamento.",
+      description:
+        "Registra como o contato deixou a conversa, para o follow-up automático usar a abordagem certa. " +
+        "Use motivo 'nao_quer_agendar' quando ele disser que não quer marcar agora (vai pensar, está sem tempo, achou caro, vai ver depois): o follow-up passa a ser espaçado e sem pressão. " +
+        "Use motivo 'pediu_para_parar' quando ele disser que não tem interesse ou pedir para não receber mais mensagens: nenhum follow-up será enviado. " +
+        "Não use quando o contato só demorou para responder — o sistema já reengaja sozinho quem some. Nunca use depois de schedule_meeting confirmar um horário.",
       parameters: {
         type: "object",
-        properties: { hours: { type: "number", description: "Horas até o follow-up" } },
+        properties: {
+          motivo: {
+            type: "string",
+            enum: ["nao_quer_agendar", "pediu_para_parar"],
+            description: "Por que o contato não vai agendar agora.",
+          },
+        },
+        required: ["motivo"],
       },
     },
-    handler: async (ctx) => {
-      const upcoming = await listUpcomingLeadAppointments(ctx.tenantId, ctx.leadId);
-      if (upcoming.length) {
-        return "Follow-up automático não programado: o contato já tem uma consulta futura marcada. Não envie reengajamento; use apenas os lembretes configurados para a consulta.";
+    handler: async (ctx, args) => {
+      const reason = args.motivo === "nao_quer_agendar" ? "declined" : args.motivo === "pediu_para_parar" ? "stop" : null;
+      if (!reason) return "Informe o motivo: nao_quer_agendar ou pediu_para_parar.";
+      // "Pare de me mandar mensagem" vale mesmo com consulta marcada; já a
+      // esteira de quem recusou não faz sentido para quem tem horário.
+      if (reason === "declined") {
+        const upcoming = await listUpcomingLeadAppointments(ctx.tenantId, ctx.leadId);
+        if (upcoming.length) {
+          return "Follow-up automático não programado: o contato já tem uma consulta futura marcada. Não envie reengajamento; use apenas os lembretes configurados para a consulta.";
+        }
       }
-      // O disparo real é do worker (Milestone 6); aqui só sinalizamos.
-      await prisma.conversation.update({
-        where: { id: ctx.conversationId },
-        data: { followUpSentAt: null },
+      await prisma.conversation.updateMany({
+        where: { id: ctx.conversationId, tenantId: ctx.tenantId },
+        data: { followUpReason: reason },
       });
-      return "Follow-up automático programado.";
+      return reason === "stop"
+        ? "Registrado: este contato não receberá follow-up automático. Responda com educação, sem insistir."
+        : "Registrado: o follow-up deste contato será espaçado e sem pressão. Responda com leveza, sem insistir agora.";
     },
   },
 

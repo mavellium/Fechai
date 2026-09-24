@@ -131,7 +131,7 @@ export async function summarizeConversation(
 
   let text: string;
   try {
-    text = await completeWithFallback(messages);
+    text = await completeBackgroundText(messages);
   } catch (err) {
     if (!isAiError(err)) throw err;
     console.error(`[summary] IA indisponível (${err.code}) ao resumir ${conversationId}`, err);
@@ -191,8 +191,11 @@ export async function summarizeConversation(
  * Diferença deliberada do caminho do atendimento: aqui NÃO se marca quarentena
  * na credencial. Resumo é trabalho de segundo plano; deixar uma chave de molho
  * por causa dele penalizaria o atendimento, que é o que importa.
+ *
+ * Exportada porque o follow-up escrito pela IA (`modules/follow-up/compose.ts`)
+ * é o mesmo tipo de chamada: uma frase, fora do turno de atendimento.
  */
-async function completeWithFallback(messages: LlmMessage[]): Promise<string> {
+export async function completeBackgroundText(messages: LlmMessage[]): Promise<string> {
   const chain = await getUsableChain();
   let lastErr: unknown = null;
 
@@ -214,7 +217,7 @@ async function completeWithFallback(messages: LlmMessage[]): Promise<string> {
   // configuração, para o chamador devolver `{ ok: false }` em vez de estourar.
   throw (
     lastErr ??
-    new AiError("auth", "Nenhum provedor de IA disponível para o resumo.", {
+    new AiError("auth", "Nenhum provedor de IA disponível para a tarefa de segundo plano.", {
       provider: chain[0]?.model.provider ?? "openai",
       model: chain[0]?.model.id ?? "-",
     })

@@ -8,6 +8,7 @@ import { setAgentBehavior } from "./actions";
 import { VoiceRecorder } from "./VoiceRecorder";
 import { SpeechBlocklistForm } from "./SpeechBlocklistForm";
 import { VoiceStyleSelect } from "./VoiceStyleSelect";
+import { VoicePromptForm } from "./VoicePromptForm";
 
 type BehaviorKey = "listenAudio" | "speakReplies" | "stopOnEmoji";
 
@@ -51,6 +52,7 @@ export function BehaviorSettings({
   voiceAvailable,
   speechBlocklist = "",
   voiceStyle = "",
+  voicePrompt = "",
 }: {
   agentId: string;
   listenAudio: boolean;
@@ -60,6 +62,7 @@ export function BehaviorSettings({
   speechBlocklist?: string;
   /** Como a voz se comporta (`Agent.voiceStyle`, ver VoiceStyleSelect). */
   voiceStyle?: string;
+  voicePrompt?: string;
   /** Voz já clonada na Fish Audio, se houver. */
   voice: { label: string | null; createdAt: Date | null; source: string | null } | null;
   /** Chave da voz pronta em uso, quando a voz vem do catálogo. */
@@ -127,6 +130,7 @@ export function BehaviorSettings({
             quem ainda está montando o agente. Configuração que existe e não
             aparece é pior que uma linha a mais na tela. */}
         <VoiceStyleSelect agentId={agentId} initial={voiceStyle} />
+        <VoicePromptForm agentId={agentId} initial={voicePrompt} />
         <SpeechBlocklistForm agentId={agentId} initial={speechBlocklist} />
       </section>
 

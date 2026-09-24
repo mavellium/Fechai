@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const db = vi.hoisted(() => ({
   tenantAction: { findFirst: vi.fn(), findUnique: vi.fn() },
   appointment: { findFirst: vi.fn(), findMany: vi.fn(), updateMany: vi.fn(), create: vi.fn(), update: vi.fn() },
-  conversation: { update: vi.fn() },
+  conversation: { update: vi.fn(), updateMany: vi.fn() },
   lead: { findFirst: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
 }));
 const mirrors = vi.hoisted(() => ({ googlePush: vi.fn(), googleDelete: vi.fn(), clinicorpPush: vi.fn(), clinicorpCancel: vi.fn(), clinicorpConflict: vi.fn(), clinicorpBusy: vi.fn() }));
@@ -204,23 +204,40 @@ describe("nome da pessoa atendida", () => {
 });
 
 describe("follow-up depois do agendamento", () => {
-  it("não programa reengajamento quando o contato já tem consulta futura", async () => {
+  // A tool só registra COMO o contato deixou a conversa; quem manda é o
+  // worker. Quem apenas sumiu é reengajado sem a tool ser chamada.
+  it("não põe na esteira de recusa quem já tem consulta futura", async () => {
     db.appointment.findMany.mockResolvedValue([appointment]);
 
-    const result = await runToolHandler("follow_up", ctx, {});
+    const result = await runToolHandler("follow_up", ctx, { motivo: "nao_quer_agendar" });
 
     expect(result).toContain("já tem uma consulta futura");
-    expect(db.conversation.update).not.toHaveBeenCalled();
+    expect(db.conversation.updateMany).not.toHaveBeenCalled();
   });
 
-  it("continua permitindo follow-up para contato sem consulta futura", async () => {
+  it("registra a recusa para a esteira espaçada, escopado pela conta", async () => {
     db.appointment.findMany.mockResolvedValue([]);
 
-    expect(await runToolHandler("follow_up", ctx, {})).toContain("programado");
-    expect(db.conversation.update).toHaveBeenCalledWith({
-      where: { id: ctx.conversationId },
-      data: { followUpSentAt: null },
+    expect(await runToolHandler("follow_up", ctx, { motivo: "nao_quer_agendar" })).toContain("espaçado");
+    expect(db.conversation.updateMany).toHaveBeenCalledWith({
+      where: { id: ctx.conversationId, tenantId: ctx.tenantId },
+      data: { followUpReason: "declined" },
     });
+  });
+
+  it("\"pare de me mandar mensagem\" vale mesmo com consulta marcada", async () => {
+    db.appointment.findMany.mockResolvedValue([appointment]);
+
+    expect(await runToolHandler("follow_up", ctx, { motivo: "pediu_para_parar" })).toContain("não receberá");
+    expect(db.conversation.updateMany).toHaveBeenCalledWith({
+      where: { id: ctx.conversationId, tenantId: ctx.tenantId },
+      data: { followUpReason: "stop" },
+    });
+  });
+
+  it("recusa motivo desconhecido sem gravar nada", async () => {
+    expect(await runToolHandler("follow_up", ctx, {})).toContain("Informe o motivo");
+    expect(db.conversation.updateMany).not.toHaveBeenCalled();
   });
 });
 

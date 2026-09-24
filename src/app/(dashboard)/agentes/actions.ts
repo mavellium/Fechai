@@ -29,7 +29,13 @@ import {
 } from "@/modules/scheduling/config";
 import { listClinicorpCategories } from "@/modules/scheduling/clinicorp";
 import { getCalendarFeatures } from "@/modules/scheduling/features";
-import { MAX_FOLLOWUP_DELAY_MINUTES, saveFollowUpConfig } from "@/modules/follow-up/config";
+import {
+  MAX_FOLLOWUP_DELAY_MINUTES,
+  MAX_FOLLOWUP_MESSAGE_LENGTH,
+  MAX_FOLLOWUP_STEPS,
+  saveFollowUpConfig,
+  validateFollowUpConfig,
+} from "@/modules/follow-up/config";
 import { normalizeGroupId, saveHandoffConfig } from "@/modules/agent-engine/handoff";
 import { validateVariableDefinitions, type VariableDefinition } from "@/modules/agent-engine/variables";
 import {
@@ -361,6 +367,23 @@ export async function setAgentVoiceStyle(agentId: string, style: string): Promis
 
   revalidateAgent(agent.id);
   return { ok: true, info: "Jeito de falar salvo." };
+}
+
+export async function saveVoicePrompt(agentId: string, raw: string): Promise<Result> {
+  const { agent } = await requireAgent(agentId);
+  if (!agent) return { ok: false, error: "Agente não encontrado." };
+  const parsed = z.string().trim().max(1200, "Use até 1.200 caracteres.").safeParse(raw);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Instrução inválida." };
+
+  await prisma.agent.update({ where: { id: agent.id }, data: { voicePrompt: parsed.data } });
+  await recordChange({
+    event: "agent.voice_prompt_updated",
+    target: { type: "Agent", id: agent.id, label: agent.name },
+    before: { voicePrompt: agent.voicePrompt },
+    after: { voicePrompt: parsed.data },
+  });
+  revalidateAgent(agent.id);
+  return { ok: true, info: "Instruções de fala salvas." };
 }
 
 /**
@@ -1061,15 +1084,31 @@ export async function loadClinicorpDurationNamesAction(): Promise<
 
 // --------------------------------------------------- configuração do follow-up
 
+const followUpSequenceSchema = z.object({
+  enabled: z.boolean(),
+  steps: z.array(z.object({
+    delayMinutes: z.number().int()
+      .min(1, "A espera mínima de uma mensagem é 1 minuto.")
+      .max(MAX_FOLLOWUP_DELAY_MINUTES, "A espera máxima de uma mensagem é 30 dias."),
+    message: z.string().trim().max(MAX_FOLLOWUP_MESSAGE_LENGTH, `Cada mensagem tem no máximo ${MAX_FOLLOWUP_MESSAGE_LENGTH} caracteres.`),
+    ai: z.boolean(),
+  })).max(MAX_FOLLOWUP_STEPS, `Cada esteira tem no máximo ${MAX_FOLLOWUP_STEPS} mensagens.`),
+});
+
 const followUpConfigSchema = z.object({
-  delayMinutes: z.coerce.number().int().min(1).max(MAX_FOLLOWUP_DELAY_MINUTES),
-  message: z.string().trim().min(1, "Escreva a mensagem de follow-up").max(500),
+  noReply: followUpSequenceSchema,
+  declined: followUpSequenceSchema,
+  window: z.object({
+    startHour: z.number().int().min(0).max(23),
+    endHour: z.number().int().min(1).max(24),
+  }),
 });
 
 /**
- * Intervalo de silêncio usado pela ação "Follow-up automático". Fica em
+ * As duas esteiras da ação "Follow-up automático" e a janela de envio. Fica em
  * `TenantAction.config` (ver módulo follow-up), igual ao horário de
- * atendimento do agendamento.
+ * atendimento do agendamento. Vem num campo JSON só porque são listas de
+ * tamanho variável, como os lembretes da agenda.
  */
 export async function saveFollowUpConfigAction(
   _prev: Result | null,
@@ -1082,10 +1121,20 @@ export async function saveFollowUpConfigAction(
   const { tenantId, agent } = await requireAgent(agentId);
   if (!agent) return { ok: false, error: "Agente não encontrado" };
 
-  const parsed = followUpConfigSchema.safeParse(Object.fromEntries(formData));
+  let raw: unknown;
+  try {
+    raw = JSON.parse(String(formData.get("config") ?? ""));
+  } catch {
+    return { ok: false, error: "Follow-up inválido. Confira as mensagens." };
+  }
+  const parsed = followUpConfigSchema.safeParse(raw);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Dados inválidos" };
   }
+  // Esteira ligada sem mensagem, texto em branco, janela invertida: regra
+  // dupla, como os lembretes — a tela avisa, mas quem decide é o servidor.
+  const error = validateFollowUpConfig(parsed.data);
+  if (error) return { ok: false, error };
 
   await saveFollowUpConfig(tenantId, agent.id, parsed.data);
   revalidateAgent(agent.id);

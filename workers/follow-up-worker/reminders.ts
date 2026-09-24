@@ -84,7 +84,46 @@ export function staleReminders(
   return [];
 }
 
-/** Os lembretes que valem para esta consulta: os dela, ou os do agente. */
+/**
+ * A configuração GERAL de lembretes de cada conta: a do agente principal (o
+ * que atende o WhatsApp), com `schedule_meeting` ligada.
+ *
+ * É a conta, e não o `agentId` gravado na consulta, que decide — a mesma regra
+ * de `/agenda`, que mostra os lembretes do principal como "Do agente". Ler pelo
+ * `agentId` fazia a tela prometer uma coisa e o worker fazer outra: consulta
+ * marcada antes de trocar o agente do WhatsApp (ou por um agente apagado, que
+ * deixa `agentId` null) seguia uma config sem lembrete, e só disparava depois
+ * que alguém salvava lembretes próprios nela.
+ */
+async function loadAccountScheduleConfigs(): Promise<Map<string, ScheduleConfig>> {
+  // A configuração dos lembretes mora na ação `schedule_meeting` (não numa
+  // ação própria), e só age com a ação LIGADA — mesma regra de
+  // `getActiveHandoffConfig`: config salva com a ação desligada não atua.
+  const enabled = await prisma.tenantAction.findMany({
+    where: { key: "schedule_meeting", enabled: true },
+    select: { tenantId: true, agentId: true, config: true },
+  });
+  if (enabled.length === 0) return new Map();
+
+  // Mesma ordem de `resolveAgent`: é o agente que atende o WhatsApp.
+  const agents = await prisma.agent.findMany({
+    where: { tenantId: { in: [...new Set(enabled.map((a) => a.tenantId))] }, archived: false },
+    orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }],
+    select: { id: true, tenantId: true },
+  });
+  const primaryByTenant = new Map<string, string>();
+  for (const agent of agents) {
+    if (!primaryByTenant.has(agent.tenantId)) primaryByTenant.set(agent.tenantId, agent.id);
+  }
+
+  return new Map(
+    enabled
+      .filter((a) => primaryByTenant.get(a.tenantId) === a.agentId)
+      .map((a) => [a.tenantId, parseScheduleConfig(a.config)]),
+  );
+}
+
+/** Os lembretes que valem para esta consulta: os dela, ou os gerais da conta. */
 export function remindersFor(
   appt: { reminderOverride: unknown },
   cfg: Pick<ScheduleConfig, "reminderEnabled" | "reminders">,
@@ -98,24 +137,14 @@ export function remindersFor(
 }
 
 export async function scanAndSendReminders(now: Date = new Date()) {
-  // A configuração dos lembretes mora na ação `schedule_meeting` (não numa
-  // ação própria), e só age com a ação LIGADA — mesma regra de
-  // `getActiveHandoffConfig`: config salva com a ação desligada não atua.
-  const enabled = await prisma.tenantAction.findMany({
-    where: { key: "schedule_meeting", enabled: true },
-    select: { agentId: true, config: true },
-  });
-  if (enabled.length === 0) return { scanned: 0, sent: 0 };
-
-  const configByAgent = new Map<string, ScheduleConfig>(
-    enabled.map((a) => [a.agentId, parseScheduleConfig(a.config)]),
-  );
+  const configByTenant = await loadAccountScheduleConfigs();
+  if (configByTenant.size === 0) return { scanned: 0, sent: 0 };
 
   // Teto da busca: a maior antecedência configurada. Sem ele, a varredura
   // carregaria a agenda inteira do ano para descartar quase tudo em memória.
   // Uma consulta pode ter override próprio mais distante que o do agente, por
   // isso o teto considera os dois.
-  const configuredRules = [...configByAgent.values()]
+  const configuredRules = [...configByTenant.values()]
     .filter((cfg) => cfg.reminderEnabled)
     .flatMap((cfg) => cfg.reminders);
   // Um horário fixo na véspera pode cair quase um dia antes do instante
@@ -126,7 +155,8 @@ export async function scanAndSendReminders(now: Date = new Date()) {
 
   const appointments = await prisma.appointment.findMany({
     where: {
-      agentId: { in: [...configByAgent.keys()] },
+      // Pela conta, não pelo `agentId`: ver `loadAccountScheduleConfigs`.
+      tenantId: { in: [...configByTenant.keys()] },
       status: "scheduled",
       startsAt: { gte: now },
       // Conversa de teste não recebe lembrete: o sandbox usa telefone
@@ -148,14 +178,14 @@ export async function scanAndSendReminders(now: Date = new Date()) {
   // Fechar (em vez de ignorar) é o que impede reavaliá-las em todo ciclo.
   const overdue = await prisma.appointment.findMany({
     where: {
-      agentId: { in: [...configByAgent.keys()] },
+      tenantId: { in: [...configByTenant.keys()] },
       status: "scheduled",
       startsAt: { lt: now },
     },
-    select: { id: true, agentId: true, remindersSent: true, reminderOverride: true, startsAt: true, status: true },
+    select: { id: true, tenantId: true, remindersSent: true, reminderOverride: true, startsAt: true, status: true },
   });
   for (const appt of overdue) {
-    const cfg = appt.agentId ? configByAgent.get(appt.agentId) : undefined;
+    const cfg = configByTenant.get(appt.tenantId);
     if (!cfg) continue;
     const pending = staleReminders(appt, remindersFor(appt, cfg), now);
     if (pending.length === 0) continue;
@@ -165,7 +195,7 @@ export async function scanAndSendReminders(now: Date = new Date()) {
   let sent = 0;
 
   for (const appt of appointments) {
-    const cfg = appt.agentId ? configByAgent.get(appt.agentId) : undefined;
+    const cfg = configByTenant.get(appt.tenantId);
     if (!cfg) continue;
 
     const rules = remindersFor(appt, cfg);
