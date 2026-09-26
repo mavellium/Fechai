@@ -62,7 +62,7 @@ const SECRET_SUFFIXES = [
   "enc",
 ];
 
-function isSecretField(key: string): boolean {
+export function isSecretField(key: string): boolean {
   const name = key.toLowerCase();
   if (SECRET_FIELDS.has(name)) return true;
   return SECRET_SUFFIXES.some((suffix) => name.endsWith(suffix));

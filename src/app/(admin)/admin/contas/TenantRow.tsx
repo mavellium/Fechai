@@ -11,6 +11,7 @@ import { Select } from "@/components/ui/select";
 import { SidePanel } from "@/components/ui/side-panel";
 import { Switch } from "@/components/ui/switch";
 import { FormFeedback } from "@/components/ui/alert";
+import { TenantDownloadButton } from "./TenantDownloadButton";
 import {
   suspendTenant,
   changePlan,
@@ -384,6 +385,7 @@ export function TenantRow(t: Props) {
           }
         >
           <div className="space-y-6">
+            <TenantDownloadButton tenantId={t.id} />
             {impError && (
               <p role="alert" className="font-mono text-micro text-danger">
                 {impError}

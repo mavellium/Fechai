@@ -25,7 +25,22 @@ setTenantStatus(id, status) ; adminSetPlan(id, planKey)
 adminCreateAccount(input) -> { ok: true, tempPassword? } | { ok: false, error }
 ```
 
-## Autorização
+## Download dos dados de uma conta
+
+Em Contas → Gerenciar, `TenantDownloadButton` baixa um JSON de diagnóstico por
+`GET /api/admin/tenants/[id]/export`. A rota verifica a sessão real e exige
+SUPERADMIN antes de ler a conta, incluindo quando há personificação ativa.
+`tenant-export.ts` exporta todas as páginas (500 linhas por consulta), sem
+cortar conversas, mensagens, configurações ou textos. O JSON termina com
+contagens e `completed: true`; uma falha interrompe o download.
+
+Credenciais e hashes são omitidos das consultas de usuários/integrações e
+também filtrados recursivamente com a mesma regra da auditoria. Arquivos e
+áudios ficam como URLs, embeddings e sessões ficam de fora. Não é backup
+restaurável nem coleta de logs de servidor ou da agenda externa. A solicitação
+é auditada em `admin.tenant_export_requested`, sem copiar o conteúdo do arquivo.
+
+## Autorização das operações
 
 **Todas** são cross-tenant e assumem SUPERADMIN. A checagem fica na rota `(admin)/` (`requireSuperadmin`) e nas server actions do painel — nunca exponha estas funções a rotas do cliente.
 

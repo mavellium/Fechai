@@ -241,6 +241,7 @@ export const AUDIT_EVENTS = {
     group: "admin",
   },
   "admin.account_created": { label: "Criou uma conta pelo painel", kind: "create", group: "admin" },
+  "admin.tenant_export_requested": { label: "Solicitou download dos dados da conta", kind: "access", group: "admin" },
   "admin.tenant_deleted": {
     label: "Excluiu a conta definitivamente",
     kind: "delete",
