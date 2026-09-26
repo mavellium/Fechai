@@ -15,9 +15,9 @@ vi.mock("@/modules/agent-engine/handoff", async (importOriginal) => ({
   addLeadToHandoffGroup: vi.fn(),
 }));
 
-import { getToolSchemas, runToolHandler } from "@/modules/agent-engine/tools";
+import { getToolSchemas, runToolHandler, type ToolContext } from "@/modules/agent-engine/tools";
 import { parseScheduleConfig } from "@/modules/scheduling/config";
-import { leadAppointmentsContext } from "@/modules/agent-engine/scheduling-tools";
+import { leadAppointmentsContext, offerAlternativeSlots } from "@/modules/agent-engine/scheduling-tools";
 import { emptyWeek } from "@/modules/scheduling/weekly-availability";
 
 const ctx = { tenantId: "conta-1", leadId: "cliente-1", agentId: "agente-1", conversationId: "conversa-1" };
@@ -32,6 +32,7 @@ const reschedule = (args = {}) => runToolHandler("reschedule_meeting", ctx, { ap
 
 beforeEach(() => {
   vi.clearAllMocks();
+  delete (ctx as ToolContext).replyOverride;
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-09-16T12:00:00Z"));
   db.tenantAction.findFirst.mockResolvedValue({ config: cfg });
@@ -48,6 +49,90 @@ beforeEach(() => {
   mirrors.clinicorpBusy.mockResolvedValue([]);
 });
 afterEach(() => vi.useRealTimers());
+
+describe("agenda externa sem disponibilidade confirmada", () => {
+  it("busca o próximo dia e respeita a duração inteira ao oferecer alternativas", async () => {
+    const week = emptyWeek();
+    week[4] = [{ start: 840, end: 900 }];
+    week[5] = [{ start: 840, end: 1080 }];
+    db.appointment.findMany.mockResolvedValue([]);
+    mirrors.clinicorpBusy.mockImplementation(async (_tenant, date) => date === "2026-09-18"
+      ? [{ startsAt: new Date("2026-09-18T17:30Z"), endsAt: new Date("2026-09-18T18:00Z") }] : []);
+    const turn: ToolContext = { ...ctx };
+    const reply = await offerAlternativeSlots(turn, { ...cfg, weeklyAvailability: week }, new Date("2026-09-17T17:00Z"), 60);
+    expect(reply).toContain("18 de set.");
+    expect(reply).toContain("15:00");
+    expect(reply).toContain("16:00");
+    expect(reply).not.toContain("14:00");
+    expect(db.appointment.create).not.toHaveBeenCalled();
+    expect(db.conversation.updateMany).not.toHaveBeenCalled();
+  });
+  it("marca a alternativa escolhida em uma nova resposta do cliente após recusa", async () => {
+    db.appointment.findMany.mockResolvedValue([]);
+    db.appointment.create.mockResolvedValue({ id: "tentativa" });
+    db.appointment.update.mockResolvedValue({});
+    db.lead.findUnique.mockResolvedValue({ name: "Paciente", phone: "5511999999999" });
+    db.lead.update.mockResolvedValue({});
+    mirrors.clinicorpPush.mockResolvedValueOnce({ status: "failed", reason: "conflict", error: "Horário ocupado" });
+    const first = await runToolHandler("schedule_meeting", { ...ctx }, { date: "2026-09-18", time: "14:00", patientName: "Paciente" });
+    expect(first).toContain("Qual fica melhor");
+    const second = await runToolHandler("schedule_meeting", { ...ctx }, { date: "2026-09-18", time: "09:00", patientName: "Paciente" });
+    expect(second).toContain("Agendado para");
+    expect(db.lead.update).toHaveBeenCalledOnce();
+    expect(db.conversation.updateMany).not.toHaveBeenCalled();
+    expect(mirrors.googlePush).toHaveBeenCalledOnce();
+  });
+  it("não oferece horários quando não consegue ler a agenda", async () => {
+    const turn: ToolContext = { ...ctx };
+    mirrors.clinicorpBusy.mockResolvedValue(null);
+    const result = await runToolHandler("list_available_slots", turn, { date: "2026-09-17", days: 1 });
+    expect(result).toContain("Não foi possível conferir");
+    expect(turn.replyOverride).toContain("Ainda não confirmei");
+    expect(db.appointment.create).not.toHaveBeenCalled();
+  });
+  it("não cria reserva se a checagem final falha", async () => {
+    db.appointment.findMany.mockResolvedValue([]);
+    mirrors.clinicorpConflict.mockResolvedValue(null);
+    const turn: ToolContext = { ...ctx };
+    await runToolHandler("schedule_meeting", turn, { date: "2026-09-17", time: "14:00", patientName: "Paciente" });
+    expect(turn.replyOverride).toContain("Ainda não confirmei");
+    expect(db.appointment.create).not.toHaveBeenCalled();
+    expect(mirrors.clinicorpPush).not.toHaveBeenCalled();
+  });
+  it("preserva o horário original quando não consegue conferir o reagendamento", async () => {
+    mirrors.clinicorpConflict.mockResolvedValue(null);
+    expect(await reschedule()).toContain("Não foi possível conferir");
+    expect(db.appointment.updateMany).not.toHaveBeenCalled();
+    expect(mirrors.clinicorpCancel).not.toHaveBeenCalled();
+    delete (ctx as ToolContext).replyOverride;
+  });
+  it.each(["schedule_meeting", "reschedule_meeting"])("oferece alternativas sem transferir após recusa por conflito: %s", async (tool) => {
+    const turn: ToolContext = { ...ctx };
+    db.appointment.findMany.mockResolvedValue([]);
+    db.appointment.create.mockResolvedValue({ id: "nova-consulta" });
+    db.appointment.update.mockResolvedValue({});
+    db.lead.findUnique.mockResolvedValue({ name: "Paciente", phone: "5511999999999" });
+    db.lead.update.mockResolvedValue({});
+    mirrors.clinicorpPush.mockResolvedValueOnce({ status: "failed", reason: "conflict", error: "O horário solicitado encontra-se ocupado" });
+    const result = await runToolHandler(tool, turn, { appointmentId: appointment.id, confirmed: true, date: "2026-09-18", time: "14:00", patientName: "Paciente" });
+    expect(result).toContain("Encontrei estas opções disponíveis");
+    expect(turn.replyOverride).toContain("Qual fica melhor para você?");
+    expect(result).not.toContain("14:00");
+    expect(db.conversation.updateMany).not.toHaveBeenCalled();
+    if (tool === "schedule_meeting") {
+      expect(db.appointment.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ status: "canceled", reminderOverride: [] }),
+      }));
+      expect(db.lead.update).not.toHaveBeenCalled();
+      expect(mirrors.googlePush).not.toHaveBeenCalled();
+    } else {
+      expect(db.appointment.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+        data: { startsAt: appointment.startsAt, endsAt: appointment.endsAt },
+      }));
+      expect(mirrors.clinicorpPush).toHaveBeenLastCalledWith(ctx.tenantId, expect.objectContaining({ startsAt: appointment.startsAt, endsAt: appointment.endsAt }));
+    }
+  });
+});
 
 describe("permissões dentro de Agendar horário", () => {
   it("expõe cada ferramenta só com a opção habilitada e a ação principal ativa", () => {
@@ -315,7 +400,9 @@ describe("horários livres antes de sugerir", () => {
     mirrors.clinicorpConflict.mockResolvedValue(true);
     const result = await runToolHandler("schedule_meeting", ctx, { date: "2026-09-17", time: "14:00", patientName: "Cliente" });
     expect(result).toContain("ocupado");
-    expect(result).toContain("Livres no mesmo dia: 09:00, 10:30");
+    expect(result).toContain("Encontrei estas opções disponíveis");
+    expect(result).toContain("09:00");
+    expect(result).toContain("10:30");
     expect(db.appointment.create).not.toHaveBeenCalled();
   });
 });

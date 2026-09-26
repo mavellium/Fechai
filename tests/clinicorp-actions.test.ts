@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   updateMany: vi.fn(), categories: vi.fn(), create: vi.fn(), features: vi.fn(), status: vi.fn(),
-  lead: vi.fn(),
+  lead: vi.fn(), conflict: vi.fn(),
 }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/lib/session", () => ({ requireTenant: vi.fn(async () => ({ tenantId: "tenant-logado" })) }));
@@ -18,10 +18,11 @@ vi.mock("@/modules/audit/log", () => ({}));
 vi.mock("@/modules/scheduling/google", () => ({}));
 vi.mock("@/modules/scheduling/features", () => ({ getCalendarFeatures: mocks.features }));
 vi.mock("@/modules/scheduling/clinicorp", () => ({ listClinicorpCategories: mocks.categories, getClinicorpStatus: mocks.status }));
-vi.mock("@/modules/scheduling/repository", () => ({ createAppointment: mocks.create, hasConflictAnywhere: vi.fn(async () => false) }));
+vi.mock("@/modules/scheduling/repository", () => ({ createAppointment: mocks.create, hasConflictAnywhere: mocks.conflict }));
 
 import { saveClinicorpSettingsAction } from "@/app/(dashboard)/integracoes/actions";
 import { createManualAppointment } from "@/app/(dashboard)/agenda/actions";
+import { AvailabilityUnavailableError } from "@/modules/scheduling/availability-error";
 import { loadClinicorpDurationNamesAction } from "@/app/(dashboard)/agentes/actions";
 
 function form(values: Record<string, string>) {
@@ -34,12 +35,24 @@ const appointment = { title: "Teste", date: "2026-09-14", time: "16:30", duratio
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.conflict.mockResolvedValue(false);
   mocks.updateMany.mockResolvedValue({ count: 1 });
   mocks.categories.mockResolvedValue({ ok: true, data: [{ id: "333333333333", name: "Avaliação" }] });
   mocks.features.mockResolvedValue({ clinicorpEnabled: true });
   mocks.status.mockResolvedValue({ syncEnabled: true });
   mocks.lead.mockResolvedValue({ id: "contato-1", phone: "5511999990000" });
   mocks.create.mockResolvedValue({ clinicorpSync: { status: "synced", appointmentId: "123" } });
+});
+
+it("mostra falha de disponibilidade no agendamento manual sem gravar", async () => {
+  mocks.conflict.mockRejectedValue(new AvailabilityUnavailableError());
+  expect(await createManualAppointment(null, form(appointment))).toEqual({ ok: false, error: expect.stringContaining("conferir a disponibilidade") });
+  expect(mocks.create).not.toHaveBeenCalled();
+});
+
+it("não anuncia sucesso no formulário manual quando o Clinicorp recusa por conflito", async () => {
+  mocks.create.mockResolvedValue({ clinicorpSync: { status: "failed", reason: "conflict", error: "Horário ocupado" } });
+  expect(await createManualAppointment(null, form(appointment))).toEqual({ ok: false, error: expect.stringContaining("Escolha outro horário") });
 });
 
 describe("salvar preferências do Clinicorp", () => {

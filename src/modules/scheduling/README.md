@@ -298,8 +298,11 @@ nada, o agente sugeria um horário já ocupado, o contato aceitava e só então
 - `listFreeSlots(tenantId, cfg, date)` (repository) devolve os inícios livres de
   um dia local pelas **mesmas regras da gravação**: dia atendido, expediente,
   pausas, antecedência (`>=`, igual à recusa de `schedule_meeting`) e conflito na
-  nossa base e no Clinicorp (`listClinicorpBusyBlocks`, uma chamada por dia, que
-  nunca lança e cai para lista vazia).
+  nossa base e no Clinicorp (`listClinicorpBusyBlocks`, uma chamada por dia).
+  A integração nunca lança: devolve `null` se não conseguiu conferir. O repository
+  converte isso em `AvailabilityUnavailableError`; a tela mostra o erro e o agente
+  encerra o turno sem oferecer ou confirmar novos horários. `[]` significa uma
+  agenda realmente vazia ou a consulta externa desabilitada.
 - Candidatos: `slotStartTimes(cfg)` (grade da duração, recomeçada no fim de cada
   pausa) mais o fim de cada compromisso ocupado, para um encaixe fora da grade
   não sumir.
@@ -311,8 +314,8 @@ nada, o agente sugeria um horário já ocupado, o contato aceitava e só então
   sexta) entram em `excludeWeekdays`. Nenhum deles volta nas opções; o prompt manda
   avançar para o próximo dia da grade em vez de insistir. A tool continua sendo
   obrigatória antes de sugerir ou aceitar qualquer horário.
-- A recusa por conflito em `schedule_meeting` e `reschedule_meeting` já anexa os
-  livres do mesmo dia (`freeSlotsHint`), para a segunda sugestão não ser outro
+- A recusa por conflito em `schedule_meeting` e `reschedule_meeting` já oferece
+  alternativas conferidas (`offerAlternativeSlots`), para a segunda sugestão não ser outro
   chute. A lista é orientação: `hasConflictAnywhere` continua sendo a checagem
   final antes de gravar (alguém pode marcar entre a consulta e a confirmação).
 
@@ -361,10 +364,11 @@ Base: `https://api.clinicorp.com/rest/v1`. Quase todo endpoint pede
   de pacientes. O telefone é o que de fato distingue, e ele já foi consultado
   antes (`GET /patient/get?Phone=`, que aceita qualquer formato; mandamos só
   dígitos).
-- **Falha na consulta de disponibilidade devolve `false`, não `true`.** O
-  Clinicorp é fonte extra de informação, não porteiro. Se ele estiver fora do ar,
-  recusar todo horário significaria perder o lead por indisponibilidade de um
-  terceiro.
+- **Falha na consulta de disponibilidade devolve `null`.** Com a checagem
+  habilitada, uma falha, credencial ilegível ou resposta incompleta não prova que
+  o horário esteja livre. Nenhuma reserva nova é confirmada até conseguir
+  conferir; consultas já combinadas são preservadas. Desligar a integração ou
+  `checkAvailability` continua permitindo usar só a agenda local.
 - **`syncEnabled` e `checkAvailability` são independentes.** Uma clínica pode
   querer só enviar, sem a leitura extra a cada horário oferecido.
 - **Filtro por profissional só quando a conta fixou um** (`dentistId`). Com
@@ -390,6 +394,17 @@ Base: `https://api.clinicorp.com/rest/v1`. Quase todo endpoint pede
   A criação manual mostra aviso de falha; a ferramenta do agente não afirma
   que o horário já aparece no Clinicorp. A agenda indica o envio por compromisso
   usando `clinicorpAppointmentId`, inclusive quando outro envio posterior deu certo.
+- A recusa explícita "horário ocupado" retorna `failed` com `reason: "conflict"`.
+  Uma tentativa nova é cancelada localmente, sem promover o lead a agendado nem
+  enviar ao Google. Ao reagendar, o horário original é reposto e seus espelhos
+  são restaurados. Falha genérica do espelho continua preservando a consulta.
+  **Conflito não transfere para humano.** `offerAlternativeSlots` consulta até
+  três opções livres nos próximos 14 dias, com a duração do atendimento, e exclui
+  o intervalo recusado mesmo se a leitura externa estiver desatualizada.
+  `ToolContext.replyOverride` entrega essas opções diretamente e pede a escolha
+  do contato antes de reservar outra. A conversa permanece com o agente.
+  Regressões em `clinicorp.test.ts`, `agendamento-tools.test.ts` e
+  `agente-desligado.test.ts`.
 - O contato com telefone é obrigatório no formulário manual quando o envio ao
   Clinicorp está ativado; sem espelho continua opcional. O servidor também valida.
 - Profissional, clínica e categoria são campos controlados no formulário. O

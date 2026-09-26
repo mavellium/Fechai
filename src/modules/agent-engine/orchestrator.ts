@@ -245,6 +245,12 @@ export async function runAgentTurn(input: {
         toolsUsed.push(call.name);
         const out = await runToolHandler(call.name, ctx, call.arguments);
         messages.push({ role: "tool", toolCallId: call.id, content: out });
+        if (ctx.replyOverride) break;
+      }
+
+      if (ctx.replyOverride) {
+        finalReply = ctx.replyOverride;
+        break;
       }
 
       if (i === MAX_TOOL_ITERATIONS - 1) {

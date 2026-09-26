@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encryptSecret } from "@/lib/crypto";
+import { Prisma } from "@prisma/client";
 
 const db = vi.hoisted(() => ({
   clinicorpIntegration: { findUnique: vi.fn(), update: vi.fn(), upsert: vi.fn() },
   calendarFeatures: { findUnique: vi.fn() },
-  appointment: { create: vi.fn(), update: vi.fn() },
+  appointment: { create: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
   lead: { update: vi.fn(), findUnique: vi.fn() },
 }));
 vi.mock("@/lib/prisma", () => ({ prisma: db }));
@@ -12,7 +13,7 @@ vi.mock("@/modules/scheduling/google", () => ({ pushEventToGoogle: vi.fn(async (
 
 import {
   cancelAppointmentInClinicorp, getClinicorpStatus, hasClinicorpConflict,
-  listClinicorpCategories, listClinicorpProfessionals, pushAppointmentToClinicorp,
+  listClinicorpCategories, listClinicorpProfessionals, listClinicorpBusyBlocks, pushAppointmentToClinicorp,
   saveClinicorpCredentials, testClinicorpConnection, verifyClinicorpCredentials,
 } from "@/modules/scheduling/clinicorp";
 import { createAppointment } from "@/modules/scheduling/repository";
@@ -100,7 +101,7 @@ describe("envio de agendamentos ao Clinicorp", () => {
       startsAt: event.startsAt, durationMinutes: 15, source: "manual", timezone: event.timeZone });
     expect(result).toMatchObject({ id: "appointment-local", clinicorpAppointmentId: null, clinicorpSync: { status: "failed" } });
     expect(db.appointment.create).toHaveBeenCalledOnce();
-    expect(db.appointment.update).not.toHaveBeenCalled();
+    expect(db.appointment.update).toHaveBeenCalledWith({ where: { id: "appointment-local" }, data: { reminderOverride: Prisma.DbNull } });
   });
 
   it("não lança com timeout e não informa sincronização bem-sucedida", async () => {
@@ -133,7 +134,7 @@ describe("envio de agendamentos ao Clinicorp", () => {
     const result = await createAppointment({ tenantId: "tenant-1", leadId: "lead-1", title: event.title,
       startsAt: event.startsAt, durationMinutes: 15, source: "manual", timezone: event.timeZone });
     expect(result.clinicorpAppointmentId).toBe("987654321");
-    expect(db.appointment.update).toHaveBeenCalledWith({ where: { id: "appointment-local" }, data: { clinicorpAppointmentId: "987654321" } });
+    expect(db.appointment.update).toHaveBeenCalledWith({ where: { id: "appointment-local" }, data: { clinicorpAppointmentId: "987654321", reminderOverride: Prisma.DbNull } });
   });
 });
 
@@ -177,6 +178,36 @@ describe("conexão e preferências", () => {
 });
 
 describe("disponibilidade", () => {
+  it.each([null, {}, { appointments: [] }, [null], [{ fromTime: "16:00" }], [{ fromTime: "16:00", toTime: "inválido" }]])("não transforma resposta incompleta em horário livre: %j", async (body) => {
+    fetchMock.mockImplementation(async () => json(body));
+    expect(await hasClinicorpConflict("tenant-1", event.startsAt, event.endsAt, event.timeZone)).toBeNull();
+    expect(await listClinicorpBusyBlocks("tenant-1", "2026-09-14", event.timeZone)).toBeNull();
+  });
+  it.each([401, 403, 500])("não oferece disponibilidade se a consulta retorna %i", async (status) => {
+    fetchMock.mockImplementation(async () => json({ message: "indisponível" }, status));
+    expect(await hasClinicorpConflict("tenant-1", event.startsAt, event.endsAt, event.timeZone)).toBeNull();
+    expect(await listClinicorpBusyBlocks("tenant-1", "2026-09-14", event.timeZone)).toBeNull();
+  });
+  it("distingue timeout e credencial ilegível de uma integração desabilitada", async () => {
+    fetchMock.mockRejectedValue(new DOMException("timeout", "TimeoutError"));
+    expect(await hasClinicorpConflict("tenant-1", event.startsAt, event.endsAt, event.timeZone)).toBeNull();
+    integration.apiToken = "credencial-inválida";
+    expect(await hasClinicorpConflict("tenant-1", event.startsAt, event.endsAt, event.timeZone)).toBeNull();
+    db.calendarFeatures.findUnique.mockResolvedValue({ clinicorpEnabled: false });
+    expect(await hasClinicorpConflict("tenant-1", event.startsAt, event.endsAt, event.timeZone)).toBe(false);
+    expect(await listClinicorpBusyBlocks("tenant-1", "2026-09-14", event.timeZone)).toEqual([]);
+  });
+  it("permite agenda realmente vazia e consulta de disponibilidade desligada", async () => {
+    fetchMock.mockImplementation(async () => json([]));
+    expect(await hasClinicorpConflict("tenant-1", event.startsAt, event.endsAt, event.timeZone)).toBe(false);
+    integration.checkAvailability = false;
+    fetchMock.mockRejectedValue(new Error("offline"));
+    expect(await listClinicorpBusyBlocks("tenant-1", "2026-09-14", event.timeZone)).toEqual([]);
+  });
+  it("bloqueio de dia inteiro cobre também o último minuto", async () => {
+    fetchMock.mockResolvedValue(json([{ AllDay: "X", ItemType: "ASSIGN" }]));
+    expect(await hasClinicorpConflict("tenant-1", new Date("2026-09-15T02:59Z"), new Date("2026-09-15T03:00Z"), event.timeZone)).toBe(true);
+  });
   it("ignora somente o espelho da própria consulta ao reagendar", async () => {
     fetchMock.mockResolvedValue(json([{ id: 123, Dentist_PersonId: 222222222222, fromTime: "16:00", toTime: "17:00" }]));
     expect(await hasClinicorpConflict("tenant-1", event.startsAt, event.endsAt, event.timeZone, "123")).toBe(false);
@@ -194,6 +225,28 @@ describe("disponibilidade", () => {
     expect(await hasClinicorpConflict("tenant-1", event.startsAt, event.endsAt, event.timeZone)).toBe(false);
     fetchMock.mockResolvedValue(json([{ Dentist_PersonId: 222222222222, fromTime: "16:40", toTime: "17:00" }]));
     expect(await hasClinicorpConflict("tenant-1", event.startsAt, event.endsAt, event.timeZone)).toBe(true);
+  });
+});
+
+describe("recusa explícita de horário ocupado (relato da Paula)", () => {
+  it("cancela a tentativa recusada por conflito sem marcar o lead nem enviar ao Google", async () => {
+    fetchMock.mockImplementation(async (url: URL) => {
+      if (url.pathname.endsWith("/list_categories")) return json([{ id: 1234567890125, Description: "Avaliação" }]);
+      if (url.pathname.endsWith("/patient/get")) return json({ PatientId: 333333333333 });
+      return json({ message: "O horário solicitado encontra-se ocupado" }, 400);
+    });
+    const result = await createAppointment({ tenantId: "tenant-1", leadId: "lead-1", title: event.title,
+      startsAt: event.startsAt, durationMinutes: 15, source: "agent", timezone: event.timeZone });
+    expect(result.clinicorpSync).toMatchObject({ status: "failed", reason: "conflict" });
+    expect(db.appointment.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: "appointment-local", tenantId: "tenant-1", status: "scheduled" },
+      data: { status: "canceled", reminderOverride: [], notes: expect.stringContaining("horário ocupado") },
+    }));
+    expect(result.status).toBe("canceled");
+    expect(db.appointment.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ reminderOverride: [] }) }));
+    expect(db.appointment.update).not.toHaveBeenCalled();
+    expect(result.googleEventId).toBeNull();
+    expect(db.lead.update).not.toHaveBeenCalled();
   });
 });
 

@@ -23,13 +23,13 @@ export type CalendarFeatures = {
 /** Nada habilitado — o padrão de toda conta que nunca abriu a aba. */
 const NONE: CalendarFeatures = { googleEnabled: false, clinicorpEnabled: false };
 
-export async function getCalendarFeatures(tenantId: string): Promise<CalendarFeatures> {
+export async function getCalendarFeatures(tenantId: string, onUnavailable?: () => void): Promise<CalendarFeatures> {
   const row = await prisma.calendarFeatures
     .findUnique({
       where: { tenantId },
       select: { googleEnabled: true, clinicorpEnabled: true },
     })
-    .catch(() => null);
+    .catch(() => { onUnavailable?.(); return null; });
   return row ?? NONE;
 }
 

@@ -1,4 +1,6 @@
 import { prisma } from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
+import { AvailabilityUnavailableError } from "./availability-error";
 import { isWithinBusinessHours, parseScheduleConfig, slotStartTimes, type ScheduleConfig } from "./config";
 import { deleteEventFromGoogle, pushEventToGoogle } from "./google";
 import {
@@ -97,7 +99,9 @@ export async function hasConflictAnywhere(
   ignoreClinicorpId?: string,
 ): Promise<boolean> {
   if (await hasConflict(tenantId, startsAt, endsAt, ignoreId)) return true;
-  return hasClinicorpConflict(tenantId, startsAt, endsAt, timezone, ignoreClinicorpId);
+  const conflict = await hasClinicorpConflict(tenantId, startsAt, endsAt, timezone, ignoreClinicorpId);
+  if (conflict === null) throw new AvailabilityUnavailableError();
+  return conflict;
 }
 
 /**
@@ -141,6 +145,7 @@ export async function listFreeSlots(
     }),
     listClinicorpBusyBlocks(tenantId, date, cfg.timezone),
   ]);
+  if (clinicorp === null) throw new AvailabilityUnavailableError();
   const busy = [...local, ...clinicorp];
 
   const candidates = new Map<number, Date>();
@@ -194,15 +199,11 @@ export async function createAppointment(input: CreateAppointmentInput) {
       startsAt: input.startsAt,
       endsAt,
       source: input.source,
+      // Não deixe o worker enviar lembrete enquanto a tentativa ainda está
+      // aguardando a resposta que pode recusá-la por conflito.
+      reminderOverride: [],
     },
   });
-
-  // O lead agendado é o resultado que o produto promete — o status acompanha.
-  if (input.leadId) {
-    await prisma.lead
-      .update({ where: { id: input.leadId }, data: { status: "scheduled" } })
-      .catch(() => {});
-  }
 
   // O Clinicorp liga o horário ao cadastro do paciente pelo telefone, então
   // precisa do contato — o Google não usa nada disso.
@@ -212,40 +213,49 @@ export async function createAppointment(input: CreateAppointmentInput) {
         .catch(() => null)
     : null;
 
-  // Os dois espelhos são independentes e nenhum lança: em paralelo, porque um
-  // agendamento feito no meio de uma conversa não pode esperar duas APIs de
-  // terceiro em sequência.
-  const [googleEventId, clinicorpSync] = await Promise.all([
-    pushEventToGoogle(input.tenantId, {
-      title: input.title,
-      description: input.notes ?? undefined,
-      startsAt: input.startsAt,
-      endsAt,
-      timeZone: input.timezone,
-    }),
-    pushAppointmentToClinicorp(input.tenantId, {
-      title: input.title,
-      patientName: input.patientName,
-      notes: input.notes,
-      startsAt: input.startsAt,
-      endsAt,
-      timeZone: input.timezone,
-      lead,
-    }),
-  ]);
+  // Uma recusa explícita por conflito é diferente de uma falha do espelho:
+  // essa tentativa não pode ficar como consulta marcada nem ir para o Google.
+  const clinicorpSync = await pushAppointmentToClinicorp(input.tenantId, {
+    title: input.title,
+    patientName: input.patientName,
+    notes: input.notes,
+    startsAt: input.startsAt,
+    endsAt,
+    timeZone: input.timezone,
+    lead,
+  });
   const clinicorpAppointmentId = clinicorpSync.status === "synced" ? clinicorpSync.appointmentId : null;
 
-  if (googleEventId || clinicorpAppointmentId) {
-    await prisma.appointment.update({
-      where: { id: appointment.id },
+  if (clinicorpSync.status === "failed" && clinicorpSync.reason === "conflict") {
+    await prisma.appointment.updateMany({
+      where: { id: appointment.id, tenantId: input.tenantId, status: "scheduled" },
       data: {
-        ...(googleEventId ? { googleEventId } : {}),
-        ...(clinicorpAppointmentId ? { clinicorpAppointmentId } : {}),
+        status: "canceled",
+        reminderOverride: [],
+        notes: [input.notes, "Tentativa recusada pelo Clinicorp: horário ocupado. Nenhuma consulta confirmada; o agente oferece outras opções."].filter(Boolean).join("\n\n"),
       },
     });
+    return { ...appointment, status: "canceled", googleEventId: null, clinicorpAppointmentId: null, clinicorpSync };
   }
 
-  return { ...appointment, googleEventId, clinicorpAppointmentId, clinicorpSync };
+  if (input.leadId) {
+    await prisma.lead.update({ where: { id: input.leadId }, data: { status: "scheduled" } }).catch(() => {});
+  }
+  const googleEventId = await pushEventToGoogle(input.tenantId, {
+    title: input.title, description: input.notes ?? undefined,
+    startsAt: input.startsAt, endsAt, timeZone: input.timezone,
+  });
+
+  await prisma.appointment.update({
+    where: { id: appointment.id },
+    data: {
+      reminderOverride: Prisma.DbNull,
+      ...(googleEventId ? { googleEventId } : {}),
+      ...(clinicorpAppointmentId ? { clinicorpAppointmentId } : {}),
+    },
+  });
+
+  return { ...appointment, reminderOverride: null, googleEventId, clinicorpAppointmentId, clinicorpSync };
 }
 
 export async function cancelAppointment(tenantId: string, id: string, leadId?: string) {
@@ -322,9 +332,41 @@ export async function rescheduleAppointment(input: {
   // a referência para uma tentativa posterior de cancelamento.
   const clinicorpAppointmentId = clinicorpSync.status === "synced" ? clinicorpSync.appointmentId
     : clinicorpRemoved ? null : previous.clinicorpAppointmentId;
+  if (clinicorpSync.status === "failed" && "reason" in clinicorpSync && clinicorpSync.reason === "conflict") {
+    // A clínica recusou o novo horário. Reponha o original, que já havia sido
+    // combinado, e deixe o agente consultar alternativas para uma nova escolha.
+    const reverted = await prisma.appointment.updateMany({
+      where: { id: previous.id, tenantId: input.tenantId, status: "scheduled", startsAt: input.startsAt, endsAt },
+      data: { startsAt: previous.startsAt, endsAt: previous.endsAt },
+    });
+    if (!reverted.count) return { status: "unavailable" } as const;
+    const newGoogleRemoved = googleRemoved && googleEventId
+      ? await deleteEventFromGoogle(input.tenantId, googleEventId) : true;
+    const [restoredGoogleId, restoredClinicorp] = await Promise.all([
+      googleRemoved && newGoogleRemoved ? pushEventToGoogle(input.tenantId, {
+        title: previous.title, description: previous.notes ?? undefined,
+        startsAt: previous.startsAt, endsAt: previous.endsAt, timeZone: input.timezone,
+      }) : Promise.resolve(googleEventId),
+      clinicorpRemoved && previous.clinicorpAppointmentId ? pushAppointmentToClinicorp(input.tenantId, {
+        title: previous.title, patientName: previous.patientName ?? undefined, notes: previous.notes,
+        startsAt: previous.startsAt, endsAt: previous.endsAt, timeZone: input.timezone, lead,
+      }) : Promise.resolve({ status: "skipped" } as const),
+    ]);
+    await prisma.appointment.updateMany({
+      where: { id: previous.id, tenantId: input.tenantId, status: "scheduled", startsAt: previous.startsAt, endsAt: previous.endsAt },
+      data: {
+        googleEventId: restoredGoogleId,
+        clinicorpAppointmentId: restoredClinicorp.status === "synced" ? restoredClinicorp.appointmentId : null,
+        ...(restoredClinicorp.status === "failed" && restoredClinicorp.reason === "conflict" ? { reminderOverride: [] } : {}),
+      },
+    });
+    return { status: "conflict" } as const;
+  }
   await prisma.appointment.updateMany({
     where: { id: previous.id, tenantId: input.tenantId, status: "scheduled", startsAt: input.startsAt, endsAt },
-    data: { googleEventId, clinicorpAppointmentId },
+    data: {
+      googleEventId, clinicorpAppointmentId,
+    },
   });
   return { status: "rescheduled", clinicorpSync } as const;
 }

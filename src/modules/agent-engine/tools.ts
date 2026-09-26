@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { AvailabilityUnavailableError } from "@/modules/scheduling/availability-error";
 import type { LlmToolSchema } from "@/modules/ai";
 import { isWithinBusinessHours, parseScheduleConfig, resolveDuration, type ScheduleConfig } from "@/modules/scheduling/config";
 import {
@@ -12,7 +13,7 @@ import { formatInZone, parseLocalDateTime } from "@/modules/scheduling/time";
 import { DISQUALIFY_REASONS, parseReason } from "./disqualify";
 import { addLeadToHandoffGroup, handoffToolDescription, type HandoffConfig } from "./handoff";
 import { ACTION_BY_KEY, type ActionKey } from "./actions";
-import { freeSlotsHint, runSchedulingTool, SCHEDULING_TOOLS, schedulingToolAllowed } from "./scheduling-tools";
+import { offerAlternativeSlots, runSchedulingTool, SCHEDULING_TOOLS, schedulingToolAllowed } from "./scheduling-tools";
 import { allVariableDefinitions, parseVariableDefinitions, rememberConversationVariables, type VariableDefinition } from "./variables";
 
 export type ToolContext = {
@@ -21,6 +22,8 @@ export type ToolContext = {
   conversationId: string;
   /** Quem está atendendo — a agenda e a config de horário são por agente. */
   agentId: string | null;
+  /** Resposta de segurança: encerra o turno sem deixar a IA confirmar uma falha. */
+  replyOverride?: string;
 };
 type Handler = (ctx: ToolContext, args: Record<string, unknown>) => Promise<string>;
 
@@ -105,6 +108,10 @@ export async function runToolHandler(
       if (!action) return "Agendamento desabilitado para este agente.";
       return await runSchedulingTool(key, ctx, args, parseScheduleConfig(action.config));
     } catch (err) {
+      if (err instanceof AvailabilityUnavailableError) {
+        ctx.replyOverride = "Não consegui conferir a disponibilidade da agenda agora. Ainda não confirmei nenhum novo horário. Podemos tentar novamente em instantes.";
+        return err.message;
+      }
       console.error(`[tools] falha em ${key}`, err);
       return `Falha ao executar ${key}. Consulte a agenda antes de afirmar que houve alteração.`;
     }
@@ -117,6 +124,10 @@ export async function runToolHandler(
   try {
     return await tool.handler(ctx, args);
   } catch (err) {
+    if (err instanceof AvailabilityUnavailableError) {
+      ctx.replyOverride = "Não consegui conferir a disponibilidade da agenda agora. Ainda não confirmei nenhum novo horário. Podemos tentar novamente em instantes.";
+      return err.message;
+    }
     console.error(`[tools] falha em ${key}`, err);
     return `Falha ao executar ${key}.`;
   }
@@ -238,7 +249,7 @@ const TOOLS: Record<ActionKey, ToolDef> = {
       // marca paciente direto no sistema da clínica e esses horários nunca
       // passaram por aqui.
       if (await hasConflictAnywhere(ctx.tenantId, startsAt, endsAt, cfg.timezone)) {
-        return `Esse horário está ocupado; nada foi marcado. Não diga ao contato que está confirmado.${await freeSlotsHint(ctx, cfg, startsAt)}`;
+        return offerAlternativeSlots(ctx, cfg, startsAt, duration.minutes);
       }
 
       const appointment = await createAppointment({
@@ -265,6 +276,7 @@ const TOOLS: Record<ActionKey, ToolDef> = {
           ? `. Atenção: "${str(args.tipoAtendimento)}" não está na lista de tipos, então reservei o bloco padrão de ${duration.minutes} min — confirme com o contato qual tipo ele quer antes de prometer outro`
           : "";
       if (appointment.clinicorpSync.status === "failed") {
+        if (appointment.clinicorpSync.reason === "conflict") return offerAlternativeSlots(ctx, cfg, startsAt, duration.minutes);
         return `Agendado no fechai para ${when}${kind}${cfg.location ? ` (${cfg.location})` : ""}. O envio ao Clinicorp não foi confirmado. O horário continua reservado; não marque novamente nem afirme que já aparece no Clinicorp.`;
       }
       return `Agendado para ${when}${kind}${cfg.location ? ` (${cfg.location})` : ""}. Confirme esse horário com o contato.`;

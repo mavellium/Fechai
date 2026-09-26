@@ -10,6 +10,30 @@ const MAX_AVAILABILITY_SEARCH_DAYS = 14;
 const MAX_AVAILABLE_DATES_IN_RESULT = 5;
 const WEEKDAY_LABELS = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
 
+/** Conflito continua com o agente: consulta alternativas reais e pede uma nova escolha. */
+export async function offerAlternativeSlots(
+  ctx: ToolContext, cfg: ScheduleConfig, rejectedStart: Date, durationMinutes: number,
+): Promise<string> {
+  ctx.replyOverride = "Esse horário está ocupado. Não consegui conferir outras opções agora. Podemos tentar novamente em instantes.";
+  const rejectedEnd = rejectedStart.getTime() + durationMinutes * 60_000;
+  const alternatives: Date[] = [];
+  const date = dayKeyInZone(rejectedStart, cfg.timezone);
+  try {
+    for (let i = 0; i < MAX_AVAILABILITY_SEARCH_DAYS && alternatives.length < 3; i++) {
+      const slots = await listFreeSlots(ctx.tenantId, { ...cfg, durationMinutes }, addDays(date, i));
+      alternatives.push(...slots.filter((at) =>
+        at.getTime() >= rejectedEnd || at.getTime() + durationMinutes * 60_000 <= rejectedStart.getTime(),
+      ).slice(0, 3 - alternatives.length));
+    }
+    ctx.replyOverride = alternatives.length
+      ? `Esse horário está ocupado. Encontrei estas opções disponíveis:\n${alternatives.map((at) => `• ${formatInZone(at, cfg.timezone)}`).join("\n")}\nQual fica melhor para você?`
+      : "Esse horário está ocupado e não encontrei outra opção livre nos próximos 14 dias a partir dessa data. Você prefere que eu consulte uma data mais adiante?";
+  } catch (err) {
+    console.error("[tools] consulta de alternativas falhou", err);
+  }
+  return ctx.replyOverride;
+}
+
 export const SCHEDULING_TOOLS: LlmToolSchema[] = [
   {
     name: "list_available_slots",
@@ -226,10 +250,12 @@ export async function runSchedulingTool(name: string, ctx: ToolContext, args: Re
   const durationMinutes = (appointment.endsAt.getTime() - appointment.startsAt.getTime()) / 60_000;
   if (!isWithinBusinessHours(startsAt, { ...cfg, durationMinutes })) return "O novo horário fica fora do expediente ou atravessa uma pausa. O horário original continua reservado. Combine outro horário.";
   const result = await rescheduleAppointment({ tenantId: ctx.tenantId, leadId: ctx.leadId, id: appointment.id, startsAt, timezone: cfg.timezone });
-  if (result.status === "conflict") return `O novo horário está ocupado. O horário original continua reservado.${await freeSlotsHint(ctx, cfg, startsAt)} Peça nova confirmação.`;
+  if (result.status === "conflict") return offerAlternativeSlots(ctx, cfg, startsAt, durationMinutes);
   if (result.status === "unavailable") return "A consulta mudou ou não está mais disponível. Consulte os agendamentos novamente antes de confirmar qualquer alteração.";
   const when = formatInZone(startsAt, cfg.timezone);
   if (result.status === "unchanged") return `A consulta já está marcada para ${when}. Nenhuma alteração necessária.`;
-  if (result.status === "rescheduled" && result.clinicorpSync.status === "failed") return `Reagendado no fechai para ${when}. O envio ao Clinicorp não foi confirmado; não reagende novamente nem afirme que já aparece no Clinicorp.`;
+  if (result.status === "rescheduled" && result.clinicorpSync.status === "failed") {
+    return `Reagendado no fechai para ${when}. O envio ao Clinicorp não foi confirmado; não reagende novamente nem afirme que já aparece no Clinicorp.`;
+  }
   return `Consulta reagendada para ${when}${cfg.location ? ` (${cfg.location})` : ""}. O horário anterior foi liberado.`;
 }

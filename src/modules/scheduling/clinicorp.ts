@@ -2,7 +2,7 @@ import { prisma } from "@/lib/prisma";
 import type { ClinicorpIntegration } from "@prisma/client";
 import { decryptSecret, encryptSecret } from "@/lib/crypto";
 import { getCalendarFeatures } from "./features";
-import { formatInZone, parseLocalDateTime, partsInZone } from "./time";
+import { formatInZone, parseLocalDateTime, partsInZone, zonedTimeToUtc } from "./time";
 
 /**
  * Integração opcional com o Clinicorp (sistema de gestão de clínicas).
@@ -167,11 +167,11 @@ async function recordOutcome(tenantId: string, error: string | null): Promise<vo
  */
 async function getIntegration(
   tenantId: string,
-  { ignoreFeatureFlag = false }: { ignoreFeatureFlag?: boolean } = {},
+  { ignoreFeatureFlag = false, onUnavailable }: { ignoreFeatureFlag?: boolean; onUnavailable?: () => void } = {},
 ): Promise<ClinicorpIntegration | null> {
   const [row, features] = await Promise.all([
-    prisma.clinicorpIntegration.findUnique({ where: { tenantId } }).catch(() => null),
-    getCalendarFeatures(tenantId),
+    prisma.clinicorpIntegration.findUnique({ where: { tenantId } }).catch(() => { onUnavailable?.(); return null; }),
+    getCalendarFeatures(tenantId, onUnavailable),
   ]);
   if (!row) return null;
 
@@ -187,6 +187,7 @@ async function getIntegration(
   const apiToken = decryptSecret(row.apiToken);
   if (!apiUser || !apiToken) {
     console.error(`[clinicorp] credenciais ilegíveis para o tenant ${tenantId}`);
+    if (row.checkAvailability) onUnavailable?.();
     return null;
   }
 
@@ -267,7 +268,7 @@ export async function listClinicorpProfessionals(
   if (!res.ok) return res;
   if (!Array.isArray(res.data)) return { ok: false, error: "O Clinicorp não devolveu a lista de profissionais." };
 
-  const rows = Array.isArray(res.data) ? res.data : [];
+  const rows = res.data;
   const data = rows
     .filter((row) => row && typeof row === "object")
     .map((row) => {
@@ -312,7 +313,7 @@ export async function testClinicorpConnection(tenantId: string): Promise<CallRes
 export type ClinicorpSyncResult =
   | { status: "synced"; appointmentId: string }
   | { status: "skipped" }
-  | { status: "failed"; error: string };
+  | { status: "failed"; error: string; reason?: "conflict" };
 
 // ---------------------------------------------------------------------------
 // Paciente
@@ -432,9 +433,9 @@ export async function pushAppointmentToClinicorp(
     ? "do chat de teste"
     : `de ${input.patientName?.trim() || input.lead?.name?.trim() || input.lead?.phone || "contato sem nome"}`;
   const context = `Agendamento ${who} para ${formatInZone(input.startsAt, input.timeZone)}, salvo só no fechai`;
-  const failed = async (error: string): Promise<ClinicorpSyncResult> => {
+  const failed = async (error: string, reason?: "conflict"): Promise<ClinicorpSyncResult> => {
     await recordOutcome(tenantId, `${context}. ${error}`);
-    return { status: "failed", error };
+    return { status: "failed", error, ...(reason ? { reason } : {}) };
   };
   try {
     const integration = await getIntegration(tenantId);
@@ -501,7 +502,9 @@ export async function pushAppointmentToClinicorp(
 
     if (!res.ok) {
       console.error("[clinicorp] criar agendamento falhou", res.error);
-      return await failed(res.error);
+      const normalized = res.error.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      const conflict = /horario[^.\n]*ocupado/i.test(normalized);
+      return await failed(res.error, conflict ? "conflict" : undefined);
     }
 
     const row = (Array.isArray(res.data) ? res.data[0] : res.data) as
@@ -578,10 +581,13 @@ async function fetchBusyBlocks(
   });
   if (!res.ok) return null;
 
-  const rows = Array.isArray(res.data) ? res.data : [];
+  // Uma resposta vazia/malformada não comprova que a agenda está livre.
+  if (!Array.isArray(res.data)) return null;
+  const rows = res.data;
   const blocks: ClinicorpBusyBlock[] = [];
 
   for (const row of rows) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) return null;
     const r = row as Record<string, unknown>;
     // Ao reagendar, o espelho da própria consulta não ocupa o novo intervalo.
     if (ignoreAppointmentId && String(r.id) === ignoreAppointmentId) continue;
@@ -592,22 +598,26 @@ async function fetchBusyBlocks(
     if (integration.dentistId && r.Dentist_PersonId) {
       if (String(r.Dentist_PersonId) !== integration.dentistId) continue;
     }
+    if (r.Canceled === "X" || r.Deleted === "X") continue;
 
     // Dia inteiro (feriado, férias): bloqueia o dia todo.
-    if (r.AllDay) {
+    if (r.AllDay === "X" || r.AllDay === true) {
       const start = parseLocalDateTime(day, "00:00", timeZone);
-      const end = parseLocalDateTime(day, "23:59", timeZone);
-      if (start && end) blocks.push({ startsAt: start, endsAt: end });
+      if (!start) return null;
+      const p = partsInZone(start, timeZone);
+      const end = zonedTimeToUtc(p.year, p.month, p.day + 1, 0, 0, timeZone);
+      blocks.push({ startsAt: start, endsAt: end });
       continue;
     }
 
     const from = typeof r.fromTime === "string" ? r.fromTime : null;
     const to = typeof r.toTime === "string" ? r.toTime : null;
-    if (!from || !to) continue;
+    if (!from || !to) return null;
 
     const startsAt = parseLocalDateTime(day, from, timeZone);
     const endsAt = parseLocalDateTime(day, to, timeZone);
-    if (startsAt && endsAt && endsAt > startsAt) blocks.push({ startsAt, endsAt });
+    if (!startsAt || !endsAt || endsAt <= startsAt) return null;
+    blocks.push({ startsAt, endsAt });
   }
 
   return blocks;
@@ -617,33 +627,34 @@ async function fetchBusyBlocks(
  * Tudo que está ocupado no Clinicorp num dia local — base da lista de horários
  * livres que o agente oferece. Uma chamada por dia em vez de uma por horário.
  *
- * Mesma escolha do `hasClinicorpConflict`: desligado ou fora do ar devolve
- * lista vazia e nunca lança. O `schedule_meeting` ainda confere o horário
- * escolhido antes de gravar.
+ * Desligado devolve []; falha devolve null. Nunca transforma disponibilidade
+ * desconhecida em agenda vazia. O chamador decide como avisar o contato.
  */
 export async function listClinicorpBusyBlocks(
   tenantId: string,
   day: string,
   timeZone: string,
-): Promise<ClinicorpBusyBlock[]> {
+): Promise<ClinicorpBusyBlock[] | null> {
   try {
-    const integration = await getIntegration(tenantId);
+    let unavailable = false;
+    const integration = await getIntegration(tenantId, { onUnavailable: () => { unavailable = true; } });
+    if (unavailable) return null;
     if (!integration || !integration.checkAvailability) return [];
-    return (await fetchBusyBlocks(integration, day, timeZone)) ?? [];
+    const blocks = await fetchBusyBlocks(integration, day, timeZone);
+    if (!blocks) await recordOutcome(tenantId, `Não foi possível conferir a disponibilidade no Clinicorp em ${day}. Novos horários não serão oferecidos até a consulta funcionar.`);
+    return blocks;
   } catch (err) {
     console.error("[clinicorp] listar agenda do dia falhou", err);
-    return [];
+    return null;
   }
 }
 
 /**
  * O horário está ocupado na agenda do Clinicorp?
  *
- * Devolve `false` quando a integração está desligada OU quando a consulta
- * falhou. É a escolha deliberada: o Clinicorp é uma fonte extra de informação,
- * não um porteiro. Se ele estiver fora do ar, o agente segue marcando pelas
- * regras do fechai — o contrário significaria recusar todos os horários e
- * perder o lead por causa da indisponibilidade de um terceiro.
+ * Devolve false quando desligada, null quando não foi possível conferir.
+ * Consultas já combinadas são preservadas; novas reservas exigem a leitura
+ * quando a conta escolheu checar disponibilidade no Clinicorp.
  */
 export async function hasClinicorpConflict(
   tenantId: string,
@@ -651,20 +662,25 @@ export async function hasClinicorpConflict(
   endsAt: Date,
   timeZone: string,
   ignoreAppointmentId?: string,
-): Promise<boolean> {
+): Promise<boolean | null> {
   try {
-    const integration = await getIntegration(tenantId);
+    let unavailable = false;
+    const integration = await getIntegration(tenantId, { onUnavailable: () => { unavailable = true; } });
+    if (unavailable) return null;
     if (!integration || !integration.checkAvailability) return false;
 
     const blocks = await fetchBusyBlocks(integration, localDate(startsAt, timeZone), timeZone, ignoreAppointmentId);
-    if (!blocks) return false;
+    if (!blocks) {
+      await recordOutcome(tenantId, `Não foi possível conferir a disponibilidade no Clinicorp em ${localDate(startsAt, timeZone)}. Nenhum novo horário foi confirmado.`);
+      return null;
+    }
 
     // Mesma regra de sobreposição do `hasConflict` do repository: encostar não
     // é conflito (14:00–15:00 e 15:00–16:00 convivem).
     return blocks.some((b) => startsAt < b.endsAt && endsAt > b.startsAt);
   } catch (err) {
     console.error("[clinicorp] consultar agenda falhou", err);
-    return false;
+    return null;
   }
 }
 

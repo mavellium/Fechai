@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { LlmResult } from "@/modules/ai/types";
+import * as agentTools from "@/modules/agent-engine/tools";
 
 /**
  * Testes da regra "agente desligado ainda responde no chat de teste".
@@ -35,7 +37,7 @@ const conversation = vi.hoisted(() => ({
 }));
 /** O LLM não deve ser alcançado quando o gate barra o turno. */
 const ai = vi.hoisted(() => ({
-  complete: vi.fn(async () => ({ content: "oi, tudo bem?", toolCalls: [], usage: {} })),
+  complete: vi.fn(async (): Promise<LlmResult> => ({ content: "oi, tudo bem?", toolCalls: [] })),
 }));
 
 vi.mock("@/lib/prisma", () => ({ prisma: db }));
@@ -98,6 +100,31 @@ beforeEach(() => {
   usage.getUsageSummary.mockResolvedValue({ atLimit: false });
   conversation.appendMessage.mockResolvedValue({ id: "msg-1" });
   conversation.getRecentMessages.mockResolvedValue([]);
+});
+
+it("oferece alternativas verificadas sem deixar a IA confirmar antes da nova escolha", async () => {
+  agente(true);
+  const schemas = vi.spyOn(agentTools, "getToolSchemas").mockReturnValue([
+    { name: "schedule_meeting", description: "Agendar", parameters: { type: "object", properties: {} } },
+  ]);
+  const handler = vi.spyOn(agentTools, "runToolHandler").mockImplementation(async (_key, ctx) => {
+    ctx.replyOverride = "Esse horário está ocupado. Tenho sexta às 15:00 ou 16:00. Qual fica melhor?";
+    return "Conflito no Clinicorp";
+  });
+  try {
+    ai.complete.mockResolvedValueOnce({ content: "Confirmado!", toolCalls: [
+      { id: "call-1", name: "schedule_meeting", arguments: {} },
+      { id: "call-2", name: "schedule_meeting", arguments: {} },
+    ] });
+    const result = await turno();
+    expect(result.reply).toBe("Esse horário está ocupado. Tenho sexta às 15:00 ou 16:00. Qual fica melhor?");
+    expect(handler).toHaveBeenCalledOnce();
+    expect(ai.complete).toHaveBeenCalledOnce();
+    expect(conversation.appendMessage).toHaveBeenLastCalledWith(CONVERSA, "assistant", result.reply, "agent");
+  } finally {
+    schemas.mockRestore();
+    handler.mockRestore();
+  }
 });
 
 describe("agente desligado", () => {

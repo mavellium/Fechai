@@ -23,6 +23,7 @@ import { serializeReminderOverride } from "@/modules/scheduling/reminder-overrid
 import { parseLocalDateTime } from "@/modules/scheduling/time";
 import { getClinicorpStatus } from "@/modules/scheduling/clinicorp";
 import { getCalendarFeatures } from "@/modules/scheduling/features";
+import { AvailabilityUnavailableError } from "@/modules/scheduling/availability-error";
 
 type Result = { ok: boolean; error?: string; info?: string; warning?: string };
 
@@ -80,8 +81,13 @@ export async function createManualAppointment(
   if (!startsAt) return { ok: false, error: "Data ou hora inválida." };
 
   const endsAt = new Date(startsAt.getTime() + durationMinutes * 60_000);
-  if (await hasConflictAnywhere(tenantId, startsAt, endsAt, timezone)) {
-    return { ok: false, error: "Já existe um compromisso nesse horário." };
+  try {
+    if (await hasConflictAnywhere(tenantId, startsAt, endsAt, timezone)) {
+      return { ok: false, error: "Já existe um compromisso nesse horário." };
+    }
+  } catch (err) {
+    if (err instanceof AvailabilityUnavailableError) return { ok: false, error: err.message };
+    throw err;
   }
 
   // Contato opcional — e sempre validado contra a conta, porque o id vem do
@@ -119,6 +125,9 @@ export async function createManualAppointment(
   revalidateAgenda();
   revalidatePath("/integracoes");
   if (appointment.clinicorpSync.status === "failed") {
+    if (appointment.clinicorpSync.reason === "conflict") {
+      return { ok: false, error: "O Clinicorp recusou esse horário porque já está ocupado. Nenhuma nova consulta foi confirmada. Escolha outro horário." };
+    }
     return { ok: true, info: "Compromisso salvo no fechai.",
       warning: `O envio ao Clinicorp não foi confirmado. ${appointment.clinicorpSync.error} Não crie outro compromisso: confira a agenda da clínica e a integração.` };
   }
