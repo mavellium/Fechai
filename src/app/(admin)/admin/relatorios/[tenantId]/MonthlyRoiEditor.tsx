@@ -15,6 +15,8 @@ import { UnsavedForm, useUnsavedNavigation } from "@/components/ui/unsaved-chang
 import { TIMEZONES } from "@/modules/scheduling/time";
 import { minuteLabel } from "@/modules/scheduling/weekly-availability";
 import type { MonthlyReport } from "@/modules/reports/monthly";
+import { monthlyOverridesSchema } from "@/modules/reports/monthly-overrides";
+import { MonthlyMetricFields } from "./MonthlyMetricFields";
 import { saveMonthlyRoi, finalizeMonthlyRoi, reopenMonthlyRoi, recordMonthlyDelivery } from "./actions";
 
 const decimal = (v: number | null, scale = 1) => v === null ? "" : String(v / scale).replace(".", ",");
@@ -38,7 +40,8 @@ function readTime(text: string) {
 
 export function MonthlyRoiEditor({ tenantId, report: r }: { tenantId: string; report: MonthlyReport }) {
   const c = r.assumptions;
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
+  const [metricOverrides, setMetricOverrides] = useState(r.metricOverrides ?? { current: {}, previous: {} });
   const [timezone, setTimezone] = useState(c.timezone);
   const [hoursConfirmed, setHoursConfirmed] = useState(c.humanHours !== null);
   const [hours, setHours] = useState<HourRange[][]>(() => Array.from({ length: 7 }, (_, day) => c.humanHours?.[day].map((h) => ({ start: minuteLabel(h.start), end: minuteLabel(h.end) })) ?? []));
@@ -63,13 +66,14 @@ export function MonthlyRoiEditor({ tenantId, report: r }: { tenantId: string; re
   return <Card className="text-ink panel:text-white/85">
     <CardTitle action={<Badge tone={locked ? "success" : "neutral"}>{locked ? "Fechado" : "Rascunho"}</Badge>}>Preparação e entrega</CardTitle>
     <div className="flex flex-wrap items-start justify-between gap-4">
-      <div className="max-w-xl text-sm text-neutral panel:text-white/60"><p>{locked ? `Relatório disponível para a clínica${r.decisionMaker ? ` · decisor: ${r.decisionMaker}` : ""}.` : "Confira as premissas e registre os ajustes antes de fechar o relatório."}</p><p className="mt-1">Prazo de entrega: {new Intl.DateTimeFormat("pt-BR", { timeZone: c.timezone }).format(new Date(r.dueAt))}.</p></div>
-      {!locked && <Button variant="outline" disabled={pending} aria-expanded={open} aria-controls="roi-edit-form" onClick={() => setOpen(!open)}><Pencil size={15} aria-hidden />{open ? "Recolher edição" : "Editar premissas e revisão"}<ChevronDown size={15} aria-hidden className={open ? "rotate-180" : ""} /></Button>}
+      <div className="max-w-xl text-sm text-neutral panel:text-white/60"><p>{locked ? `Relatório disponível para a clínica${r.decisionMaker ? ` · decisor: ${r.decisionMaker}` : ""}.` : "Os indicadores e as premissas desta competência já estão carregados. Confira os dados e registre os ajustes antes de fechar."}</p><p className="mt-1">Prazo de entrega: {new Intl.DateTimeFormat("pt-BR", { timeZone: c.timezone }).format(new Date(r.dueAt))}.</p></div>
+      {!locked && <Button variant="outline" disabled={pending} aria-expanded={open} aria-controls="roi-edit-form" onClick={() => setOpen(!open)}><Pencil size={15} aria-hidden />{open ? "Recolher edição" : "Editar dados e revisão"}<ChevronDown size={15} aria-hidden className={open ? "rotate-180" : ""} /></Button>}
     </div>
     {!locked && <UnsavedForm id="roi-edit-form" hidden={!open} result={state} label="Revisão do relatório mensal" className="mt-6 space-y-6 border-t border-ink/10 pt-6 panel:border-white/10" onSubmit={(event) => {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
       try {
+        if (!monthlyOverridesSchema.safeParse(metricOverrides).success) throw new Error("Revise os indicadores: contagens devem ser inteiras e positivas ou zero; tempos podem ter decimais.");
         const assumptions = { timezone, humanHours: hoursConfirmed ? hours.map((day) => day.map((h) => ({ start: readTime(h.start), end: readTime(h.end) }))) : null,
           attendantMonthlyCents: readNumber(form.get("attendantMonthlyCents"), 100, true), attendantMonthlyHours: readNumber(form.get("attendantMonthlyHours")),
           minutesPerConversation: readNumber(form.get("minutesPerConversation")), investmentCents: readNumber(form.get("investmentCents"), 100, true),
@@ -81,7 +85,9 @@ export function MonthlyRoiEditor({ tenantId, report: r }: { tenantId: string; re
       } catch (err) { setError(err instanceof Error ? err.message : "Revise os campos."); }
     }}>
       {r.assumptionsFromMonth && <Alert>Premissas trazidas de {r.assumptionsFromMonth.split("-").reverse().join("/")}. Confira os valores e salve a revisão deste mês.</Alert>}
+      <input type="hidden" name="revision" value={r.revision ?? ""} />
       <fieldset disabled={pending} className="min-w-0 space-y-8">
+        <MonthlyMetricFields report={r} value={metricOverrides} onChange={setMetricOverrides} />
         <section className="space-y-4"><CardTitle as="h3" hint="Campos vazios ficam pendentes até serem levantados com a clínica.">Investimento e equipe</CardTitle><div className="grid items-end gap-5 sm:grid-cols-2 xl:grid-cols-4">
           {moneyField("investmentCents", "Mensalidade do Fechai (R$)", c.investmentCents)}{moneyField("attendantMonthlyCents", "Custo mensal do atendente (R$)", c.attendantMonthlyCents)}
           {numberField("attendantMonthlyHours", "Carga mensal do atendente (h)", c.attendantMonthlyHours)}{numberField("minutesPerConversation", "Tempo humano por conversa (min)", c.minutesPerConversation, "Estimativa usada para calcular a economia.")}

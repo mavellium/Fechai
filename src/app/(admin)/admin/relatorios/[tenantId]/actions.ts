@@ -5,7 +5,8 @@ import { prisma } from "@/lib/prisma";
 import { requireSuperadmin } from "@/lib/session";
 import { payloadTooLarge } from "@/lib/rate-limit";
 import { monthlyAssumptionsSchema, monthKey } from "@/modules/reports/monthly-config";
-import { computeMonthlyReport } from "@/modules/reports/monthly";
+import { computeMonthlyReport, type MonthlyReport } from "@/modules/reports/monthly";
+import { monthlyOverridesSchema, parseMonthlyOverrides, editableMonthlyMetrics } from "@/modules/reports/monthly-overrides";
 import { recordAudit } from "@/modules/audit/log";
 
 type Result = { ok: boolean; error?: string; info?: string };
@@ -24,6 +25,12 @@ export async function saveMonthlyRoi(tenantId: string, month: string, _previous:
   try { raw = JSON.parse(String(form.get("assumptions"))); } catch { return { ok: false, error: "Premissas inválidas." }; }
   const parsed = monthlyAssumptionsSchema.safeParse(raw);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Revise as premissas." };
+  let overrides: ReturnType<typeof monthlyOverridesSchema.safeParse> | undefined;
+  if (form.has("metricOverrides")) {
+    try { overrides = monthlyOverridesSchema.safeParse(JSON.parse(String(form.get("metricOverrides")))); }
+    catch { return { ok: false, error: "Indicadores inválidos." }; }
+    if (!overrides.success) return { ok: false, error: overrides.error.issues[0]?.message ?? "Revise os indicadores." };
+  }
   const text = (key: string) => String(form.get(key) ?? "").trim();
   const adjustments = text("adjustments"), nextMonth = text("nextMonth"), decisionMaker = text("decisionMaker");
   if (adjustments.length > 400 || nextMonth.length > 400 || decisionMaker.length > 100) return { ok: false, error: "Use até 400 caracteres em cada bloco e 100 no decisor para caber em uma página." };
@@ -32,15 +39,17 @@ export async function saveMonthlyRoi(tenantId: string, month: string, _previous:
   // Transação e filtro de status: um fechamento concorrente não pode ser sobrescrito.
   const saved = await prisma.$transaction(async (tx) => {
     const existing = await tx.monthlyRoiReport.findUnique({ where: { tenantId_month: { tenantId, month } } });
-    const data = { assumptions: parsed.data, adjustments, nextMonth, decisionMaker, preparedBy: session.user.id };
+    if (existing && form.has("revision") && String(form.get("revision")) !== existing.updatedAt.toISOString()) return false;
+    const metricOverrides = overrides?.success ? overrides.data : parseMonthlyOverrides(existing?.assumptions);
+    const data = { assumptions: { ...parsed.data, metricOverrides }, adjustments, nextMonth, decisionMaker, preparedBy: session.user.id };
     if (!existing) { await tx.monthlyRoiReport.create({ data: { tenantId, month, ...data } }); return true; }
-    const updated = await tx.monthlyRoiReport.updateMany({ where: { id: existing.id, tenantId, status: "draft" }, data });
+    const updated = await tx.monthlyRoiReport.updateMany({ where: { id: existing.id, tenantId, status: "draft", updatedAt: existing.updatedAt }, data });
     return updated.count === 1;
   });
-  if (!saved) return { ok: false, error: "O relatório está fechado. Reabra a revisão antes de alterar." };
-  await recordAudit({ event: "report.monthly_saved", tenantId, target: { type: "MonthlyRoiReport", id: `${tenantId}:${month}`, label: month }, after: { assumptions: parsed.data, adjustments, nextMonth, decisionMaker } });
+  if (!saved) return { ok: false, error: "O relatório está fechado ou mudou durante a edição. Atualize e reabra a revisão antes de alterar." };
+  await recordAudit({ event: "report.monthly_saved", tenantId, target: { type: "MonthlyRoiReport", id: `${tenantId}:${month}`, label: month }, after: { assumptions: parsed.data, metricOverrides: overrides?.success ? overrides.data : undefined, adjustments, nextMonth, decisionMaker } });
   invalidate(tenantId);
-  return { ok: true, info: "Premissas e revisão salvas para este mês." };
+  return { ok: true, info: "Indicadores, premissas e revisão salvos para este mês." };
 }
 export async function finalizeMonthlyRoi(tenantId: string, month: string, acknowledgePartial: boolean): Promise<Result> {
   await requireSuperadmin();
@@ -65,7 +74,18 @@ export async function reopenMonthlyRoi(tenantId: string, month: string): Promise
   const saved = await prisma.monthlyRoiReport.findUnique({ where: { tenantId_month: { tenantId, month } } });
   if (!saved) return { ok: false, error: "Relatório não encontrado." };
   if (saved.sentAt) return { ok: false, error: "Relatório já enviado: o registro entregue é preservado." };
-  await prisma.monthlyRoiReport.updateMany({ where: { id: saved.id, tenantId, sentAt: null }, data: { status: "draft", snapshot: Prisma.DbNull, finalizedAt: null } });
+  // Ao reabrir, carregar os números que o admin estava vendo, inclusive em
+  // relatórios antigos. O snapshot permanece privado como base do comparativo
+  // durante a revisão e é substituído no próximo fechamento.
+  const snapshot = saved.snapshot as unknown as MonthlyReport | null;
+  const metricOverrides = snapshot?.version === 1 && snapshot.month === month
+    ? { current: editableMonthlyMetrics(snapshot.current), previous: {} }
+    : parseMonthlyOverrides(saved.assumptions);
+  const assumptions = saved.assumptions as Prisma.JsonObject;
+  const updated = await prisma.monthlyRoiReport.updateMany({ where: { id: saved.id, tenantId, sentAt: null, updatedAt: saved.updatedAt }, data: {
+    status: "draft", finalizedAt: null, assumptions: { ...assumptions, metricOverrides },
+  } });
+  if (!updated.count) return { ok: false, error: "O relatório mudou durante a reabertura. Atualize e confira novamente." };
   await recordAudit({ event: "report.monthly_reopened", tenantId, target: { type: "MonthlyRoiReport", id: saved.id, label: month } });
   invalidate(tenantId); return { ok: true, info: "Revisão reaberta." };
 }

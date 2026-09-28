@@ -173,6 +173,16 @@ O toggle é `FilterTabs` (links, querystring) — preserva `periodo/de/ate` e se
 
 ## Como rodar/verificar
 
+### Revisão mensal de ROI
+
+- Admin carrega a competência solicitada (`mes`); sem parâmetro, abre a última revisão existente da clínica, com fallback para o mês anterior.
+- O documento `MonthlyRoiReport.assumptions` conserva as premissas originais e guarda `metricOverrides: { current, previous }` como chave adicional. `parseMonthlyAssumptions` lê apenas premissas; `parseMonthlyOverrides` valida as correções separadamente. Isso é compatível com registros existentes, sem alteração de schema.
+- Dados automáticos de mensagens, agenda e Clinicorp preenchem o editor. Só campos alterados viram correção persistente; restaurar um campo remove sua correção. Correções nunca passam para o próximo mês quando se copiam premissas.
+- Cada contagem, tempo de resposta, horas assumidas, procedimento e pico pode ser corrigido. Receita/economia/ROI continuam derivados pela regra definida, sem permitir que uma porcentagem arbitrária substitua a fórmula. Presenças fora do expediente devem bater com a soma por procedimento antes do fechamento.
+- O comparativo usa o snapshot fechado do mês anterior quando existir. Uma correção do comparativo é local à revisão atual. Reabrir uma revisão preserva os indicadores que estavam no snapshot; relatórios já enviados continuam preservados.
+- `updatedAt` identifica a revisão carregada pelo formulário e protege contra sobrescrita concorrente. Correções entram na auditoria e no snapshot de fechamento; o painel e o PDF avisam quando existem ajustes manuais.
+- PDF: imagens locais em `public/brand`, tinta preta/cinza, uma página A4. Nunca depende de uma chamada externa para buscar logos ao exportar.
+
 - Dev server: `npm run dev` (porta 3001).
 - Typecheck: `npx tsc --noEmit`.
 - Lint da seção: `npx eslint "src/app/(dashboard)/relatorios" "src/modules/reports" "src/components/charts"`.

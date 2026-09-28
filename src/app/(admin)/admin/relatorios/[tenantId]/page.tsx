@@ -15,14 +15,16 @@ export default async function MonthlyRoiPage({ params, searchParams }: {
 }) {
   await requireSuperadmin();
   const { tenantId } = await params;
-  const month = monthKey((await searchParams).mes);
+  const requested = (await searchParams).mes;
+  const latest = requested ? null : await prisma.monthlyRoiReport.findFirst({ where: { tenantId }, orderBy: { month: "desc" }, select: { month: true } });
+  const month = monthKey(requested ?? latest?.month);
   if (!await prisma.tenant.findUnique({ where: { id: tenantId }, select: { id: true } })) notFound();
   const report = await computeMonthlyReport(tenantId, month);
   return <div className="space-y-6">
     <PageHeader eyebrow="ROI mensal" title={report.tenantName} description="Confira o retorno, revise as premissas e prepare a entrega ao decisor." />
     <div className="flex flex-wrap items-center justify-between gap-3"><MonthPicker value={month} href={`/admin/relatorios/${tenantId}`} /><ButtonLink href={`/admin/relatorios?mes=${month}`} size="sm" variant="ghost"><ArrowLeft size={14} aria-hidden />Todas as clínicas</ButtonLink></div>
     <MonthlyRoiSummary report={report} />
-    <MonthlyRoiEditor key={`${month}:${report.status}`} tenantId={tenantId} report={report} />
+    <MonthlyRoiEditor key={`${month}:${report.status}:${report.revision ?? "new"}`} tenantId={tenantId} report={report} />
     <MonthlyView report={report} showSummary={false} />
   </div>;
 }

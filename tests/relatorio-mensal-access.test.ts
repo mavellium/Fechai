@@ -89,6 +89,46 @@ describe("autorização e isolamento do relatório mensal", () => {
   });
 });
 describe("fechamento e entrega", () => {
+  it("carrega correções salvas do mês e conserva os dados manuais do comparativo", async () => {
+    const saved = { status: "draft", assumptions: { ...roiConfig(), metricOverrides: { current: { newContacts: 42, assumedHours: 3 }, previous: { newContacts: 21 } } }, adjustments: "Já ajustado", nextMonth: "Já planejado", decisionMaker: "Decisor", updatedAt: new Date("2026-10-01T12:00:00Z") };
+    db.monthlyRoiReport.findUnique.mockImplementation(async ({ where }) => where.tenantId_month.month === "2026-09" ? saved : null);
+    const report = await computeMonthlyReport("own", "2026-09");
+    expect(report.current.newContacts).toBe(42); expect(report.current.assumedHours).toBe(3); expect(report.previous.newContacts).toBe(21);
+    expect(report.automatic?.current.newContacts).not.toBe(42); expect(report.adjustments).toBe("Já ajustado");
+    expect(report.revision).toBe(saved.updatedAt.toISOString());
+  });
+  it("salva indicadores no documento mensal sem alterar as conversas ou a agenda", async () => {
+    db.monthlyRoiReport.findUnique.mockResolvedValue(null);
+    const form = new FormData(); form.set("assumptions", JSON.stringify(roiConfig()));
+    form.set("metricOverrides", JSON.stringify({ current: { newContacts: 30 }, previous: {} }));
+    expect((await saveMonthlyRoi("own", "2026-09", null, form)).ok).toBe(true);
+    expect(db.monthlyRoiReport.create.mock.calls[0][0].data.assumptions.metricOverrides.current.newContacts).toBe(30);
+    expect(db.appointment.findMany).not.toHaveBeenCalled(); expect(integration).not.toHaveBeenCalled();
+  });
+  it("recusa dados inválidos e edição de uma revisão antiga", async () => {
+    const form = new FormData(); form.set("assumptions", JSON.stringify(roiConfig()));
+    form.set("metricOverrides", JSON.stringify({ current: { newContacts: -1 }, previous: {} }));
+    expect((await saveMonthlyRoi("own", "2026-09", null, form)).ok).toBe(false);
+    expect(db.$transaction).not.toHaveBeenCalled();
+    form.set("metricOverrides", JSON.stringify({ current: { newContacts: 30 }, previous: {} })); form.set("revision", "old");
+    db.monthlyRoiReport.findUnique.mockResolvedValue({ status: "draft", updatedAt: new Date() });
+    expect((await saveMonthlyRoi("own", "2026-09", null, form)).ok).toBe(false); expect(db.monthlyRoiReport.updateMany).not.toHaveBeenCalled();
+  });
+  it("reabrir um relatório existente carrega os números do snapshot em vez de zerar os campos", async () => {
+    const snapshot = { ...roiFixture(), status: "ready" }; snapshot.current.newContacts = 55;
+    db.monthlyRoiReport.findUnique.mockResolvedValue({ id: "r", status: "ready", month: "2026-09", snapshot, assumptions: roiConfig(), sentAt: null, updatedAt: new Date() });
+    expect((await reopenMonthlyRoi("own", "2026-09")).ok).toBe(true);
+    expect(db.monthlyRoiReport.updateMany.mock.calls[0][0].data.assumptions.metricOverrides.current.newContacts).toBe(55);
+    expect(db.monthlyRoiReport.updateMany.mock.calls[0][0].data).not.toHaveProperty("snapshot");
+  });
+  it("o comparativo de uma revisão reaberta conserva exatamente os dados do relatório existente", async () => {
+    const snapshot = roiFixture(); snapshot.previous.roiPercent = 123.4;
+    const saved = { status: "draft", assumptions: { ...roiConfig(), metricOverrides: { current: {}, previous: {} } }, snapshot };
+    db.monthlyRoiReport.findUnique.mockImplementation(async ({ where }) => where.tenantId_month.month === "2026-09" ? saved : null);
+    const report = await computeMonthlyReport("own", "2026-09");
+    expect(report.previous).toEqual(snapshot.previous); expect(report.previous.roiPercent).toBe(123.4);
+    expect(report.previousAssumptions).toEqual(snapshot.previousAssumptions);
+  });
   it("nova competência copia apenas premissas de um mês anterior, sem alterar seu histórico", async () => {
     db.monthlyRoiReport.findUnique.mockResolvedValue(null);
     db.monthlyRoiReport.findFirst.mockResolvedValue({ month: "2026-08", assumptions: roiConfig() });

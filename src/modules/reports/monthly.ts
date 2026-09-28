@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { readClinicorpReport, type ClinicorpReportData } from "@/modules/scheduling/clinicorp";
 import { dayKeyInZone, partsInZone } from "@/modules/scheduling/time";
+import { applyMonthlyOverrides, parseMonthlyOverrides, type MonthlyOverrides } from "./monthly-overrides";
 import { EMPTY_ASSUMPTIONS, monthlyWindow, normalizeLabel, outsideHumanHours,
   parseMonthlyAssumptions, type MonthlyAssumptions } from "./monthly-config";
 
@@ -18,6 +19,8 @@ export type MonthlyReport = {
   version: 1; tenantName: string; month: string; label: string; previousMonth: string;
   generatedAt: string; dueAt: string; partial: boolean; assumptions: MonthlyAssumptions;
   assumptionsFromMonth?: string;
+  revision?: string; metricOverrides?: MonthlyOverrides;
+  automatic?: { current: MonthlyMetrics; previous: MonthlyMetrics };
   previousAssumptions: MonthlyAssumptions; previousConfigured: boolean;
   current: MonthlyMetrics; previous: MonthlyMetrics; clinicorpError: string | null;
   clinicorpStatusTypes: ClinicorpReportData["statusTypes"];
@@ -146,31 +149,10 @@ export function calculateMonthlyMetrics(input: {
     addSplit(current.attended, origin, config);
     if (origin && outsideHumanHours(origin, config) === true) getProcedure(procedureOf(conversation, config)).attendedOutside++;
   }
-  current.assumedHours = config.minutesPerConversation === null ? null : current.aiOnlyConversations * config.minutesPerConversation / 60;
-  current.savingsCents = current.assumedHours !== null && config.attendantMonthlyCents !== null && config.attendantMonthlyHours
-    ? Math.round(current.assumedHours * config.attendantMonthlyCents / config.attendantMonthlyHours) : null;
   current.procedures = [...procedures].map(([name, value]) => {
-    const premise = config.procedures.find((p) => normalizeLabel(p.name) === normalizeLabel(name));
-    const revenueCents = value.attendedOutside === 0 ? 0 : premise?.ticketCents !== null && premise?.ticketCents !== undefined && premise?.conversionBps !== null && premise?.conversionBps !== undefined
-      ? Math.round(value.attendedOutside * premise.ticketCents * premise.conversionBps / 10_000) : null;
-    return { name, qualified: value.qualified.size, attendedOutside: value.attendedOutside, revenueCents };
+    return { name, qualified: value.qualified.size, attendedOutside: value.attendedOutside, revenueCents: null };
   }).sort((a, b) => b.qualified - a.qualified || b.attendedOutside - a.attendedOutside);
-  const missing = current.missing;
-  if (!config.humanHours) missing.push("Horário humano não informado.");
-  if (current.attendanceUnknown) missing.push(`${current.attendanceUnknown} avaliação(ões) sem comparecimento confirmado.`);
-  if (current.untypedAppointments) missing.push(`${current.untypedAppointments} agendamento(s) sem tipo de atendimento; confira se são avaliações.`);
-  if (current.attended.unclassified) missing.push("Há avaliações realizadas sem horário de chegada do contato.");
-  if (current.procedures.some((p) => p.revenueCents === null)) missing.push("Faltam procedimento, ticket ou conversão de avaliações realizadas fora do horário.");
-  if (!config.procedures.length) missing.push("Ticket e conversão por procedimento ainda não informados.");
-  if (config.procedures.some((p) => p.ticketCents === null || p.conversionBps === null)) missing.push("Há procedimentos sem ticket ou conversão nas premissas.");
-  const revenueReady = Boolean(config.humanHours && config.procedures.length) && config.procedures.every((p) => p.ticketCents !== null && p.conversionBps !== null) && !current.attendanceUnknown && !current.untypedAppointments && !current.attended.unclassified && current.procedures.every((p) => p.revenueCents !== null);
-  current.revenueCents = revenueReady ? current.procedures.reduce((sum, p) => sum + (p.revenueCents ?? 0), 0) : null;
-  if (current.savingsCents === null) missing.push("Informe custo, carga mensal do atendente e minutos por conversa para a economia estimada.");
-  if (config.investmentCents === null) missing.push("Mensalidade não informada.");
-  if (current.revenueCents !== null && current.savingsCents !== null && config.investmentCents !== null && config.investmentCents > 0) {
-    current.roiPercent = Math.round((current.revenueCents + current.savingsCents - config.investmentCents) / config.investmentCents * 1000) / 10;
-  }
-  return current;
+  return applyMonthlyOverrides(current, {}, config);
 }
 
 export async function computeMonthlyReport(tenantId: string, month: string, useSnapshot = true): Promise<MonthlyReport> {
@@ -181,7 +163,7 @@ export async function computeMonthlyReport(tenantId: string, month: string, useS
   if (useSnapshot && saved?.status === "ready" && saved.snapshot) {
     const snapshot = saved.snapshot as unknown as MonthlyReport;
     if (snapshot.version === 1 && snapshot.month === month) return { ...snapshot,
-      status: saved.status, finalizedAt: saved.finalizedAt?.toISOString() ?? null,
+      revision: saved.updatedAt?.toISOString(), status: saved.status, finalizedAt: saved.finalizedAt?.toISOString() ?? null,
       sentAt: saved.sentAt?.toISOString() ?? null, meetingAt: saved.meetingAt?.toISOString() ?? null };
   }
   const inherited = saved ? null : await prisma.monthlyRoiReport.findFirst({
@@ -191,7 +173,9 @@ export async function computeMonthlyReport(tenantId: string, month: string, useS
   const assumptions = parseMonthlyAssumptions(saved?.assumptions ?? inherited?.assumptions ?? EMPTY_ASSUMPTIONS);
   const window = monthlyWindow(month, assumptions.timezone);
   const previousSaved = await prisma.monthlyRoiReport.findUnique({ where: { tenantId_month: { tenantId, month: window.previousMonth } } });
-  const previousAssumptions = parseMonthlyAssumptions(previousSaved?.assumptions ?? EMPTY_ASSUMPTIONS);
+  const reopened = saved?.status === "draft" && saved.snapshot ? saved.snapshot as unknown as MonthlyReport : null;
+  const previousBase = reopened?.version === 1 && reopened.month === month && reopened.previousMonth === window.previousMonth ? reopened : null;
+  const previousAssumptions = previousBase?.previousAssumptions ?? parseMonthlyAssumptions(previousSaved?.assumptions ?? EMPTY_ASSUMPTIONS);
   const previousWindow = monthlyWindow(window.previousMonth, previousAssumptions.timezone);
   const start = new Date(Math.min(window.start.getTime(), previousWindow.start.getTime()));
   const end = new Date(Math.max(window.end.getTime(), previousWindow.end.getTime()));
@@ -217,12 +201,18 @@ export async function computeMonthlyReport(tenantId: string, month: string, useS
   const conversations = rawConversations.map((c) => ({ ...c, firstInbound: firstById.get(c.id) ?? null }));
   const now = new Date();
   const trackingSince = new Date(Math.max(tenant.createdAt.getTime(), tenant.reportTrackingStartedAt.getTime()));
-  const current = calculateMonthlyMetrics({ start: window.start, end: window.end, now, trackingSince, accountCreatedAt: tenant.createdAt, config: assumptions, conversations, appointments, events, clinicorp });
+  const automaticCurrent = calculateMonthlyMetrics({ start: window.start, end: window.end, now, trackingSince, accountCreatedAt: tenant.createdAt, config: assumptions, conversations, appointments, events, clinicorp });
   const previousSnapshot = previousSaved?.status === "ready" && previousSaved.snapshot ? previousSaved.snapshot as unknown as MonthlyReport : null;
-  const previous = previousSnapshot?.version === 1 ? previousSnapshot.current : calculateMonthlyMetrics({ start: previousWindow.start, end: previousWindow.end, now, trackingSince, accountCreatedAt: tenant.createdAt, config: previousAssumptions, conversations, appointments, events, clinicorp });
+  const previousAuto = calculateMonthlyMetrics({ start: previousWindow.start, end: previousWindow.end, now, trackingSince, accountCreatedAt: tenant.createdAt, config: previousAssumptions, conversations, appointments, events, clinicorp });
+  const automaticPrevious = previousBase?.previous ?? (previousSnapshot?.version === 1 ? previousSnapshot.current : applyMonthlyOverrides(previousAuto, parseMonthlyOverrides(previousSaved?.assumptions).current, previousAssumptions));
+  const metricOverrides = parseMonthlyOverrides(saved?.assumptions);
+  const current = applyMonthlyOverrides(automaticCurrent, metricOverrides.current, assumptions);
+  // Um comparativo fechado conserva sua base financeira quando não houve correção.
+  const previous = Object.keys(metricOverrides.previous).length ? applyMonthlyOverrides(automaticPrevious, metricOverrides.previous, previousAssumptions) : automaticPrevious;
   return { version: 1, tenantName: tenant.name, month, label: new Intl.DateTimeFormat("pt-BR", { timeZone: assumptions.timezone, month: "long", year: "numeric" }).format(window.start),
     previousMonth: window.previousMonth, generatedAt: now.toISOString(), dueAt: window.dueAt.toISOString(), partial: now < window.end,
-    assumptions, ...(inherited ? { assumptionsFromMonth: inherited.month } : {}), previousAssumptions, previousConfigured: Boolean(previousSaved), current, previous,
+    assumptions, ...(inherited ? { assumptionsFromMonth: inherited.month } : {}), revision: saved?.updatedAt?.toISOString(), metricOverrides,
+    automatic: { current: automaticCurrent, previous: automaticPrevious }, previousAssumptions, previousConfigured: previousBase?.previousConfigured ?? Boolean(previousSaved), current, previous,
     clinicorpError: clinicorp.error, clinicorpStatusTypes: clinicorp.statusTypes,
     adjustments: saved?.adjustments ?? "", nextMonth: saved?.nextMonth ?? "", decisionMaker: saved?.decisionMaker ?? "",
     status: saved?.status ?? "draft", finalizedAt: saved?.finalizedAt?.toISOString() ?? null,

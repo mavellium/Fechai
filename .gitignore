@@ -46,3 +46,6 @@ contas.txt
 
 # backups do banco (scripts/backup.ts)
 /backups
+
+# PDFs gerados para conferência visual
+/output/pdf/

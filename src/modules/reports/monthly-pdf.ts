@@ -1,4 +1,6 @@
 import { PDFDocument, StandardFonts, rgb, type PDFFont } from "pdf-lib";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { formatBRL } from "@/lib/format";
 import type { MonthlyReport } from "./monthly";
 
@@ -12,7 +14,11 @@ export async function generateMonthlyPdf(r: MonthlyReport): Promise<Uint8Array> 
   const page = doc.addPage([595.28, 841.89]);
   const regular = await doc.embedFont(StandardFonts.Helvetica);
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
-  const ink = rgb(0.07, 0.1, 0.18), muted = rgb(0.35, 0.39, 0.46), purple = rgb(0.35, 0.27, 0.77);
+  const ink = rgb(0.06, 0.06, 0.06), muted = rgb(0.35, 0.35, 0.35);
+  const [fechai, mavellium] = await Promise.all([
+    readFile(join(process.cwd(), "public/brand/fechai-black.png")).then((bytes) => doc.embedPng(bytes)),
+    readFile(join(process.cwd(), "public/brand/mavellium-black.png")).then((bytes) => doc.embedPng(bytes)),
+  ]);
   const margin = 36, width = 523;
   let y = 806;
   // Helvetica cobre português. Caracteres fora do alfabeto do PDF viram espaço
@@ -51,19 +57,21 @@ export async function generateMonthlyPdf(r: MonthlyReport): Promise<Uint8Array> 
   }
   function section(title: string) {
     y -= 15;
-    text(title, margin, y, 10, bold, purple);
+    text(title, margin, y, 10, bold, ink);
     y -= 15;
   }
   const num = (v: number | null, suffix = "") => v === null ? "Pendente" : `${v.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}${suffix}`;
   const money = (v: number | null) => v === null ? "Pendente" : formatBRL(v);
   const a = r.current, b = r.previous, c = r.assumptions;
-  text("FECHAI / MAVELLIUM", margin, y, 9, bold, purple);
+  page.drawImage(fechai, { x: margin - 3, y: y - 7, width: 30, height: 30 });
+  text("fechai.", margin + 31, y + 1, 20, bold, ink);
+  page.drawImage(mavellium, { x: margin + width - 114, y: y - 4, width: 114, height: 114 * mavellium.height / mavellium.width });
   y -= 23;
   y -= paragraph(r.tenantName, 18, width, margin, y, ink);
   text(`${r.label} · ${r.status === "ready" ? "revisado" : "RASCUNHO"}${r.partial ? " · mês em andamento" : ""}`, margin, y, 9);
   y -= 21;
-  page.drawRectangle({ x: margin, y: y - 62, width, height: 78, color: rgb(0.96, 0.95, 0.99) });
-  text("1 · ROI DO MÊS (ESTIMADO)", margin + 12, y, 9, bold, purple);
+  page.drawRectangle({ x: margin, y: y - 62, width, height: 78, color: rgb(0.95, 0.95, 0.95) });
+  text("1 · ROI DO MÊS (ESTIMADO)", margin + 12, y, 9, bold, ink);
   text(num(a.roiPercent, "%"), margin + 12, y - 31, 28, bold, ink);
   text(`Receita: ${money(a.revenueCents)}`, margin + 205, y - 3, 10, bold);
   text(`Economia: ${money(a.savingsCents)}`, margin + 205, y - 20, 10);
@@ -85,13 +93,14 @@ export async function generateMonthlyPdf(r: MonthlyReport): Promise<Uint8Array> 
   ];
   for (const [label, value, previous] of rows) {
     text(label, margin, y, 8.5); text(value, 343, y, 8.5, bold); text(previous, 456, y, 8.5, regular, muted);
-    page.drawLine({ start: { x: margin, y: y - 4 }, end: { x: margin + width, y: y - 4 }, thickness: 0.35, color: rgb(0.88, 0.89, 0.92) });
+    page.drawLine({ start: { x: margin, y: y - 4 }, end: { x: margin + width, y: y - 4 }, thickness: 0.35, color: rgb(0.88, 0.88, 0.88) });
     y -= 14;
   }
   const dataNote = [
     !a.trackingComplete || !b.trackingComplete ? "* Cobertura parcial: somente eventos registrados; histórico ausente não significa zero." : "",
     `Sem horário classificado: ${a.conversations.unclassified} conversas; ${a.scheduled.unclassified} agendadas; ${a.attended.unclassified} realizadas. Presença pendente: ${a.attendanceUnknown}; sem tipo: ${a.untypedAppointments}.`,
     !r.previousConfigured ? "Mês anterior sem premissas financeiras/horário; apenas totais operacionais comparáveis." : "",
+    Object.keys(r.metricOverrides?.current ?? {}).length || Object.keys(r.metricOverrides?.previous ?? {}).length ? "Inclui dados ajustados manualmente pela Mavellium; origens e detalhes disponíveis no painel." : "",
   ].filter(Boolean).join(" ");
   y -= paragraph(dataNote, 7.3);
   section("3 · DESTAQUES");
@@ -100,14 +109,15 @@ export async function generateMonthlyPdf(r: MonthlyReport): Promise<Uint8Array> 
   if (a.procedures.length > 4) y -= paragraph(`Outros procedimentos: ${a.procedures.slice(4).reduce((n, p) => n + p.qualified, 0)} qualificados e ${a.procedures.slice(4).reduce((n, p) => n + p.attendedOutside, 0)} avaliações realizadas fora. Detalhes no painel.`, 7.5);
   y -= paragraph(`Picos: ${a.peaks.map((p) => `${String(p.hour).padStart(2, "0")}h (${p.messages} mensagens)`).join(", ") || "sem mensagens"} · ${c.timezone}.`, 8);
   y -= 14;
-  text("4 · O QUE AJUSTAMOS NO AGENTE", margin, y, 9, bold, purple);
-  text("5 · PRÓXIMO MÊS", 308, y, 9, bold, purple);
+  text("4 · O QUE AJUSTAMOS NO AGENTE", margin, y, 9, bold, ink);
+  text("5 · PRÓXIMO MÊS", 308, y, 9, bold, ink);
   y -= 14;
   const noteHeight = Math.max(paragraph(r.adjustments || "Aguardando revisão da Mavellium.", 8.2, 246, margin, y, ink), paragraph(r.nextMonth || "Aguardando plano da Mavellium.", 8.2, 246, 308, y, ink));
   y -= noteHeight;
   section("PREMISSAS DO RETORNO ESTIMADO");
   y -= paragraph(`Receita = realizadas de contatos que chegaram fora do horário humano × conversão × ticket, somada por procedimento. Economia = horas assumidas × custo/hora. ROI = (receita + economia - investimento) ÷ investimento.`, 7.5);
-  y -= paragraph(`Atendente: ${money(c.attendantMonthlyCents)}/mês ÷ ${num(c.attendantMonthlyHours, " h/mês")}. Horas assumidas: ${a.aiOnlyConversations} conversas sem resposta humana × ${num(c.minutesPerConversation, " min")} ÷ 60. Mensalidade: ${money(c.investmentCents)}.`, 7.5);
+  const hoursPremise = r.metricOverrides?.current.assumedHours !== undefined ? `${num(a.assumedHours, " h")} informadas manualmente` : `${a.aiOnlyConversations} conversas sem resposta humana × ${num(c.minutesPerConversation, " min")} ÷ 60`;
+  y -= paragraph(`Atendente: ${money(c.attendantMonthlyCents)}/mês ÷ ${num(c.attendantMonthlyHours, " h/mês")}. Horas assumidas: ${hoursPremise}. Mensalidade: ${money(c.investmentCents)}.`, 7.5);
   const days = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
   const time = (v: number) => `${String(Math.floor(v / 60)).padStart(2, "0")}:${String(v % 60).padStart(2, "0")}`;
   y -= paragraph(`Horário humano: ${c.humanHours ? c.humanHours.map((h, i) => `${days[i]} ${h.map((p) => `${time(p.start)}-${time(p.end)}`).join(",") || "fechado"}`).join("; ") : "pendente"}.`, 7.5);
@@ -123,7 +133,7 @@ export async function generateMonthlyPdf(r: MonthlyReport): Promise<Uint8Array> 
   if (a.missing.length) y -= paragraph(`Pendências: ${a.missing.join(" ")}`, 7.2);
   if (a.investmentCents === 0) y -= paragraph("Investimento zero: ROI percentual não se aplica.", 7.2);
   if (y < 46) throw new Error("O conteúdo excedeu uma página. Reduza os textos de revisão ou os nomes nas premissas antes de exportar.");
-  page.drawLine({ start: { x: margin, y: 38 }, end: { x: margin + width, y: 38 }, thickness: 0.5, color: rgb(0.85, 0.86, 0.9) });
+  page.drawLine({ start: { x: margin, y: 38 }, end: { x: margin + width, y: 38 }, thickness: 0.5, color: rgb(0.85, 0.85, 0.85) });
   const due = new Intl.DateTimeFormat("pt-BR", { timeZone: c.timezone }).format(new Date(r.dueAt));
   paragraph(`Decisor: ${r.decisionMaker || "a definir"} · entrega até ${due} · reunião curta`, 7, width, margin, 24);
   return doc.save();
