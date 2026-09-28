@@ -23,12 +23,20 @@ import {
   MAX_BLOCKED_DATES,
   isScheduleTimezone,
   normalizeDurationLabel,
+  parseScheduleConfig,
   validateDurations,
   validateReminders,
   validateScheduleBreaks,
 } from "@/modules/scheduling/config";
 import { listClinicorpCategories } from "@/modules/scheduling/clinicorp";
 import { getCalendarFeatures } from "@/modules/scheduling/features";
+import {
+  parseMetaReminderTemplate,
+  validateMetaReminderTemplate,
+  type MetaReminderTemplate,
+} from "@/modules/scheduling/meta-reminder";
+import { getBroadcastConnection } from "@/modules/broadcasts/connection";
+import { sameBroadcastTemplate, type BroadcastTemplate } from "@/modules/broadcasts/template";
 import {
   MAX_FOLLOWUP_DELAY_MINUTES,
   MAX_FOLLOWUP_MESSAGE_LENGTH,
@@ -1036,15 +1044,94 @@ export async function saveScheduleConfigAction(
   const durationError = validateDurations(filledDurations);
   if (durationError) return { ok: false, error: durationError };
 
+  const metaTemplate = await readMetaReminderTemplate(formData, tenantId, agent.id, parsed.data.location);
+  if (!metaTemplate.ok) return { ok: false, error: metaTemplate.error };
+
   await saveScheduleConfig(tenantId, agent.id, {
     ...parsed.data,
     ...(weeklyAvailability !== undefined ? { weeklyAvailability, breaks: [] } : {}),
     durations: filledDurations,
     workdays,
+    ...(metaTemplate.template ? { metaReminderTemplate: metaTemplate.template } : {}),
   });
   revalidateAgent(agent.id);
   revalidatePath("/agenda");
   return { ok: true, info: "Configurações de agendamento salvas." };
+}
+
+/**
+ * O template da Meta escolhido para o lembrete de primeiro contato, conferido.
+ *
+ * Mesmo cuidado dos Disparos: o template congelado no formulário precisa
+ * continuar aprovado e igual na Meta — senão a tela mostraria uma prévia que
+ * não é o que sai, ou cada lembrete seria recusado. Só pergunta à Meta quando o
+ * template mudou: os switches desta tela salvam sozinhos, e cada clique não
+ * pode depender da Graph API responder.
+ */
+async function readMetaReminderTemplate(
+  formData: FormData,
+  tenantId: string,
+  agentId: string,
+  location: string,
+): Promise<{ ok: true; template: MetaReminderTemplate | null } | { ok: false; error: string }> {
+  const raw = String(formData.get("metaReminderTemplate") ?? "");
+  if (!raw || raw === "null") return { ok: true, template: null };
+  const template = (() => {
+    try {
+      return parseMetaReminderTemplate(JSON.parse(raw));
+    } catch {
+      return null;
+    }
+  })();
+  if (!template) return { ok: false, error: "Template da Meta inválido. Carregue os templates e escolha de novo." };
+  const error = validateMetaReminderTemplate(template, { location });
+  if (error) return { ok: false, error };
+
+  const saved = await prisma.tenantAction.findUnique({
+    where: { agentId_key: { agentId, key: "schedule_meeting" } },
+    select: { config: true },
+  });
+  const current = parseScheduleConfig(saved?.config).metaReminderTemplate;
+  if (current && sameBroadcastTemplate(current, template)) return { ok: true, template };
+
+  const connection = await getBroadcastConnection(tenantId);
+  if (!connection) {
+    return { ok: false, error: "Conecte o WhatsApp pela API oficial da Meta em Integrações para usar um template." };
+  }
+  let templates: BroadcastTemplate[];
+  try {
+    templates = await connection.provider.listBroadcastTemplates();
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Não foi possível consultar os templates na Meta." };
+  }
+  if (!templates.some((t) => sameBroadcastTemplate(t, template))) {
+    return { ok: false, error: "Esse template não está mais aprovado na Meta, ou foi alterado. Carregue os templates e escolha de novo." };
+  }
+  return { ok: true, template };
+}
+
+/**
+ * Templates aprovados da Meta, para escolher o do lembrete de primeiro
+ * contato. Buscado no clique, como os tipos do Clinicorp: a Graph API não
+ * entra no carregamento da tela de agentes.
+ */
+export async function loadReminderTemplatesAction(): Promise<
+  { ok: true; templates: BroadcastTemplate[] } | { ok: false; error: string }
+> {
+  const { tenantId } = await requireTenant();
+  const connection = await getBroadcastConnection(tenantId);
+  if (!connection) {
+    return { ok: false, error: "Conecte o WhatsApp pela API oficial da Meta em Integrações para usar templates." };
+  }
+  try {
+    const templates = await connection.provider.listBroadcastTemplates();
+    if (!templates.length) {
+      return { ok: false, error: "Nenhum template aprovado e compatível na Meta. Crie um de texto no Gerenciador do WhatsApp e aguarde a aprovação." };
+    }
+    return { ok: true, templates };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Não foi possível consultar os templates na Meta." };
+  }
 }
 
 /**

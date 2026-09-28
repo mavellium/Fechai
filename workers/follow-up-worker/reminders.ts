@@ -95,7 +95,7 @@ export function staleReminders(
  * deixa `agentId` null) seguia uma config sem lembrete, e só disparava depois
  * que alguém salvava lembretes próprios nela.
  */
-async function loadAccountScheduleConfigs(): Promise<Map<string, ScheduleConfig>> {
+export async function loadAccountScheduleConfigs(): Promise<Map<string, ScheduleConfig>> {
   // A configuração dos lembretes mora na ação `schedule_meeting` (não numa
   // ação própria), e só age com a ação LIGADA — mesma regra de
   // `getActiveHandoffConfig`: config salva com a ação desligada não atua.

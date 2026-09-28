@@ -1,0 +1,68 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const db = vi.hoisted(() => ({
+  agent: { findFirst: vi.fn() },
+  appointment: { aggregate: vi.fn() },
+}));
+const clinicorp = vi.hoisted(() => ({ listClinicorpAgenda: vi.fn() }));
+vi.mock("@/lib/prisma", () => ({ prisma: db }));
+vi.mock("@/modules/scheduling/clinicorp", () => clinicorp);
+
+import { agendaVersion, monthDays, readAgendaPulse } from "@/modules/scheduling/agenda-pulse";
+import type { ClinicorpAgenda, ClinicorpAgendaItem } from "@/modules/scheduling/clinicorp";
+
+const item = (id: string, hour: string, patientName = "Paciente"): ClinicorpAgendaItem => ({
+  id, patientName, startsAt: new Date(`2026-09-29T${hour}:00Z`), endsAt: null, phone: null, professional: null, notes: null,
+});
+const ok = (items: ClinicorpAgendaItem[]): ClinicorpAgenda => ({ status: "ok", items, skipped: 0 });
+const local = { count: 2, lastUpdate: new Date("2026-09-28T12:00:00Z") };
+
+beforeEach(() => vi.clearAllMocks());
+
+describe("versão da agenda ao vivo", () => {
+  it("é a mesma para o mesmo conteúdo, em qualquer ordem — senão a tela se refaz em loop", () => {
+    expect(agendaVersion(local, ok([item("1", "12:00"), item("2", "12:00")])))
+      .toBe(agendaVersion(local, ok([item("2", "12:00"), item("1", "12:00")])));
+  });
+
+  it("muda com consulta nova, removida ou alterada no Clinicorp", () => {
+    const base = agendaVersion(local, ok([item("1", "12:00")]));
+    expect(agendaVersion(local, ok([item("1", "12:00"), item("2", "13:00")]))).not.toBe(base);
+    expect(agendaVersion(local, ok([]))).not.toBe(base);
+    expect(agendaVersion(local, ok([item("1", "14:00")]))).not.toBe(base);
+    expect(agendaVersion(local, ok([item("1", "12:00", "Outro nome")]))).not.toBe(base);
+  });
+
+  it("muda com o que o agente marcou ou alterou no fechai", () => {
+    const base = agendaVersion(local, ok([]));
+    expect(agendaVersion({ ...local, count: 3 }, ok([]))).not.toBe(base);
+    expect(agendaVersion({ ...local, lastUpdate: new Date("2026-09-28T12:00:01Z") }, ok([]))).not.toBe(base);
+  });
+
+  it("muda quando o Clinicorp cai ou volta", () => {
+    expect(agendaVersion(local, { status: "error", error: "fora" })).not.toBe(agendaVersion(local, ok([])));
+    expect(agendaVersion(local, { status: "off" })).not.toBe(agendaVersion(local, ok([])));
+  });
+});
+
+describe("pulso da agenda", () => {
+  it("relê o Clinicorp de verdade e conta os compromissos do mês pelo mesmo filtro da página", async () => {
+    db.agent.findFirst.mockResolvedValue({ actions: [{ config: { timezone: "America/Sao_Paulo" } }] });
+    db.appointment.aggregate.mockResolvedValue({ _count: { _all: 2 }, _max: { updatedAt: local.lastUpdate } });
+    clinicorp.listClinicorpAgenda.mockResolvedValue(ok([item("1", "12:00")]));
+
+    const pulse = await readAgendaPulse("tenant-1", 2026, 9);
+
+    expect(clinicorp.listClinicorpAgenda).toHaveBeenCalledWith("tenant-1", "2026-09-01", "2026-09-30", "America/Sao_Paulo", { fresh: true });
+    expect(db.appointment.aggregate).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: "tenant-1", startsAt: { gte: new Date("2026-09-01T03:00:00Z"), lt: new Date("2026-10-01T03:00:00Z") } },
+    }));
+    expect(pulse.version).toBe(agendaVersion(local, ok([item("1", "12:00")])));
+    expect(pulse.checkedAt).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+  });
+
+  it("dá o último dia certo de cada mês", () => {
+    expect(monthDays(2028, 2)).toEqual({ from: "2028-02-01", to: "2028-02-29" });
+    expect(monthDays(2026, 12)).toEqual({ from: "2026-12-01", to: "2026-12-31" });
+  });
+});

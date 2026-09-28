@@ -1,6 +1,7 @@
 import { Queue, Worker, type ConnectionOptions } from "bullmq";
 import { scanAndSendFollowUps } from "./scan";
 import { scanAndSendReminders } from "./reminders";
+import { scanAndSendClinicorpReminders } from "./clinicorp-reminders";
 import { scanWhatsappHealth } from "../../src/modules/whatsapp/health";
 import { scanBroadcasts } from "../../src/modules/broadcasts/worker";
 import { touchBroadcastWorker } from "../../src/modules/broadcasts/health";
@@ -23,17 +24,24 @@ const connection: ConnectionOptions = {
 const FOLLOWUP_QUEUE = "follow-up";
 const REMINDER_QUEUE = "appointment-reminders";
 const HEALTH_QUEUE = "whatsapp-health";
+const CLINICORP_REMINDER_QUEUE = "clinicorp-reminders";
 const FOLLOWUP_EVERY_MS =
   Number(process.env.FOLLOWUP_SCAN_EVERY_MINUTES ?? 15) * 60_000;
 const REMINDER_EVERY_MS =
   Number(process.env.REMINDER_SCAN_EVERY_MINUTES ?? 1) * 60_000;
 const HEALTH_EVERY_MS =
   Number(process.env.WHATSAPP_HEALTH_SCAN_EVERY_MINUTES ?? 1) * 60_000;
+// Cada volta relê a agenda do Clinicorp de cada conta: a cada minuto, como os
+// lembretes do fechai, seriam 1.440 chamadas por dia por clínica. Cinco minutos
+// de atraso num lembrete de consulta não mudam nada para o paciente.
+const CLINICORP_REMINDER_EVERY_MS =
+  Number(process.env.CLINICORP_REMINDER_SCAN_EVERY_MINUTES ?? 5) * 60_000;
 
 async function main() {
   const followUpQueue = new Queue(FOLLOWUP_QUEUE, { connection });
   const reminderQueue = new Queue(REMINDER_QUEUE, { connection });
   const healthQueue = new Queue(HEALTH_QUEUE, { connection });
+  const clinicorpReminderQueue = new Queue(CLINICORP_REMINDER_QUEUE, { connection });
   const broadcastQueue = new Queue("whatsapp-broadcasts", { connection });
   await broadcastQueue.setGlobalConcurrency(1);
   await broadcastQueue.upsertJobScheduler(
@@ -100,6 +108,11 @@ async function main() {
     { every: HEALTH_EVERY_MS },
     { name: "whatsapp-health" },
   );
+  await clinicorpReminderQueue.upsertJobScheduler(
+    "scan-scheduler",
+    { every: CLINICORP_REMINDER_EVERY_MS },
+    { name: "scan-clinicorp-reminders" },
+  );
 
   const followUpWorker = new Worker(
     FOLLOWUP_QUEUE,
@@ -116,6 +129,17 @@ async function main() {
       const result = await scanAndSendReminders();
       console.log(`[lembrete] scanned=${result.scanned} sent=${result.sent}`);
       return result;
+    },
+    { connection },
+  );
+  const clinicorpReminderWorker = new Worker(
+    CLINICORP_REMINDER_QUEUE,
+    async () => {
+      const r = await scanAndSendClinicorpReminders();
+      console.log(
+        `[lembrete clinicorp] contas=${r.tenants} consultas=${r.scanned} sent=${r.sent} primeiro_contato_pulado=${r.firstContactSkipped}`,
+      );
+      return r;
     },
     { connection },
   );
@@ -140,9 +164,13 @@ async function main() {
   healthWorker.on("failed", (job, err) =>
     console.error(`[whatsapp health] job ${job?.id} falhou`, err),
   );
+  clinicorpReminderWorker.on("failed", (job, err) =>
+    console.error(`[lembrete clinicorp] job ${job?.id} falhou`, err),
+  );
   console.log(
     `[worker] online — follow-up a cada ${FOLLOWUP_EVERY_MS / 60000} min; ` +
       `lembretes a cada ${REMINDER_EVERY_MS / 60000} min; ` +
+      `lembretes do Clinicorp a cada ${CLINICORP_REMINDER_EVERY_MS / 60000} min; ` +
       `saúde do WhatsApp a cada ${HEALTH_EVERY_MS / 60000} min`,
   );
 }

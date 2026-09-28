@@ -16,7 +16,8 @@ import {
   type ClinicorpAgendaItem,
 } from "@/modules/scheduling/clinicorp";
 import { listMonthAppointments } from "@/modules/scheduling/repository";
-import { dayKeyInZone, timeInZone, todayInZone } from "@/modules/scheduling/time";
+import { clockInZone, dayKeyInZone, timeInZone, todayInZone } from "@/modules/scheduling/time";
+import { agendaVersion, monthDays } from "@/modules/scheduling/agenda-pulse";
 import { ClinicorpAppointmentItem } from "./ClinicorpAppointmentItem";
 import { AgendaLiveRefresh } from "./AgendaLiveRefresh";
 import { leadStatusLabel } from "../conversas/leadStatus";
@@ -79,6 +80,7 @@ export default async function AgendaPage({
         : null;
 
   const pad = (n: number) => String(n).padStart(2, "0");
+  const { from, to } = monthDays(year, month);
 
   const [{ rows: monthRows, byDay }, features, integration, clinicorp, clinicorpAgenda, contacts] = await Promise.all([
     listMonthAppointments(tenantId, year, month, config.timezone),
@@ -86,7 +88,8 @@ export default async function AgendaPage({
     prisma.calendarIntegration.findUnique({ where: { tenantId } }),
     getClinicorpStatus(tenantId),
     // O que a recepção marcou direto no Clinicorp: só leitura, nunca importado.
-    listClinicorpAgenda(tenantId, `${year}-${pad(month)}-01`, `${year}-${pad(month)}-${pad(daysInMonth)}`, config.timezone),
+    // Com cache curto: clicar num dia não espera o Clinicorp de novo.
+    listClinicorpAgenda(tenantId, from, to, config.timezone),
     prisma.lead.findMany({
       where: { tenantId, isTest: false },
       orderBy: { createdAt: "desc" },
@@ -106,6 +109,19 @@ export default async function AgendaPage({
       clinicorpByDay.set(key, [...(clinicorpByDay.get(key) ?? []), item]);
     }
   }
+
+  // Lembrete que o worker mandou para consulta do Clinicorp (ver
+  // workers/follow-up-worker/clinicorp-reminders.ts). Só o que saiu de fato.
+  const clinicorpIds = [...clinicorpByDay.values()].flat().map((item) => item.id);
+  const clinicorpReminders = clinicorpIds.length
+    ? await prisma.clinicorpReminder.findMany({
+        where: { tenantId, clinicorpAppointmentId: { in: clinicorpIds }, reminderSentAt: { not: null } },
+        select: { clinicorpAppointmentId: true, reminderSentAt: true, startsAt: true },
+      })
+    : [];
+  const clinicorpReminderAt = new Map(
+    clinicorpReminders.map((r) => [`${r.clinicorpAppointmentId}|${r.startsAt.getTime()}`, r.reminderSentAt!]),
+  );
 
   const countByDay = new Map<string, number>();
   for (const [key, rows] of [...byDay, ...clinicorpByDay]) {
@@ -186,12 +202,19 @@ export default async function AgendaPage({
         actions={
           <>
             <AgendaLiveRefresh
-              updatedAt={new Intl.DateTimeFormat("pt-BR", {
-                timeZone: config.timezone,
-                hour: "2-digit",
-                minute: "2-digit",
-                second: "2-digit",
-              }).format(new Date())}
+              year={year}
+              month={month}
+              version={agendaVersion(
+                {
+                  count: monthRows.length,
+                  lastUpdate: monthRows.reduce<Date | null>(
+                    (max, row) => (!max || row.updatedAt > max ? row.updatedAt : max),
+                    null,
+                  ),
+                },
+                clinicorpAgenda,
+              )}
+              updatedAt={clockInZone(new Date(), config.timezone)}
             />
             <NewAppointmentDialog
               contacts={contactOptions}
@@ -333,6 +356,8 @@ export default async function AgendaPage({
                         key={`clinicorp-${entry.item.id}`}
                         item={entry.item}
                         timezone={config.timezone}
+                        // Pelo horário também: remarcada lá, o envio da data antiga não vale.
+                        reminderSentAt={clinicorpReminderAt.get(`${entry.item.id}|${entry.item.startsAt.getTime()}`) ?? null}
                       />
                     );
                   }

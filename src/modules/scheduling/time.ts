@@ -111,6 +111,17 @@ export function timeInZone(at: Date, timeZone: string): string {
   return `${PAD(p.hour)}:${PAD(p.minute)}`;
 }
 
+/** "15:30:05" no fuso do tenant — o "atualizado às" da agenda ao vivo. */
+export function clockInZone(at: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).format(at);
+}
+
 /**
  * "terça-feira, 12 de agosto" — só o dia, por extenso. Separado de
  * `formatInZone` porque o lembrete tem `{{data}}` e `{{hora}}` como variáveis

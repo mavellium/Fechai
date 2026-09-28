@@ -537,15 +537,92 @@ que estavam cheios lá.
 - Desabilitada, sem clínica escolhida ou com credencial ilegível: `off`, sem
   chamada nenhuma (o card de sincronização já explica cada caso).
 
+- **Recebem lembrete, com regra própria de canal** — ver "Lembretes das
+  consultas do Clinicorp" abaixo. A tela mostra "lembrete enviado" no card
+  (`ClinicorpReminder.reminderSentAt`, casado pelo id **e** pelo horário).
+- **Cache curto no servidor** (`AGENDA_CACHE_MS`, 30s; falha 10s;
+  profissionais 10 min), no `globalThis` para a página e a rota do pulso
+  enxergarem o mesmo. Clicar num dia é uma navegação que refaz a página, e
+  esperar o Clinicorp a cada clique travava a tela. A conexão (flag,
+  credencial, clínica) é conferida a cada chamada — desligar para na hora —, só
+  a resposta de lá é reaproveitada, e a chave inclui assinante e clínica.
+  Pedidos simultâneos do mesmo mês esperam a mesma chamada. Nova credencial e
+  desconexão limpam o cache da conta (`clearClinicorpAgendaCache`).
 - **"Tempo real" é releitura, não webhook.** O Clinicorp não avisa quando uma
-  consulta é marcada (o único webhook da API é de upload de arquivo), então
-  `AgendaLiveRefresh` (`(dashboard)/agenda/`) chama `router.refresh()` a cada
-  `LIVE_INTERVAL_MS` (15s): a página refaz a leitura do Clinicorp **e** do
-  nosso banco, e o que o agente marcou no WhatsApp também aparece sozinho. Com a
-  aba escondida nada é chamado; ao voltar, relê na hora. Há ainda o botão
-  "Atualizar". A volta automática **pula enquanto houver `<dialog>` aberto**: a
-  lista do dia pode trocar de forma e levar junto o formulário que a pessoa
-  estava preenchendo. Baixar o intervalo multiplica chamadas ao Clinicorp por
-  aba aberta — cada volta são duas (agenda e profissionais).
+  consulta é marcada (o único webhook da API é de upload de arquivo). A cada
+  `LIVE_INTERVAL_MS` (15s), `AgendaLiveRefresh` (`(dashboard)/agenda/`)
+  pergunta a `/api/agenda/pulso` a **versão** do mês (`readAgendaPulse`, em
+  `agenda-pulse.ts`): relê o Clinicorp com `fresh` — o que reabastece o cache —
+  e conta os compromissos do fechai (quantidade + último `updatedAt`, então o
+  que o agente marcou no WhatsApp também entra). Só quando a versão difere da
+  que a página desenhou é que ele chama `router.refresh()`, e a página refeita
+  já acha o cache cheio. É uma **rota com `fetch` comum, não Server Action nem
+  `router.refresh()` a cada volta**: os dois entram na fila do roteador, e o
+  primeiro desenho (refresh a cada 15s) segurava os cliques enquanto o
+  Clinicorp respondia. A versão sai de `agendaVersion` nos dois lados e ignora
+  a ordem das consultas — se página e rota calculassem diferente, a tela se
+  refaria em loop. Com a aba escondida nada é chamado; ao voltar, pergunta na
+  hora. O botão "Atualizar" pergunta e sempre refaz. A volta automática **pula
+  enquanto houver `<dialog>` aberto**: a lista do dia pode trocar de forma e
+  levar junto o formulário que a pessoa estava preenchendo. Baixar o intervalo
+  multiplica chamadas ao Clinicorp por aba aberta.
+- Os links do calendário têm `prefetch={false}` (página dinâmica sem
+  `loading.js`: o prefetch não adianta e gera requisição por casa) e o
+  `LinkPendingHint` acende o dia clicado enquanto a página nova não chega.
 
-Regressões: `tests/clinicorp.test.ts` ("agenda do Clinicorp na /agenda").
+Regressões: `tests/clinicorp.test.ts` ("agenda do Clinicorp na /agenda") e
+`tests/agenda-pulse.test.ts`.
+
+### Lembretes das consultas do Clinicorp
+
+As consultas marcadas direto no Clinicorp recebem **os mesmos lembretes da
+conta** (lista do agente principal, `reminderEnabled`), pelas mesmas regras de
+tempo (`dueReminders`). Quem envia é
+`workers/follow-up-worker/clinicorp-reminders.ts`, numa fila própria a cada
+5 min — cada volta relê a agenda do Clinicorp com `fresh`, e a cada minuto
+seriam 1.440 chamadas por dia por clínica.
+
+**O canal é a regra que importa:** o paciente do Clinicorp quase sempre nunca
+conversou com o número da clínica.
+
+- **Meta (API oficial)**: sempre por **template aprovado**
+  (`ScheduleConfig.metaReminderTemplate`, `meta-reminder.ts`), escolhido em
+  Agentes › Agendar horário › Lembretes. Fora da janela de 24h a Meta só aceita
+  template. Sem template escolhido, a conta não manda nada a esses pacientes.
+  O template é **congelado** na config e conferido com a Meta ao salvar quando
+  muda (`readMetaReminderTemplate`), como nos Disparos. `variables` diz o que
+  vai em cada `{{n}}` (nome, data, hora, local); parâmetro vazio a Meta recusa,
+  então `{{local}}` com o local em branco é recusado ao salvar, e paciente sem
+  nome no Clinicorp fecha o disparo sem envio.
+- **Evolution**: **nunca primeiro contato.** Só quem já conversou com o número
+  (`Conversation.lastInboundAt`) recebe, com o texto do lembrete. Mensagem de
+  número desconhecido pelo Evolution é o que mais leva o WhatsApp a bloquear o
+  número — e o bloqueio cala a clínica com todos os pacientes. O disparo fica
+  **pendente** (não é fechado): se a pessoa escrever antes da consulta, sai.
+  A tela de lembretes diz isso para contas no Evolution com Clinicorp.
+
+Outras regras:
+
+- **O que já saiu fica em `ClinicorpReminder`** (id do Clinicorp + `startsAt`),
+  porque a consulta não é um `Appointment`. Remarcada lá (mesmo id, outro
+  horário), os disparos voltam a valer. Linhas com mais de 90 dias são
+  apagadas na própria varredura.
+- **O que o fechai espelhou** (`Appointment.clinicorpAppointmentId`) é pulado:
+  quem lembra é `scanAndSendReminders`, com override e tudo.
+- **Envio pela Meta que falhou ou ficou incerto não é repetido** — fecha sem
+  `reminderSentAt`. A Meta pode ter aceitado antes do erro (mesma regra do
+  `unknown` dos Disparos). Pelo Evolution, a falha tenta de novo, como nos
+  lembretes do fechai.
+- **Telefone**: o Clinicorp guarda como a recepção digitou; 10–11 dígitos
+  ganham o 55 (`clinicorpWhatsappPhone`) e o resto passa pela validação dos
+  Disparos. Sem telefone válido, bloqueado ou "pediu para parar": fecha sem
+  enviar.
+- **A mensagem entra na conversa** (`role: "assistant"`, criada se preciso
+  com `getOrCreateConversation`): é o contexto do agente quando o paciente
+  responder. Mas a consulta não é nossa — cancelar/reagendar pelas tools do
+  agente não alcança o Clinicorp; o agente conversa e a clínica ajusta lá.
+- **Sem override por consulta** (o botão Lembretes da `/agenda` é só dos
+  compromissos do fechai).
+
+Schema novo: `ClinicorpReminder` — `db push` + `generate` nos dois processos.
+Regressões: `tests/clinicorp-lembrete.test.ts`.

@@ -9,6 +9,8 @@ import {
   normalizeDurationLabel,
 } from "@/modules/scheduling/config";
 import { ReminderList, fromDrafts, toDrafts, type ReminderDraft } from "./ReminderList";
+import { MetaReminderTemplatePicker } from "./MetaReminderTemplatePicker";
+import type { MetaReminderTemplate } from "@/modules/scheduling/meta-reminder";
 import { TIMEZONES } from "@/modules/scheduling/time";
 import { FormFeedback } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -45,6 +47,7 @@ export function ScheduleSettings({
   agentId,
   config,
   clinicorpConnected = false,
+  metaReminders = false,
 }: {
   agentId: string;
   config: ScheduleConfig;
@@ -54,6 +57,11 @@ export function ScheduleSettings({
    * dizer "não está conectado".
    */
   clinicorpConnected?: boolean;
+  /**
+   * WhatsApp pela API oficial da Meta. Só por ela sai o lembrete de quem nunca
+   * conversou com o número (os pacientes do Clinicorp), com template aprovado.
+   */
+  metaReminders?: boolean;
 }) {
   const [state, formAction, pending] = useActionState(saveScheduleConfigAction, null);
   const [weeklyAvailability, setWeeklyAvailability] = useState(() => getWeeklyAvailability(config));
@@ -76,6 +84,7 @@ export function ScheduleSettings({
   // lista; quem grava é o botão do rodapé.
   const [reminderEnabled, setReminderEnabled] = useState(config.reminderEnabled);
   const [reminders, setReminders] = useState<ReminderDraft[]>(() => toDrafts(config.reminders));
+  const [metaTemplate, setMetaTemplate] = useState<MetaReminderTemplate | null>(config.metaReminderTemplate ?? null);
   const [blockedDates, setBlockedDates] = useState(() => config.blockedDates);
 
   const formRef = useRef<HTMLFormElement>(null);
@@ -353,12 +362,29 @@ export function ScheduleSettings({
             location={config.location}
             idPrefix="agente"
           />
+          {/* Só com Clinicorp: hoje é de lá que vêm as consultas de quem nunca
+              conversou com o número. Pela Meta, com template; pelo Evolution,
+              primeiro contato não sai — a tela diz isso em vez de calar. */}
+          {clinicorpConnected && (metaReminders ? (
+            <div className="mt-4">
+              <MetaReminderTemplatePicker value={metaTemplate} onChange={setMetaTemplate}
+                location={config.location} disabled={pending} />
+            </div>
+          ) : (
+            <p className="mt-4 rounded-control border border-white/10 px-3 py-2 text-sm text-white/60">
+              Consultas marcadas direto no Clinicorp recebem estes lembretes só quando o paciente já
+              conversou com seu número. O primeiro contato sai apenas pela API oficial da Meta, com
+              template aprovado — pelo WhatsApp comum, mensagem para número desconhecido é o que mais
+              leva ao bloqueio do número da clínica.
+            </p>
+          ))}
         </div>
       </fieldset>
 
       </fieldset>
       <input type="hidden" name="reminderEnabled" value={String(reminderEnabled)} />
       <input type="hidden" name="reminders" value={JSON.stringify(fromDrafts(reminders))} />
+      <input type="hidden" name="metaReminderTemplate" value={metaTemplate ? JSON.stringify(metaTemplate) : ""} />
 
       <FormFeedback error={state?.error} info={state?.info} />
 

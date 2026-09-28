@@ -12,7 +12,7 @@ vi.mock("@/lib/prisma", () => ({ prisma: db }));
 vi.mock("@/modules/scheduling/google", () => ({ pushEventToGoogle: vi.fn(async () => null) }));
 
 import {
-  cancelAppointmentInClinicorp, getClinicorpStatus, hasClinicorpConflict, listClinicorpAgenda,
+  cancelAppointmentInClinicorp, clearClinicorpAgendaCache, getClinicorpStatus, hasClinicorpConflict, listClinicorpAgenda,
   listClinicorpCategories, listClinicorpProfessionals, listClinicorpBusyBlocks, pushAppointmentToClinicorp,
   saveClinicorpCredentials, testClinicorpConnection, verifyClinicorpCredentials,
 } from "@/modules/scheduling/clinicorp";
@@ -29,6 +29,7 @@ let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  clearClinicorpAgendaCache();
   vi.stubEnv("ENCRYPTION_KEY", "chave-de-testes-com-mais-de-32-caracteres");
   integration = {
     tenantId: "tenant-1", ...credentials,
@@ -293,6 +294,39 @@ describe("agenda do Clinicorp na /agenda", () => {
     fetchMock.mockResolvedValue(json({ message: "indisponível" }, status));
     expect(await list()).toMatchObject({ status: "error", error: expect.any(String) });
     expect(db.clinicorpIntegration.update).not.toHaveBeenCalled();
+  });
+
+  // Relato: a tela ficou travada — cada clique num dia esperava o Clinicorp.
+  it("reaproveita a leitura do mês nos cliques seguintes, e o pulso relê de verdade", async () => {
+    agenda([{ id: 1, AtomicDate: 20260929, fromTime: "08:00", PatientName: "Primeira" }]);
+    const listCalls = () => fetchMock.mock.calls.filter(([url]) => url.pathname.endsWith("/appointment/list")).length;
+    const proCalls = () => fetchMock.mock.calls.filter(([url]) => url.pathname.endsWith("/list_all_professionals")).length;
+
+    await list();
+    await list();
+    expect(listCalls()).toBe(1);
+
+    agenda([{ id: 2, AtomicDate: 20260929, fromTime: "09:00", PatientName: "Nova no Clinicorp" }]);
+    const fresh = await listClinicorpAgenda("tenant-1", "2026-09-01", "2026-09-30", tz, { fresh: true });
+    expect(fresh).toMatchObject({ status: "ok", items: [expect.objectContaining({ patientName: "Nova no Clinicorp" })] });
+    // O pulso reabastece o cache: o clique seguinte já vê a consulta nova.
+    expect(await list()).toMatchObject({ items: [expect.objectContaining({ patientName: "Nova no Clinicorp" })] });
+    expect(listCalls()).toBe(2);
+    // Profissional quase nunca muda: uma chamada só.
+    expect(proCalls()).toBe(1);
+  });
+
+  it("dois pedidos ao mesmo tempo esperam a mesma chamada", async () => {
+    agenda([]);
+    await Promise.all([list(), list(), list()]);
+    expect(fetchMock.mock.calls.filter(([url]) => url.pathname.endsWith("/appointment/list"))).toHaveLength(1);
+  });
+
+  it("desligar a integração para na hora, mesmo com o mês em cache", async () => {
+    agenda([{ id: 1, AtomicDate: 20260929, fromTime: "08:00" }]);
+    expect(await list()).toMatchObject({ status: "ok" });
+    db.calendarFeatures.findUnique.mockResolvedValue({ clinicorpEnabled: false });
+    expect(await list()).toEqual({ status: "off" });
   });
 
   it("não chama a API com a integração desligada, sem clínica ou sem credencial legível", async () => {

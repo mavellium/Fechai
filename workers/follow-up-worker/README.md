@@ -10,6 +10,7 @@ relógio, não por uma resposta do contato:
 | --- | --- | --- |
 | **follow-up** | silêncio do lead sem consulta atual/futura | tenants com a ação `follow_up` ativa |
 | **lembretes** | consultas chegando | tenants com `schedule_meeting` ativa **e** lembrete configurado |
+| **lembretes do Clinicorp** | consultas marcadas direto no Clinicorp | os mesmos, com Clinicorp ligado e canal permitido (ver abaixo) |
 
 Cada varredura tem sua própria fila: follow-up roda a cada 15 minutos e
 lembretes a cada minuto por padrão. Assim um lembrete configurado para 23h
@@ -40,6 +41,9 @@ recibos assinados da Meta, reconciliados também nesta varredura.
   - `staleReminders(appt, reminders, now)` — quais perderam a janela e são fechados sem envio.
   - `remindersFor(appt, cfg)` — os da consulta, ou os do agente.
   - `scanAndSendReminders(now?)` — varre consultas próximas e marca `Appointment.remindersSent`.
+- `clinicorp-reminders.ts` — lembretes das consultas marcadas direto no Clinicorp:
+  - `scanAndSendClinicorpReminders(now?)` — relê a agenda de cada conta, decide o canal e marca `ClinicorpReminder`.
+  - `clinicorpWhatsappPhone(raw)` — telefone digitado na recepção → formato do WhatsApp.
 - `index.ts` — cria as filas, agenda os jobs repetíveis (`upsertJobScheduler`) e roda os workers.
 
 ## Lembretes de consulta (`reminders.ts`)
@@ -97,6 +101,28 @@ Regras que não são óbvias:
 
 Regressões: `tests/agendamento-lembrete.test.ts`.
 
+## Lembretes do Clinicorp (`clinicorp-reminders.ts`)
+
+Fila própria (`clinicorp-reminders`), a cada `CLINICORP_REMINDER_SCAN_EVERY_MINUTES`
+(padrão 5): cada volta relê a agenda do Clinicorp de cada conta, e a cada
+minuto seriam 1.440 chamadas por dia por clínica. Mesmas regras de tempo de
+`dueReminders`, com a lista de lembretes da conta.
+
+O canal é o que muda, porque esse paciente quase nunca falou com o número:
+
+- **Meta**: sempre o template aprovado de `metaReminderTemplate`. Sem template,
+  a conta nem lê o Clinicorp. Falha ou resultado incerto **não é repetido**
+  (a Meta pode ter aceitado) — fecha sem `reminderSentAt`.
+- **Evolution**: **nunca primeiro contato**. Só quem tem `lastInboundAt`
+  recebe, com o texto do lembrete; os outros ficam pendentes (se escreverem
+  antes da consulta, recebem). Falha de envio tenta de novo.
+
+Pula o que o fechai espelhou no Clinicorp (quem lembra é a varredura de cima),
+bloqueados, "pediu para parar" e telefone inválido. O controle fica em
+`ClinicorpReminder` (id do Clinicorp + horário; remarcar reabre os disparos).
+Regras completas em `src/modules/scheduling/README.md`. Regressões:
+`tests/clinicorp-lembrete.test.ts`.
+
 ## Como rodar
 
 ```bash
@@ -104,7 +130,8 @@ npm run db:up        # Redis precisa estar de pé
 npm run worker       # tsx workers/follow-up-worker/index.ts
 ```
 
-Env: `REDIS_URL`, `FOLLOWUP_SCAN_EVERY_MINUTES` (intervalo da varredura, padrão 15).
+Env: `REDIS_URL`, `FOLLOWUP_SCAN_EVERY_MINUTES` (intervalo da varredura, padrão 15),
+`CLINICORP_REMINDER_SCAN_EVERY_MINUTES` (lembretes do Clinicorp, padrão 5).
 
 ## Follow-up em esteira (`scan.ts`)
 

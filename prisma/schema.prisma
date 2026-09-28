@@ -126,6 +126,7 @@ model Tenant {
   appointments     Appointment[]
   calendar         CalendarIntegration?
   clinicorp        ClinicorpIntegration?
+  clinicorpReminders ClinicorpReminder[]
   calendarFeatures CalendarFeatures?
   leadValues       TenantLeadValue[]
   attendanceCosts  TenantAttendanceCost[]
@@ -745,6 +746,32 @@ model CalendarIntegration {
   syncEnabled  Boolean  @default(true)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+}
+
+/// Lembretes já enviados para uma consulta marcada **direto no Clinicorp** —
+/// a que não é um `Appointment` nosso (ver `listClinicorpAgenda`). Mesma ideia
+/// de `Appointment.remindersSent`, mas numa tabela própria porque a consulta
+/// não existe aqui: a linha só nasce quando um disparo sai ou é fechado.
+///
+/// `startsAt` é o horário da consulta quando o disparo foi registrado. Se a
+/// recepção remarca no Clinicorp (mesmo id, outro horário), os disparos voltam
+/// a valer: o "1 dia antes" da data antiga não pode calar o da nova.
+/// Quem envia: `workers/follow-up-worker/clinicorp-reminders.ts`.
+model ClinicorpReminder {
+  id                     String    @id @default(cuid())
+  tenantId               String
+  tenant                 Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// Id do agendamento no Clinicorp (inteiro de 64 bits, guardado como String).
+  clinicorpAppointmentId String
+  startsAt               DateTime
+  /// Antecedências (minutos) já enviadas ou fechadas sem envio.
+  remindersSent          Int[]     @default([])
+  /// Só quando uma mensagem de fato saiu — a /agenda mostra a partir dele.
+  reminderSentAt         DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  @@unique([tenantId, clinicorpAppointmentId])
 }
 
 /// Conexão da conta com o Clinicorp (software de gestão de clínicas). Uma por

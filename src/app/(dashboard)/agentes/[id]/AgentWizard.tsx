@@ -104,6 +104,7 @@ export function AgentWizard({
   planLimit,
   scheduleConfig,
   clinicorpConnected,
+  metaReminders = false,
   followUpConfig,
   handoffConfig,
   enabled,
@@ -128,6 +129,8 @@ export function AgentWizard({
   planLimit: number;
   scheduleConfig: ScheduleConfig;
   clinicorpConnected: boolean;
+  /** API oficial da Meta ativa: libera o template do lembrete de primeiro contato. */
+  metaReminders?: boolean;
   followUpConfig: FollowUpConfig;
   handoffConfig: HandoffConfig;
   /** Agente ligado? Desligado, o teste não responde — a tela avisa antes. */
@@ -252,6 +255,7 @@ export function AgentWizard({
                     planLimit={planLimit}
                     scheduleConfig={scheduleConfig}
                     clinicorpConnected={clinicorpConnected}
+                    metaReminders={metaReminders}
                     followUpConfig={followUpConfig}
                     handoffConfig={handoffConfig}
                   />

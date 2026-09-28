@@ -658,6 +658,9 @@ export type ClinicorpAgendaItem = {
   notes: string | null;
 };
 
+/** Rótulo da tela para consulta sem nome — nunca vai numa mensagem ao paciente. */
+export const CLINICORP_UNNAMED_PATIENT = "Paciente sem nome";
+
 export type ClinicorpAgenda =
   | { status: "off" }
   | { status: "ok"; items: ClinicorpAgendaItem[]; skipped: number }
@@ -701,12 +704,19 @@ function agendaDay(row: Record<string, unknown>, timeZone: string): string | nul
  *
  * Nunca lança e não grava `lastError`: ler a agenda para desenhar a tela não é
  * envio, e um erro aqui não pode apagar nem mascarar o aviso de um envio.
+ *
+ * **Cache curto** (`AGENDA_CACHE_MS`): clicar num dia é uma navegação que
+ * refaz a página, e esperar o Clinicorp a cada clique travava a tela. A
+ * conexão (flag, credencial, clínica) é conferida sempre — desligar para na
+ * hora —, só a resposta de lá é reaproveitada. `fresh` pula o cache e o
+ * reabastece: é o que o pulso ao vivo (`readAgendaPulse`) usa a cada 15s.
  */
 export async function listClinicorpAgenda(
   tenantId: string,
   from: string,
   to: string,
   timeZone: string,
+  { fresh = false }: { fresh?: boolean } = {},
 ): Promise<ClinicorpAgenda> {
   try {
     // `as`: o valor muda dentro do callback, e sem isso o TS estreita para "configured".
@@ -721,25 +731,99 @@ export async function listClinicorpAgenda(
     // card de sincronização já pede para escolher.
     if (!integration.businessId) return { status: "off" };
 
-    const [agenda, professionals] = await Promise.all([
+    const store = agendaCache().agenda;
+    const key = [tenantId, integration.subscriberId, integration.businessId, from, to, timeZone].join("|");
+    const hit = store.get(key);
+    if (!fresh && hit && Date.now() - hit.at < hit.ttl) return await hit.value;
+
+    // A promessa entra no cache antes de resolver: duas abas abrindo o mesmo
+    // mês esperam a mesma chamada em vez de fazer duas.
+    const entry = { at: Date.now(), ttl: AGENDA_CACHE_MS, value: fetchAgenda(integration, from, to, timeZone) };
+    store.delete(key);
+    store.set(key, entry);
+    while (store.size > AGENDA_CACHE_MAX) store.delete(store.keys().next().value!);
+    const result = await entry.value;
+    // Falha fica pouco: só o bastante para uma série de cliques não esperar o
+    // timeout de novo a cada um. O pulso seguinte já tenta outra vez.
+    if (result.status !== "ok") entry.ttl = AGENDA_ERROR_CACHE_MS;
+    return result;
+  } catch (err) {
+    console.error("[clinicorp] ler agenda do período falhou", err);
+    return { status: "error", error: "Não foi possível ler a agenda do Clinicorp." };
+  }
+}
+
+/** Quanto a leitura do mês vale para os cliques seguintes. O pulso a renova a cada 15s. */
+const AGENDA_CACHE_MS = 30_000;
+const AGENDA_ERROR_CACHE_MS = 10_000;
+/** Nome de profissional quase nunca muda: não vale uma chamada a cada releitura. */
+const PROFESSIONALS_CACHE_MS = 10 * 60_000;
+/** Teto de meses guardados no processo (contas × meses abertos). */
+const AGENDA_CACHE_MAX = 300;
+
+type AgendaCache = {
+  agenda: Map<string, { at: number; ttl: number; value: Promise<ClinicorpAgenda> }>;
+  professionals: Map<string, { at: number; names: Map<string, string> }>;
+};
+
+/**
+ * No `globalThis`, como o Prisma: a página e a rota do pulso são compiladas em
+ * pacotes diferentes, e cada um teria o próprio Map — o pulso reabasteceria um
+ * cache que a página nunca lê.
+ */
+function agendaCache(): AgendaCache {
+  const g = globalThis as unknown as { __clinicorpAgendaCache?: AgendaCache };
+  g.__clinicorpAgendaCache ??= { agenda: new Map(), professionals: new Map() };
+  return g.__clinicorpAgendaCache;
+}
+
+/** Esquece o que foi lido de uma conta (ou de todas) — nova credencial, desconexão, testes. */
+export function clearClinicorpAgendaCache(tenantId?: string): void {
+  const cache = agendaCache();
+  for (const store of [cache.agenda, cache.professionals]) {
+    for (const key of [...store.keys()]) {
+      if (!tenantId || key.startsWith(`${tenantId}|`)) store.delete(key);
+    }
+  }
+}
+
+/** Id → nome dos profissionais. Falha devolve vazio e não entra no cache. */
+async function professionalNames(integration: ClinicorpIntegration): Promise<Map<string, string>> {
+  const store = agendaCache().professionals;
+  const key = `${integration.tenantId}|${integration.subscriberId}`;
+  const hit = store.get(key);
+  if (hit && Date.now() - hit.at < PROFESSIONALS_CACHE_MS) return hit.names;
+
+  const res = await call<unknown>(integration, "/professional/list_all_professionals", { timeoutMs: AGENDA_TIMEOUT_MS });
+  const names = new Map<string, string>();
+  if (!res.ok || !Array.isArray(res.data)) return names;
+  for (const p of res.data) {
+    if (!p || typeof p !== "object") continue;
+    const { id, name } = p as Record<string, unknown>;
+    if (id != null && typeof name === "string" && name.trim()) names.set(String(id), name.trim());
+  }
+  store.set(key, { at: Date.now(), names });
+  return names;
+}
+
+/** A chamada de fato. Nunca rejeita: a promessa fica no cache. */
+async function fetchAgenda(
+  integration: ClinicorpIntegration,
+  from: string,
+  to: string,
+  timeZone: string,
+): Promise<ClinicorpAgenda> {
+  try {
+    const [agenda, names] = await Promise.all([
       call<unknown>(integration, "/appointment/list", {
-        query: { from, to, businessId: integration.businessId },
+        query: { from, to, businessId: integration.businessId ?? undefined },
         timeoutMs: AGENDA_TIMEOUT_MS,
       }),
       // Só dá nome ao profissional; se falhar, as consultas aparecem sem ele.
-      call<unknown>(integration, "/professional/list_all_professionals", { timeoutMs: AGENDA_TIMEOUT_MS }),
+      professionalNames(integration),
     ]);
     if (!agenda.ok) return { status: "error", error: agenda.error };
     if (!Array.isArray(agenda.data)) return { status: "error", error: "O Clinicorp não devolveu uma agenda válida." };
-
-    const names = new Map<string, string>();
-    if (professionals.ok && Array.isArray(professionals.data)) {
-      for (const p of professionals.data) {
-        if (!p || typeof p !== "object") continue;
-        const { id, name } = p as Record<string, unknown>;
-        if (id != null && typeof name === "string" && name.trim()) names.set(String(id), name.trim());
-      }
-    }
 
     const text = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : null);
     const items: ClinicorpAgendaItem[] = [];
@@ -763,7 +847,7 @@ export async function listClinicorpAgenda(
         id,
         startsAt,
         endsAt: endsAt && endsAt > startsAt ? endsAt : null,
-        patientName: text(r.PatientName) ?? "Paciente sem nome",
+        patientName: text(r.PatientName) ?? CLINICORP_UNNAMED_PATIENT,
         phone: text(r.MobilePhone),
         professional: r.Dentist_PersonId != null ? names.get(String(r.Dentist_PersonId)) ?? null : null,
         notes: text(r.Notes)?.slice(0, 300) ?? null,
@@ -930,9 +1014,11 @@ export async function saveClinicorpCredentials(
     create: { tenantId, ...encrypted, businessId: defaults.businessId ?? null },
     update: { ...encrypted, lastError: null, lastErrorAt: null },
   });
+  clearClinicorpAgendaCache(tenantId);
 }
 
 /** Apaga a conexão. As credenciais são do cliente: sai tudo. */
 export async function disconnectClinicorp(tenantId: string): Promise<void> {
   await prisma.clinicorpIntegration.deleteMany({ where: { tenantId } });
+  clearClinicorpAgendaCache(tenantId);
 }

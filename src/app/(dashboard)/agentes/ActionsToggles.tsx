@@ -35,6 +35,7 @@ export function ActionsToggles({
   followUpConfig,
   handoffConfig,
   clinicorpConnected = false,
+  metaReminders = false,
 }: {
   agentId: string;
   enabledKeys: string[];
@@ -44,6 +45,8 @@ export function ActionsToggles({
   handoffConfig: HandoffConfig;
   /** Clinicorp habilitado e conectado: libera trazer os tipos de atendimento de lá. */
   clinicorpConnected?: boolean;
+  /** API oficial da Meta ativa: libera o template do lembrete de primeiro contato. */
+  metaReminders?: boolean;
 }) {
   const [enabled, setEnabled] = useState<Set<string>>(
     () => new Set(enabledKeys.filter((k) => AVAILABLE_ACTIONS.some((a) => a.key === k))),
@@ -165,7 +168,7 @@ export function ActionsToggles({
               {showConfig && (
                 <div className="mt-4">
                   {a.key === "schedule_meeting" && (
-                    <ScheduleSettings agentId={agentId} config={scheduleConfig} clinicorpConnected={clinicorpConnected} />
+                    <ScheduleSettings agentId={agentId} config={scheduleConfig} clinicorpConnected={clinicorpConnected} metaReminders={metaReminders} />
                   )}
                   {a.key === "follow_up" && (
                     <FollowUpSettings agentId={agentId} config={followUpConfig} />

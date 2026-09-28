@@ -1,6 +1,6 @@
-import { Phone, User } from "lucide-react";
+import { BellRing, Phone, User } from "lucide-react";
 import type { ClinicorpAgendaItem } from "@/modules/scheduling/clinicorp";
-import { timeInZone } from "@/modules/scheduling/time";
+import { formatInZone, timeInZone } from "@/modules/scheduling/time";
 
 /**
  * Consulta marcada direto no Clinicorp, na lista do dia.
@@ -12,9 +12,12 @@ import { timeInZone } from "@/modules/scheduling/time";
 export function ClinicorpAppointmentItem({
   item,
   timezone,
+  reminderSentAt = null,
 }: {
   item: ClinicorpAgendaItem;
   timezone: string;
+  /** Último lembrete que saiu para esta consulta (`ClinicorpReminder`). */
+  reminderSentAt?: Date | null;
 }) {
   return (
     <li className="relative flex flex-col gap-3 rounded-surface border border-white/10 bg-white/[0.03] p-3.5">
@@ -60,6 +63,13 @@ export function ClinicorpAppointmentItem({
           {item.notes && (
             <p className="mt-1.5 line-clamp-3 rounded-control border border-white/5 bg-black/20 px-2.5 py-1 text-xs leading-relaxed text-white/70">
               {item.notes}
+            </p>
+          )}
+
+          {reminderSentAt && (
+            <p className="mt-1.5 flex items-center gap-1.5 font-mono text-micro uppercase tracking-wide text-success">
+              <BellRing size={12} aria-hidden />
+              Lembrete enviado · {formatInZone(reminderSentAt, timezone)}
             </p>
           )}
 

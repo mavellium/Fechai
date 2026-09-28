@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { LinkPendingHint } from "./LinkPendingHint";
 
 const WEEKDAY_HEADERS = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
 
@@ -11,6 +12,10 @@ const WEEKDAY_HEADERS = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
  * cliente: trocar de mês ou de dia vira URL compartilhável, funciona com o
  * botão voltar do navegador e não manda um calendário inteiro de JavaScript
  * para o navegador.
+ *
+ * `prefetch={false}` nos links: a página é dinâmica e não tem `loading.js`,
+ * então o prefetch não adianta a navegação e só gera requisição ao servidor por
+ * casa visível. O retorno do clique é o `LinkPendingHint`.
  *
  * A matemática de calendário usa `Date.UTC` de propósito — aqui são números de
  * calendário (dia 1, 31, quinta-feira), não instantes: usar horário local faria
@@ -47,7 +52,7 @@ export function CalendarMonth({
   );
 
   const navClass =
-    "flex h-8 w-8 items-center justify-center rounded-control font-mono text-white/60 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris";
+    "relative flex h-8 w-8 items-center justify-center rounded-control font-mono text-white/60 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-iris";
 
   return (
     <div>
@@ -60,26 +65,32 @@ export function CalendarMonth({
           {!isCurrentMonth && (
             <Link
               href={hrefFor({ year: today.year, month: today.month, day: today.day })}
-              className="rounded-control px-2.5 py-1 font-mono text-micro uppercase tracking-wider text-iris transition-colors hover:bg-iris/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-iris"
+              prefetch={false}
+              className="relative rounded-control px-2.5 py-1 font-mono text-micro uppercase tracking-wider text-iris transition-colors hover:bg-iris/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-iris"
             >
               Hoje
+              <LinkPendingHint />
             </Link>
           )}
           <Link
             href={hrefFor({ ...prev, day: null })}
+            prefetch={false}
             className={navClass}
             rel="prev"
             aria-label="Mês anterior"
           >
             <ChevronLeft size={16} aria-hidden />
+            <LinkPendingHint />
           </Link>
           <Link
             href={hrefFor({ ...next, day: null })}
+            prefetch={false}
             className={navClass}
             rel="next"
             aria-label="Próximo mês"
           >
             <ChevronRight size={16} aria-hidden />
+            <LinkPendingHint />
           </Link>
         </div>
       </div>
@@ -109,6 +120,7 @@ export function CalendarMonth({
             <Link
               key={day}
               href={hrefFor({ year, month, day })}
+              prefetch={false}
               aria-current={isSelected ? "date" : undefined}
               aria-label={`${day} de ${monthLabel}${count > 0 ? `, ${count} compromisso(s)` : ", sem compromissos"}`}
               className={cn(
@@ -148,6 +160,7 @@ export function CalendarMonth({
                   livre
                 </span>
               )}
+              <LinkPendingHint />
             </Link>
           );
         })}

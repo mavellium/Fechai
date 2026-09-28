@@ -1,4 +1,5 @@
 import { partsInZone } from "./time";
+import { parseMetaReminderTemplate, type MetaReminderTemplate } from "./meta-reminder";
 import { describeRanges, getWeeklyAvailability, mergeRanges, minuteLabel, parseWeeklyAvailability, type WeeklyAvailability } from "./weekly-availability";
 
 /**
@@ -76,6 +77,12 @@ export type ScheduleConfig = {
    * tela lista.
    */
   reminders: ReminderRule[];
+  /**
+   * Template aprovado da Meta para lembrar quem **nunca conversou** com o
+   * número (pacientes marcados direto no Clinicorp). Ausente = esses pacientes
+   * não recebem lembrete. Ver `meta-reminder.ts`.
+   */
+  metaReminderTemplate?: MetaReminderTemplate;
 };
 
 export type BlockedDate = {
@@ -333,6 +340,7 @@ export function parseScheduleConfig(raw: unknown): ScheduleConfig {
   // Variação sem nome ou com duração fora da faixa é descartada, não corrigida:
   // uma linha pela metade viraria "sem nome · 60 min" no prompt, e o agente
   // ofereceria ao contato um tipo de atendimento que ninguém cadastrou.
+  const metaReminderTemplate = parseMetaReminderTemplate(c.metaReminderTemplate);
   const seen = new Set<string>();
   const durations = Array.isArray(c.durations) ? c.durations.flatMap((raw) => {
     if (!raw || typeof raw !== "object") return [];
@@ -379,6 +387,7 @@ export function parseScheduleConfig(raw: unknown): ScheduleConfig {
     // efeito colateral de uma atualização do produto.
     reminderEnabled: c.reminderEnabled === true,
     reminders: parseReminders(c),
+    ...(metaReminderTemplate ? { metaReminderTemplate } : {}),
   };
 }
 
