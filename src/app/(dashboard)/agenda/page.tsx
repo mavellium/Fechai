@@ -10,9 +10,15 @@ import { PageHeader } from "@/components/ui/page-header";
 import { describeSchedule, parseScheduleConfig } from "@/modules/scheduling/config";
 import { isGoogleCalendarConfigured } from "@/modules/scheduling/google";
 import { getCalendarFeatures } from "@/modules/scheduling/features";
-import { getClinicorpStatus } from "@/modules/scheduling/clinicorp";
+import {
+  getClinicorpStatus,
+  listClinicorpAgenda,
+  type ClinicorpAgendaItem,
+} from "@/modules/scheduling/clinicorp";
 import { listMonthAppointments } from "@/modules/scheduling/repository";
-import { timeInZone, todayInZone } from "@/modules/scheduling/time";
+import { dayKeyInZone, timeInZone, todayInZone } from "@/modules/scheduling/time";
+import { ClinicorpAppointmentItem } from "./ClinicorpAppointmentItem";
+import { AgendaLiveRefresh } from "./AgendaLiveRefresh";
 import { leadStatusLabel } from "../conversas/leadStatus";
 import { CalendarMonth } from "./CalendarMonth";
 import { AppointmentActions } from "./AppointmentActions";
@@ -72,11 +78,15 @@ export default async function AgendaPage({
         ? today.day
         : null;
 
-  const [{ byDay }, features, integration, clinicorp, contacts] = await Promise.all([
+  const pad = (n: number) => String(n).padStart(2, "0");
+
+  const [{ rows: monthRows, byDay }, features, integration, clinicorp, clinicorpAgenda, contacts] = await Promise.all([
     listMonthAppointments(tenantId, year, month, config.timezone),
     getCalendarFeatures(tenantId),
     prisma.calendarIntegration.findUnique({ where: { tenantId } }),
     getClinicorpStatus(tenantId),
+    // O que a recepção marcou direto no Clinicorp: só leitura, nunca importado.
+    listClinicorpAgenda(tenantId, `${year}-${pad(month)}-01`, `${year}-${pad(month)}-${pad(daysInMonth)}`, config.timezone),
     prisma.lead.findMany({
       where: { tenantId, isTest: false },
       orderBy: { createdAt: "desc" },
@@ -85,11 +95,30 @@ export default async function AgendaPage({
     }),
   ]);
 
-  const countByDay = new Map([...byDay].map(([key, rows]) => [key, rows.length]));
+  // O que o fechai já espelhou lá aparece uma vez só: como o nosso compromisso,
+  // que tem lembretes e ações.
+  const mirrored = new Set(monthRows.map((row) => row.clinicorpAppointmentId).filter(Boolean));
+  const clinicorpByDay = new Map<string, ClinicorpAgendaItem[]>();
+  if (clinicorpAgenda.status === "ok") {
+    for (const item of clinicorpAgenda.items) {
+      if (mirrored.has(item.id)) continue;
+      const key = dayKeyInZone(item.startsAt, config.timezone);
+      clinicorpByDay.set(key, [...(clinicorpByDay.get(key) ?? []), item]);
+    }
+  }
 
-  const pad = (n: number) => String(n).padStart(2, "0");
+  const countByDay = new Map<string, number>();
+  for (const [key, rows] of [...byDay, ...clinicorpByDay]) {
+    countByDay.set(key, (countByDay.get(key) ?? 0) + rows.length);
+  }
+
   const selectedKey = selectedDay ? `${year}-${pad(month)}-${pad(selectedDay)}` : null;
   const dayAppointments = selectedKey ? (byDay.get(selectedKey) ?? []) : [];
+  const dayClinicorp = selectedKey ? (clinicorpByDay.get(selectedKey) ?? []) : [];
+  const dayEntries = [
+    ...dayAppointments.map((appointment) => ({ kind: "fechai" as const, at: appointment.startsAt, appointment })),
+    ...dayClinicorp.map((item) => ({ kind: "clinicorp" as const, at: item.startsAt, item })),
+  ].sort((a, b) => a.at.getTime() - b.at.getTime());
 
   const hrefFor = ({
     year: y = year,
@@ -149,15 +178,29 @@ export default async function AgendaPage({
       <PageHeader
         eyebrow="agenda"
         title="Agenda"
-        description="Os horários que seu agente marcou nas conversas, mais o que você marcar à mão."
+        description={
+          clinicorpAgenda.status === "ok"
+            ? "Os horários que seu agente marcou nas conversas, o que você marcar à mão e as consultas do Clinicorp."
+            : "Os horários que seu agente marcou nas conversas, mais o que você marcar à mão."
+        }
         actions={
-          <NewAppointmentDialog
-            contacts={contactOptions}
-            defaultDate={selectedKey ?? `${today.year}-${pad(today.month)}-${pad(today.day)}`}
-            defaultDuration={config.durationMinutes}
-            durations={config.durations}
-            requiresContact={Boolean(features.clinicorpEnabled && clinicorp?.syncEnabled)}
-          />
+          <>
+            <AgendaLiveRefresh
+              updatedAt={new Intl.DateTimeFormat("pt-BR", {
+                timeZone: config.timezone,
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+              }).format(new Date())}
+            />
+            <NewAppointmentDialog
+              contacts={contactOptions}
+              defaultDate={selectedKey ?? `${today.year}-${pad(today.month)}-${pad(today.day)}`}
+              defaultDuration={config.durationMinutes}
+              durations={config.durations}
+              requiresContact={Boolean(features.clinicorpEnabled && clinicorp?.syncEnabled)}
+            />
+          </>
         }
       />
 
@@ -199,6 +242,22 @@ export default async function AgendaPage({
         </Alert>
       )}
 
+      {/* Sem a leitura, o calendário mostraria dias livres que estão cheios lá. */}
+      {clinicorpAgenda.status === "error" && (
+        <Alert tone="warn" title="Consultas do Clinicorp não carregaram">
+          {clinicorpAgenda.error} O calendário abaixo mostra só o que foi marcado pelo fechai.
+          A agenda tenta de novo sozinha a cada 15 segundos, ou clique em Atualizar.
+        </Alert>
+      )}
+      {clinicorpAgenda.status === "ok" && clinicorpAgenda.skipped > 0 && (
+        <Alert tone="info">
+          {clinicorpAgenda.skipped === 1
+            ? "1 consulta do Clinicorp veio sem data ou horário legível e não aparece no calendário."
+            : `${clinicorpAgenda.skipped} consultas do Clinicorp vieram sem data ou horário legível e não aparecem no calendário.`}{" "}
+          Confira direto no Clinicorp.
+        </Alert>
+      )}
+
       {/* Primeira View: Calendário (~65%) e Agendamentos do Dia (~35%) Lado a Lado */}
       <div className="grid gap-6 lg:grid-cols-12 lg:items-start">
         {/* Calendário do Mês (Ocupa ~65% do grid, altura natural compacta) */}
@@ -228,11 +287,12 @@ export default async function AgendaPage({
                 )}
               </div>
               <p className="mt-0.5 font-mono text-micro uppercase tracking-wider text-white/45">
-                {dayAppointments.length} {dayAppointments.length === 1 ? "compromisso marcado" : "compromissos marcados"}
+                {dayEntries.length} {dayEntries.length === 1 ? "compromisso marcado" : "compromissos marcados"}
+                {dayClinicorp.length > 0 && ` · ${dayClinicorp.length} no Clinicorp`}
               </p>
             </div>
 
-            {dayAppointments.length > 0 && (
+            {dayEntries.length > 0 && (
               <NewAppointmentDialog
                 contacts={contactOptions}
                 defaultDate={selectedKey ?? `${today.year}-${pad(today.month)}-${pad(today.day)}`}
@@ -245,7 +305,7 @@ export default async function AgendaPage({
           </div>
 
           <div className="flex-1 min-h-0 overflow-y-auto pr-1">
-            {dayAppointments.length === 0 ? (
+            {dayEntries.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center py-10 text-center">
                 <EmptyState
                   icon={CalendarX2}
@@ -266,7 +326,17 @@ export default async function AgendaPage({
               </div>
             ) : (
               <ul className="space-y-3">
-                {dayAppointments.map((appointment) => {
+                {dayEntries.map((entry) => {
+                  if (entry.kind === "clinicorp") {
+                    return (
+                      <ClinicorpAppointmentItem
+                        key={`clinicorp-${entry.item.id}`}
+                        item={entry.item}
+                        timezone={config.timezone}
+                      />
+                    );
+                  }
+                  const { appointment } = entry;
                   const leadDisplayName = appointment.patientName || appointment.lead?.name || appointment.lead?.phone || appointment.title;
                   const avatarInitial = leadDisplayName.slice(0, 1).toUpperCase();
 

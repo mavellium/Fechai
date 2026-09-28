@@ -12,7 +12,7 @@ vi.mock("@/lib/prisma", () => ({ prisma: db }));
 vi.mock("@/modules/scheduling/google", () => ({ pushEventToGoogle: vi.fn(async () => null) }));
 
 import {
-  cancelAppointmentInClinicorp, getClinicorpStatus, hasClinicorpConflict,
+  cancelAppointmentInClinicorp, getClinicorpStatus, hasClinicorpConflict, listClinicorpAgenda,
   listClinicorpCategories, listClinicorpProfessionals, listClinicorpBusyBlocks, pushAppointmentToClinicorp,
   saveClinicorpCredentials, testClinicorpConnection, verifyClinicorpCredentials,
 } from "@/modules/scheduling/clinicorp";
@@ -225,6 +225,86 @@ describe("disponibilidade", () => {
     expect(await hasClinicorpConflict("tenant-1", event.startsAt, event.endsAt, event.timeZone)).toBe(false);
     fetchMock.mockResolvedValue(json([{ Dentist_PersonId: 222222222222, fromTime: "16:40", toTime: "17:00" }]));
     expect(await hasClinicorpConflict("tenant-1", event.startsAt, event.endsAt, event.timeZone)).toBe(true);
+  });
+});
+
+// Relato: o Instituto do Sorriso tinha consultas no Clinicorp que não
+// apareciam na /agenda — ela só lia o banco do fechai.
+describe("agenda do Clinicorp na /agenda", () => {
+  const tz = "America/Sao_Paulo";
+  const agenda = (rows: unknown, professionals: unknown = [{ id: 222222222222, name: "Dra. Ana" }]) =>
+    fetchMock.mockImplementation(async (url: URL) =>
+      url.pathname.endsWith("/list_all_professionals") ? json(professionals) : json(rows));
+  const list = () => listClinicorpAgenda("tenant-1", "2026-09-01", "2026-09-30", tz);
+
+  it("lê o mês inteiro da clínica escolhida, sem gravar nada", async () => {
+    agenda([]);
+    expect(await list()).toEqual({ status: "ok", items: [], skipped: 0 });
+    const [url] = fetchMock.mock.calls.find(([url]) => url.pathname.endsWith("/appointment/list"))! as unknown as [URL];
+    expect(Object.fromEntries(url.searchParams)).toMatchObject({ from: "2026-09-01", to: "2026-09-30", businessId: "4791226171916288" });
+    expect(url.searchParams.has("includeAssigns")).toBe(false);
+    expect(db.clinicorpIntegration.update).not.toHaveBeenCalled();
+  });
+
+  it("põe cada consulta no dia local certo, nos três formatos de data", async () => {
+    agenda([
+      { id: 1, AtomicDate: 20260929, fromTime: "08:00", toTime: "08:30", PatientName: "Atômica" },
+      // Dia local à meia-noite UTC, como o próprio fechai envia.
+      { id: 2, date: "2026-09-29T00:00:00.000Z", fromTime: "09:00", toTime: "09:30", PatientName: "Meia-noite UTC" },
+      // Meia-noite de Brasília em UTC.
+      { id: 3, date: "2026-09-29T03:00:00.000Z", fromTime: "10:00", toTime: "10:30", PatientName: "Meia-noite local" },
+    ]);
+    const result = await list();
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.items.map((i) => i.startsAt.toISOString())).toEqual([
+      "2026-09-29T11:00:00.000Z", "2026-09-29T12:00:00.000Z", "2026-09-29T13:00:00.000Z",
+    ]);
+  });
+
+  it("traz só consultas de pacientes ativas, com profissional e sem inventar fim", async () => {
+    agenda([
+      { id: 4791226171916288, ItemType: "APPOINTMENT", AtomicDate: 20260929, fromTime: "17:45", toTime: "18:00",
+        PatientName: "Maria", MobilePhone: "11999990000", Dentist_PersonId: 222222222222, Notes: "Retorno" },
+      { id: 5, ItemType: "ASSIGN", AtomicDate: 20260929, fromTime: "12:00", toTime: "13:00", Name: "Almoço" },
+      { id: 6, AtomicDate: 20260929, fromTime: "14:00", toTime: "14:30", Canceled: "X" },
+      { id: 7, AtomicDate: 20260929, fromTime: "15:00", toTime: "inválido", PatientName: "Sem fim" },
+    ]);
+    const result = await list();
+    if (result.status !== "ok") throw new Error(result.status);
+    expect(result.items).toEqual([
+      expect.objectContaining({ id: "7", patientName: "Sem fim", endsAt: null }),
+      expect.objectContaining({ id: "4791226171916288", patientName: "Maria", phone: "11999990000",
+        professional: "Dra. Ana", notes: "Retorno", endsAt: new Date("2026-09-29T21:00:00.000Z") }),
+    ]);
+  });
+
+  it("conta o que não dá para posicionar em vez de esconder calado", async () => {
+    agenda([null, { id: 8, fromTime: "09:00" }, { AtomicDate: 20260929, fromTime: "09:00" }, { id: 9, AtomicDate: 20260929 }]);
+    expect(await list()).toEqual({ status: "ok", items: [], skipped: 4 });
+  });
+
+  it("sem a lista de profissionais, as consultas aparecem sem o nome", async () => {
+    agenda([{ id: 1, AtomicDate: 20260929, fromTime: "08:00", Dentist_PersonId: 222222222222 }], { error: "sem acesso" });
+    expect(await list()).toMatchObject({ status: "ok", items: [expect.objectContaining({ professional: null })] });
+  });
+
+  it.each([401, 500])("devolve erro para a tela avisar quando o Clinicorp responde %i", async (status) => {
+    fetchMock.mockResolvedValue(json({ message: "indisponível" }, status));
+    expect(await list()).toMatchObject({ status: "error", error: expect.any(String) });
+    expect(db.clinicorpIntegration.update).not.toHaveBeenCalled();
+  });
+
+  it("não chama a API com a integração desligada, sem clínica ou sem credencial legível", async () => {
+    db.calendarFeatures.findUnique.mockResolvedValue({ clinicorpEnabled: false });
+    expect(await list()).toEqual({ status: "off" });
+    db.calendarFeatures.findUnique.mockResolvedValue({ clinicorpEnabled: true });
+    integration.businessId = null;
+    expect(await list()).toEqual({ status: "off" });
+    integration.businessId = "4791226171916288";
+    integration.apiToken = "cifra-corrompida";
+    expect(await list()).toEqual({ status: "off" });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

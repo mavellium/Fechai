@@ -13,7 +13,7 @@ mostrada no painel, e o horário combinado com o lead continua de pé.
 | `config.ts` | `ScheduleConfig` (expediente, fuso, duração padrão + variações) em `TenantAction.config`, chave `schedule_meeting`. Por agente. |
 | `time.ts` | Fuso: `parseLocalDateTime`, `partsInZone`, `monthRangeUtc`. Nada de data no projeto sem passar por aqui. |
 | `google.ts` | Espelho no Google Agenda (OAuth por tenant). |
-| `clinicorp.ts` | Espelho + leitura de disponibilidade no Clinicorp (Basic auth por tenant). |
+| `clinicorp.ts` | Espelho + leitura de disponibilidade e da agenda (para a `/agenda`) no Clinicorp (Basic auth por tenant). |
 | `features.ts` | Quais calendários a conta habilitou em /integracoes. |
 
 ## Configuração do agendamento por agente
@@ -343,6 +343,9 @@ Base: `https://api.clinicorp.com/rest/v1`. Quase todo endpoint pede
 2. **Disponibilidade** (`hasClinicorpConflict`) — `GET /appointment/list` do dia,
    com `includeAssigns` para trazer também eventos e bloqueios (almoço, férias):
    para o agente, esses horários são tão ocupados quanto uma consulta.
+3. **Agenda na tela** (`listClinicorpAgenda`) — `GET /appointment/list` do mês
+   aberto em `/agenda`, para a clínica ver ali também o que a recepção marcou
+   no Clinicorp. Ver "Consultas do Clinicorp na /agenda" abaixo.
 
 ### Regras que não são óbvias
 
@@ -497,7 +500,52 @@ tirar a duração média real por categoria. Daria nome *e* tempo de verdade, ma
 depende de haver histórico, são várias chamadas e leva segundos — foi avaliado e
 deixado de fora do botão de importar, que é síncrono.
 
-Não há webhook de entrada: o que for marcado **no** Clinicorp não aparece na
-agenda daqui. Só a checagem de conflito enxerga esses horários. Trazer os
-agendamentos de lá exigiria polling, deduplicação e uma regra de quem vence em
-divergência — decisão em aberto, não um esquecimento.
+### Consultas do Clinicorp na /agenda
+
+A `/agenda` mostra também as consultas marcadas **direto no Clinicorp**, lidas
+a cada abertura do mês (uma chamada a `/appointment/list` com `from`/`to` do
+mês, mais `/professional/list_all_professionals` para dar nome ao
+profissional). Antes a tela lia só o nosso banco, e a clínica via dias vazios
+que estavam cheios lá.
+
+- **Só leitura, nada é importado.** A consulta não vira `Appointment`: não
+  recebe lembrete, não entra em relatório nem na cota, e não existe regra de
+  quem vence numa divergência — o Clinicorp continua dono do que foi marcado
+  nele. Por isso o card não tem Lembretes/Concluir/Cancelar e diz "para
+  alterar, use o Clinicorp". Importar de verdade exigiria polling,
+  deduplicação e essa regra — continua sendo decisão em aberto.
+- **O que o fechai espelhou aparece uma vez só**, como o nosso compromisso: a
+  tela descarta a linha do Clinicorp cujo `id` está em
+  `Appointment.clinicorpAppointmentId` de algum compromisso do mês.
+- **Só consultas de pacientes ativas**: sem `includeAssigns` (almoço e bloqueio
+  não são consultas) e sem desmarcadas/excluídas.
+- **A clínica inteira, mesmo com `dentistId`.** O filtro por profissional
+  existe para a disponibilidade do agente; na tela a pessoa quer ver a agenda
+  que tem lá.
+- **O dia de cada linha** (`agendaDay`): numa consulta de um dia só o dia é o
+  da consulta, mas num mês cada linha diz o seu. `AtomicDate` (YYYYMMDD) vem
+  primeiro; depois `date`, que chega como dia local à meia-noite UTC (o formato
+  que o próprio fechai envia, lido pela parte da data) ou como instante
+  (convertido para o fuso da agenda). O horário vem de `fromTime`/`toTime`,
+  locais como em `fetchBusyBlocks`. `toTime` ilegível não esconde a consulta: a
+  tela mostra só o início.
+- **Falha nunca some em silêncio.** Clinicorp fora do ar ou lento (teto de 6s,
+  a página espera a leitura) vira aviso no topo dizendo que o calendário mostra
+  só o que é do fechai; linha sem id, dia ou início legível é contada em
+  `skipped` e a tela avisa quantas ficaram de fora. A leitura **não grava
+  `lastError`**: desenhar a tela não é envio.
+- Desabilitada, sem clínica escolhida ou com credencial ilegível: `off`, sem
+  chamada nenhuma (o card de sincronização já explica cada caso).
+
+- **"Tempo real" é releitura, não webhook.** O Clinicorp não avisa quando uma
+  consulta é marcada (o único webhook da API é de upload de arquivo), então
+  `AgendaLiveRefresh` (`(dashboard)/agenda/`) chama `router.refresh()` a cada
+  `LIVE_INTERVAL_MS` (15s): a página refaz a leitura do Clinicorp **e** do
+  nosso banco, e o que o agente marcou no WhatsApp também aparece sozinho. Com a
+  aba escondida nada é chamado; ao voltar, relê na hora. Há ainda o botão
+  "Atualizar". A volta automática **pula enquanto houver `<dialog>` aberto**: a
+  lista do dia pode trocar de forma e levar junto o formulário que a pessoa
+  estava preenchendo. Baixar o intervalo multiplica chamadas ao Clinicorp por
+  aba aberta — cada volta são duas (agenda e profissionais).
+
+Regressões: `tests/clinicorp.test.ts` ("agenda do Clinicorp na /agenda").

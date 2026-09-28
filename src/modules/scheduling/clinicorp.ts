@@ -2,7 +2,7 @@ import { prisma } from "@/lib/prisma";
 import type { ClinicorpIntegration } from "@prisma/client";
 import { decryptSecret, encryptSecret } from "@/lib/crypto";
 import { getCalendarFeatures } from "./features";
-import { formatInZone, parseLocalDateTime, partsInZone, zonedTimeToUtc } from "./time";
+import { dayKeyInZone, formatInZone, parseLocalDateTime, partsInZone, zonedTimeToUtc } from "./time";
 
 /**
  * Integração opcional com o Clinicorp (sistema de gestão de clínicas).
@@ -50,7 +50,10 @@ type CallResult<T> = { ok: true; data: T } | { ok: false; error: string; status?
 async function call<T>(
   cred: ClinicorpCredentials,
   path: string,
-  init: { method?: "GET" | "POST"; query?: Record<string, string | number | undefined>; body?: unknown } = {},
+  init: {
+    method?: "GET" | "POST"; query?: Record<string, string | number | undefined>; body?: unknown;
+    timeoutMs?: number;
+  } = {},
 ): Promise<CallResult<T>> {
   const url = new URL(`${API_BASE}${path}`);
   url.searchParams.set("subscriber_id", cred.subscriberId);
@@ -67,7 +70,7 @@ async function call<T>(
         ...(init.body ? { "Content-Type": "application/json" } : {}),
       },
       body: init.body ? JSON.stringify(init.body) : undefined,
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(init.timeoutMs ?? TIMEOUT_MS),
       cache: "no-store",
     });
 
@@ -634,6 +637,143 @@ export async function readClinicorpReport(tenantId: string, from: string, to: st
     return { available: true, integrationState, error: null, appointments: rows, statusTypes };
   } catch {
     return unavailable("Não foi possível concluir a consulta do Clinicorp. Comparecimentos vinculados permanecem pendentes para conferência.");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Agenda da clínica na tela /agenda (só leitura)
+// ---------------------------------------------------------------------------
+
+/** A página espera esta leitura para desenhar: um Clinicorp lento não pode segurá-la por 10s. */
+const AGENDA_TIMEOUT_MS = 6_000;
+
+export type ClinicorpAgendaItem = {
+  id: string;
+  startsAt: Date;
+  /** Null quando o Clinicorp não mandou um fim válido: a tela mostra só o início. */
+  endsAt: Date | null;
+  patientName: string;
+  phone: string | null;
+  professional: string | null;
+  notes: string | null;
+};
+
+export type ClinicorpAgenda =
+  | { status: "off" }
+  | { status: "ok"; items: ClinicorpAgendaItem[]; skipped: number }
+  | { status: "error"; error: string };
+
+/**
+ * O dia local de um agendamento da lista de um período.
+ *
+ * Na consulta de um dia só (`fetchBusyBlocks`) o dia é o da própria consulta;
+ * num mês, cada linha precisa dizer o seu. `AtomicDate` (YYYYMMDD) não tem
+ * ambiguidade e vem primeiro. `date` é o que sobra, em dois formatos: o dia
+ * local à meia-noite UTC — exatamente como `pushAppointmentToClinicorp` envia —
+ * ou um instante de verdade, convertido para o fuso da agenda. Ler o primeiro
+ * como instante jogaria no Brasil a consulta para o dia anterior.
+ */
+function agendaDay(row: Record<string, unknown>, timeZone: string): string | null {
+  const atomic = row.AtomicDate;
+  if ((typeof atomic === "number" || typeof atomic === "string") && /^\d{8}$/.test(String(atomic))) {
+    const s = String(atomic);
+    return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
+  }
+  const date = typeof row.date === "string" ? row.date.trim() : "";
+  if (/^\d{4}-\d{2}-\d{2}(T00:00(:00(\.0+)?)?(Z|\+00:00))?$/.test(date)) return date.slice(0, 10);
+  const at = new Date(date);
+  return date && !Number.isNaN(at.getTime()) ? dayKeyInZone(at, timeZone) : null;
+}
+
+/**
+ * As consultas de pacientes que estão no Clinicorp num período (dias locais,
+ * inclusive), para a `/agenda` mostrar também o que a recepção marcou lá.
+ *
+ * **Só leitura, nada é importado**: a linha não vira `Appointment`, então não
+ * recebe lembrete, não conta em relatório e não há regra de quem vence numa
+ * divergência — o Clinicorp continua dono do que foi marcado nele. Quem
+ * deduplica o que o próprio fechai espelhou é a tela, por
+ * `clinicorpAppointmentId`.
+ *
+ * Mostra a clínica inteira, mesmo com `dentistId`: a pessoa quer ver a agenda
+ * que tem lá, não só a fatia que bloqueia horário do agente. Compromissos e
+ * bloqueios (`includeAssigns`) ficam de fora — não são consultas.
+ *
+ * Nunca lança e não grava `lastError`: ler a agenda para desenhar a tela não é
+ * envio, e um erro aqui não pode apagar nem mascarar o aviso de um envio.
+ */
+export async function listClinicorpAgenda(
+  tenantId: string,
+  from: string,
+  to: string,
+  timeZone: string,
+): Promise<ClinicorpAgenda> {
+  try {
+    // `as`: o valor muda dentro do callback, e sem isso o TS estreita para "configured".
+    let state = "configured" as ClinicorpIntegrationState;
+    const integration = await getIntegration(tenantId, { onInactive: (s) => { state = s; } });
+    if (!integration) {
+      return state === "unavailable"
+        ? { status: "error", error: "Não foi possível carregar a configuração do Clinicorp." }
+        : { status: "off" };
+    }
+    // Sem clínica escolhida a lista traria todas as unidades do assinante; o
+    // card de sincronização já pede para escolher.
+    if (!integration.businessId) return { status: "off" };
+
+    const [agenda, professionals] = await Promise.all([
+      call<unknown>(integration, "/appointment/list", {
+        query: { from, to, businessId: integration.businessId },
+        timeoutMs: AGENDA_TIMEOUT_MS,
+      }),
+      // Só dá nome ao profissional; se falhar, as consultas aparecem sem ele.
+      call<unknown>(integration, "/professional/list_all_professionals", { timeoutMs: AGENDA_TIMEOUT_MS }),
+    ]);
+    if (!agenda.ok) return { status: "error", error: agenda.error };
+    if (!Array.isArray(agenda.data)) return { status: "error", error: "O Clinicorp não devolveu uma agenda válida." };
+
+    const names = new Map<string, string>();
+    if (professionals.ok && Array.isArray(professionals.data)) {
+      for (const p of professionals.data) {
+        if (!p || typeof p !== "object") continue;
+        const { id, name } = p as Record<string, unknown>;
+        if (id != null && typeof name === "string" && name.trim()) names.set(String(id), name.trim());
+      }
+    }
+
+    const text = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : null);
+    const items: ClinicorpAgendaItem[] = [];
+    // Linha que não dá para posicionar na grade é contada, não escondida em
+    // silêncio: a tela avisa que faltou alguma.
+    let skipped = 0;
+    for (const raw of agenda.data) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) { skipped++; continue; }
+      const r = raw as Record<string, unknown>;
+      if (r.ItemType && r.ItemType !== "APPOINTMENT") continue;
+      if (r.Canceled === "X" || r.Deleted === "X") continue;
+
+      const id = typeof r.id === "string" && /^\d+$/.test(r.id) ? r.id
+        : typeof r.id === "number" && Number.isInteger(r.id) && r.id > 0 ? String(r.id) : null;
+      const day = agendaDay(r, timeZone);
+      const startsAt = day && typeof r.fromTime === "string" ? parseLocalDateTime(day, r.fromTime, timeZone) : null;
+      if (!id || !day || !startsAt) { skipped++; continue; }
+      const endsAt = typeof r.toTime === "string" ? parseLocalDateTime(day, r.toTime, timeZone) : null;
+
+      items.push({
+        id,
+        startsAt,
+        endsAt: endsAt && endsAt > startsAt ? endsAt : null,
+        patientName: text(r.PatientName) ?? "Paciente sem nome",
+        phone: text(r.MobilePhone),
+        professional: r.Dentist_PersonId != null ? names.get(String(r.Dentist_PersonId)) ?? null : null,
+        notes: text(r.Notes)?.slice(0, 300) ?? null,
+      });
+    }
+    items.sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime());
+    return { status: "ok", items, skipped };
+  } catch (err) {
+    console.error("[clinicorp] ler agenda do período falhou", err);
+    return { status: "error", error: "Não foi possível ler a agenda do Clinicorp." };
   }
 }
 
