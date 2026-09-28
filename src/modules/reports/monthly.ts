@@ -27,6 +27,7 @@ export type MonthlyReport = {
   previousAssumptions: MonthlyAssumptions; previousConfigured: boolean;
   current: MonthlyMetrics; previous: MonthlyMetrics; clinicorpError: string | null;
   clinicorpStatusTypes: ClinicorpReportData["statusTypes"];
+  clinicorpIntegrationState?: ClinicorpReportData["integrationState"];
   adjustments: string; nextMonth: string; decisionMaker: string;
   status: string; finalizedAt: string | null; sentAt: string | null; meetingAt: string | null;
 };
@@ -228,7 +229,7 @@ export async function computeMonthlyReport(tenantId: string, month: string, useS
     previousMonth: window.previousMonth, generatedAt: now.toISOString(), dueAt: window.dueAt.toISOString(), partial: now < window.end,
     assumptions, investmentSource, agentNames, ...(inherited ? { assumptionsFromMonth: inherited.month } : {}), revision: saved?.updatedAt?.toISOString(), metricOverrides,
     automatic: { current: automaticCurrent, previous: automaticPrevious }, previousAssumptions, previousConfigured: previousBase?.previousConfigured ?? Boolean(previousSaved), current, previous,
-    clinicorpError: clinicorp.error, clinicorpStatusTypes: clinicorp.statusTypes,
+    clinicorpError: clinicorp.error, clinicorpStatusTypes: clinicorp.statusTypes, clinicorpIntegrationState: clinicorp.integrationState,
     adjustments: saved?.adjustments ?? "", nextMonth: saved?.nextMonth ?? "", decisionMaker: saved?.decisionMaker ?? "",
     status: saved?.status ?? "draft", finalizedAt: saved?.finalizedAt?.toISOString() ?? null,
     sentAt: saved?.sentAt?.toISOString() ?? null, meetingAt: saved?.meetingAt?.toISOString() ?? null };

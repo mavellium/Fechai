@@ -439,6 +439,16 @@ Base: `https://api.clinicorp.com/rest/v1`. Quase todo endpoint pede
   decifragem sem expor as credenciais. “Credenciais salvas” não garante envio.
   “Testar conexão” consulta a clínica pela API, sem criar dados, sem atualizar
   `lastSyncAt` e sem apagar um erro anterior de criação.
+- `readClinicorpReport` consulta status e agenda para o ROI mensal, usando as
+  mesmas credenciais decifradas e `clinicorpEnabled`, com clínica selecionada.
+  `integrationState` distingue configuração/ausência/desabilitação/credenciais
+  ilegíveis de falha da consulta. Se a agenda falhar ou contiver ID inseguro,
+  mantém os status válidos para conferência, mas retorna `available: false`
+  e nenhuma presença. Erros mostram operação e HTTP, sem corpo externo. Sucesso
+  no teste de conexão (`business/list`) não garante acesso a todos os endpoints.
+  A leitura não grava resultado de envio nem limpa `lastError`.
+  Regressões em `relatorio-mensal-clinicorp.test.ts` e
+  `relatorio-mensal-clinicorp-ui.test.ts`.
 - Regressões: `tests/clinicorp.test.ts` e `tests/clinicorp-actions.test.ts`, com
   API e banco simulados. Nenhum teste cria agendamentos na conta de um cliente.
 

@@ -18,6 +18,7 @@ import type { MonthlyReport } from "@/modules/reports/monthly";
 import { monthlyOverridesSchema } from "@/modules/reports/monthly-overrides";
 import { MonthlyMetricFields } from "./MonthlyMetricFields";
 import { MonthlyAgentImport } from "./MonthlyAgentImport";
+import { MonthlyClinicorpStatus } from "./MonthlyClinicorpStatus";
 import { MonthlyRoiAiAssistant } from "./MonthlyRoiAiAssistant";
 import { monthlyAiDraftSchema, applyMonthlyAiChanges, type MonthlyAiDraft, type MonthlyAiChange } from "@/modules/reports/monthly-ai";
 import { monthlyScheduleSuggestion, type MonthlyImportSources } from "@/modules/reports/monthly-import";
@@ -182,8 +183,8 @@ export function MonthlyRoiEditor({ tenantId, report: r, sources }: { tenantId: s
           <div className="grid gap-5 lg:grid-cols-2"><Field label="Variável que identifica o procedimento" htmlFor="roi-procedureVariable" hint="Use o nome configurado em Agentes → Variáveis."><Input {...fieldProps("roi-procedureVariable", { hint: true })} name="procedureVariable" maxLength={60} defaultValue={c.procedureVariable} /></Field><Field label="Tipos de atendimento considerados avaliações" htmlFor="roi-evaluationTypes" hint="Um nome por linha, conforme o agendamento do agente."><Textarea {...fieldProps("roi-evaluationTypes", { hint: true })} name="evaluationTypes" defaultValue={c.evaluationTypes.join("\n")} /></Field></div>
           <div className="flex items-start gap-3"><Switch label="Agendamentos antigos sem tipo conferidos como avaliações" checked={untyped} onCheckedChange={setUntyped} disabled={pending} /><p className="text-sm">Conferi que as marcações antigas do agente sem tipo são avaliações.</p></div><input type="hidden" name="untypedConfirmed" value={String(untyped)} />
           <div><p className="text-sm font-medium">Status que comprovam comparecimento no Clinicorp</p><p className="mt-1 text-sm text-neutral panel:text-white/55">Confira com a clínica. Confirmado e agendado não comprovam presença.</p></div>
-          {[...new Map([...c.completedStatusTypes.map((type) => ({ type, description: type })), ...r.clinicorpStatusTypes].map((s) => [s.type, s])).values()].map((s) => <div key={s.type} className="flex items-center gap-3"><Switch label={`Comparecimento: ${s.description}`} disabled={pending || s.type.toUpperCase() === "CONFIRMED"} checked={statuses.includes(s.type)} onCheckedChange={(checked) => setStatuses(checked ? [...statuses, s.type] : statuses.filter((type) => type !== s.type))} /><span className="text-sm">{s.description}</span></div>)}<input type="hidden" name="completedStatusTypes" value={JSON.stringify(statuses)} />
-          {r.clinicorpStatusTypes.length === 0 && <Alert>Sem status recebidos do Clinicorp. As avaliações marcadas como realizadas na agenda do Fechai continuam válidas.</Alert>}
+          <MonthlyClinicorpStatus report={loaded} />
+          {[...new Map([...c.completedStatusTypes.map((type) => ({ type, description: type })), ...loaded.clinicorpStatusTypes].map((s) => [s.type, s])).values()].map((s) => <div key={s.type} className="flex items-center gap-3"><Switch label={`Comparecimento: ${s.description}`} disabled={pending || s.type.toUpperCase() === "CONFIRMED"} checked={statuses.includes(s.type)} onCheckedChange={(checked) => setStatuses(checked ? [...statuses, s.type] : statuses.filter((type) => type !== s.type))} /><span className="text-sm">{s.description}</span></div>)}<input type="hidden" name="completedStatusTypes" value={JSON.stringify(statuses)} />
         </div></details>
         <Button type="submit" loading={saving}><Check size={15} aria-hidden />Salvar revisão</Button>
       </fieldset><FormFeedback error={error ?? state?.error} info={state?.info} />

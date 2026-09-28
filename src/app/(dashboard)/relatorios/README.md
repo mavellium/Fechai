@@ -27,6 +27,10 @@ expediente humano; economia usa minutos humanos declarados por conversa.
 Premissas mensais, falta de dado explícita, fechamento em snapshot e entrega
 manual registrada. A leitura do Clinicorp confirma presença pelo ID do espelho
 e pelos status `Type` conferidos pela Mavellium, sem alterar a agenda local.
+Conexão cadastrada e consulta com sucesso são estados separados: falha da agenda
+preserva a lista válida de status e mostra o endpoint/código HTTP no editor,
+sem expor o corpo externo. A importação atualiza o aviso e a lista carregados;
+comparecimentos vinculados continuam pendentes quando não há confirmação.
 Eventos anteriores à implantação não são inventados. P-86 e a fila P-87 ficam fora.
 
 `/relatorios` tem **três visões do produto**, trocadas por um toggle no topo (querystring `?visao=`), além da visão de afiliados para participantes do programa:

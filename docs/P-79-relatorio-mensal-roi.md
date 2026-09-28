@@ -214,6 +214,18 @@ número financeiro inventado.
   espelho**, sem modificar a agenda local. Nunca associa paciente por nome ou
   telefone e nunca duplica o agendamento local com o espelho. Cancelamento
   externo prevalece; falha de leitura/ID desconhecido deixa presença pendente.
+- Configuração do Clinicorp e resultado da consulta são separados:
+  `clinicorpIntegrationState` identifica conexão cadastrada, ausência,
+  desabilitação, credenciais ilegíveis ou configuração indisponível. Uma falha
+  de `/appointment/list` não descarta os status válidos de `status_list` nem
+  significa desconexão. O editor mostra o endpoint que falhou e o código HTTP,
+  sem copiar o corpo da resposta externa. Importar novamente atualiza tanto
+  o aviso quanto a lista de status. Uma lista vazia válida é diferente de erro.
+  A consulta exige uma clínica selecionada e respeita `clinicorpEnabled`.
+  Status disponíveis para seleção, sozinhos, não comprovam presença: falha
+  da agenda ou IDs inseguros mantêm os agendamentos vinculados pendentes.
+  Snapshots antigos sem esse metadado continuam legíveis e não são classificados
+  automaticamente como desconectados.
 - IDs string preservam 64 bits; números fora da precisão segura são recusados.
 - `ReportEvent`: qualificação explícita (lead quente), transbordo e pergunta
   sem resposta. As ferramentas registram eventos idempotentes e o webhook

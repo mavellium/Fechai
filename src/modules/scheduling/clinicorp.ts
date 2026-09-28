@@ -155,6 +155,8 @@ async function recordOutcome(tenantId: string, error: string | null): Promise<vo
     .catch(() => {});
 }
 
+export type ClinicorpIntegrationState = "configured" | "not_connected" | "disabled" | "credentials_error" | "unavailable";
+
 /**
  * A integração do tenant com as credenciais **já decifradas**.
  *
@@ -167,13 +169,19 @@ async function recordOutcome(tenantId: string, error: string | null): Promise<vo
  */
 async function getIntegration(
   tenantId: string,
-  { ignoreFeatureFlag = false, onUnavailable }: { ignoreFeatureFlag?: boolean; onUnavailable?: () => void } = {},
+  { ignoreFeatureFlag = false, onUnavailable, onInactive }: {
+    ignoreFeatureFlag?: boolean; onUnavailable?: () => void;
+    onInactive?: (state: ClinicorpIntegrationState) => void;
+  } = {},
 ): Promise<ClinicorpIntegration | null> {
+  let rowUnavailable = false;
+  let featuresUnavailable = false;
   const [row, features] = await Promise.all([
-    prisma.clinicorpIntegration.findUnique({ where: { tenantId } }).catch(() => { onUnavailable?.(); return null; }),
-    getCalendarFeatures(tenantId, onUnavailable),
+    prisma.clinicorpIntegration.findUnique({ where: { tenantId } }).catch(() => { rowUnavailable = true; onUnavailable?.(); return null; }),
+    getCalendarFeatures(tenantId, () => { featuresUnavailable = true; onUnavailable?.(); }),
   ]);
-  if (!row) return null;
+  if (rowUnavailable || (featuresUnavailable && !ignoreFeatureFlag)) { onInactive?.("unavailable"); return null; }
+  if (!row) { onInactive?.("not_connected"); return null; }
 
   // Desabilitar em /integracoes precisa PARAR a sincronização, não só esconder
   // o card: a checagem mora aqui, no caminho por onde toda chamada passa.
@@ -181,11 +189,12 @@ async function getIntegration(
   // A exceção é limpar o que já foi enviado (`ignoreFeatureFlag`): cancelar um
   // horário aqui tem que sumir com ele lá mesmo depois de desabilitar, senão
   // fica um paciente fantasma na agenda da clínica.
-  if (!features.clinicorpEnabled && !ignoreFeatureFlag) return null;
+  if (!features.clinicorpEnabled && !ignoreFeatureFlag) { onInactive?.("disabled"); return null; }
 
   const apiUser = decryptSecret(row.apiUser);
   const apiToken = decryptSecret(row.apiToken);
   if (!apiUser || !apiToken) {
+    onInactive?.("credentials_error");
     console.error(`[clinicorp] credenciais ilegíveis para o tenant ${tenantId}`);
     if (row.checkAvailability) onUnavailable?.();
     return null;
@@ -558,6 +567,7 @@ export type ClinicorpBusyBlock = { startsAt: Date; endsAt: Date };
 
 export type ClinicorpReportData = {
   available: boolean;
+  integrationState?: ClinicorpIntegrationState;
   error: string | null;
   appointments: { id: string; statusType: string | null; canceled: boolean }[];
   statusTypes: { type: string; description: string }[];
@@ -565,31 +575,52 @@ export type ClinicorpReportData = {
 
 /** Leitura para comparecimento, sem alterar a agenda local ou enviar mensagens. */
 export async function readClinicorpReport(tenantId: string, from: string, to: string): Promise<ClinicorpReportData> {
-  const unavailable = (error: string): ClinicorpReportData => ({ available: false, error, appointments: [], statusTypes: [] });
+  let integrationState: ClinicorpIntegrationState = "unavailable";
+  const statusTypes: ClinicorpReportData["statusTypes"] = [];
+  const unavailable = (error: string): ClinicorpReportData => ({ available: false, integrationState, error, appointments: [], statusTypes });
+  // Não levar o corpo da resposta de terceiros (pacientes/segredos) ao relatório.
+  const requestError = (subject: string, result: Extract<CallResult<unknown>, { ok: false }>) =>
+    result.status === 401 || result.status === 403
+      ? `O Clinicorp recusou o acesso à ${subject} (HTTP ${result.status}). Confira as permissões da API em Integrações → Calendários.`
+      : `Não foi possível consultar a ${subject} no Clinicorp${result.status ? ` (HTTP ${result.status})` : ""}. Tente importar os dados novamente.`;
   try {
-    const integration = await getIntegration(tenantId);
-    if (!integration) return unavailable("Clinicorp desligado, sem conexão ou com credenciais ilegíveis; comparecimento usa somente confirmações locais.");
+    const integration = await getIntegration(tenantId, { onInactive: (state) => { integrationState = state; } });
+    if (!integration) {
+      const messages: Record<ClinicorpIntegrationState, string> = {
+        not_connected: "Esta conta não possui uma conexão Clinicorp cadastrada. Configure em Integrações → Calendários.",
+        disabled: "O Clinicorp está desabilitado em Integrações → Calendários. As credenciais cadastradas foram preservadas.",
+        credentials_error: "Não foi possível ler as credenciais cadastradas do Clinicorp. Revise a conexão em Integrações → Calendários.",
+        unavailable: "Não foi possível carregar a configuração do Clinicorp. Tente importar os dados novamente.",
+        configured: "Não foi possível carregar a configuração do Clinicorp.",
+      };
+      return unavailable(messages[integrationState]);
+    }
+    integrationState = "configured";
+    if (!integration.businessId) return unavailable("Escolha uma clínica e salve as preferências em Integrações → Calendários antes de consultar o comparecimento.");
     const [appointments, statuses] = await Promise.all([
       call<unknown>(integration, "/appointment/list", { query: { from, to,
         businessId: integration.businessId ?? undefined, includeCanceled: "X", includeDeleted: "X" } }),
       call<unknown>(integration, "/appointment/status_list"),
     ]);
-    if (!appointments.ok || !statuses.ok || !Array.isArray(appointments.data) || !Array.isArray(statuses.data)) {
-      return unavailable("Não foi possível conferir comparecimento no Clinicorp. Tente atualizar antes de fechar o relatório.");
-    }
+    if (!statuses.ok) return unavailable(requestError("lista de status", statuses));
+    if (!Array.isArray(statuses.data)) return unavailable("O Clinicorp não devolveu uma lista de status válida. Tente importar os dados novamente.");
     const safeId = (value: unknown): string | null => typeof value === "string" && /^\d+$/.test(value) ? value
       : typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? String(value) : null;
     const mapping = new Map<string, string>();
-    const statusTypes: ClinicorpReportData["statusTypes"] = [];
+    let invalidStatuses = false;
     for (const raw of statuses.data) {
-      if (!raw || typeof raw !== "object") return unavailable("Lista de status do Clinicorp incompleta.");
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) { invalidStatuses = true; continue; }
       const row = raw as Record<string, unknown>;
       const id = safeId(row.id);
-      if (id && typeof row.Type === "string") {
+      if (id && typeof row.Type === "string" && row.Type.trim()) {
         mapping.set(id, row.Type);
         statusTypes.push({ type: row.Type, description: String(row.Description ?? row.Type) });
-      }
+      } else { invalidStatuses = true; }
     }
+    // A lista de status é independente da agenda: uma falha não apaga a outra.
+    if (invalidStatuses) return unavailable("A lista de status do Clinicorp está incompleta; não foi possível conferir o comparecimento.");
+    if (!appointments.ok) return unavailable(requestError("agenda do período", appointments));
+    if (!Array.isArray(appointments.data)) return unavailable("O Clinicorp não devolveu uma agenda válida. Tente importar os dados novamente.");
     const rows: ClinicorpReportData["appointments"] = [];
     for (const raw of appointments.data) {
       if (!raw || typeof raw !== "object") return unavailable("Agenda do Clinicorp incompleta.");
@@ -600,9 +631,9 @@ export async function readClinicorpReport(tenantId: string, from: string, to: st
       rows.push({ id, statusType: mapping.get(safeId(row.StatusId) ?? "") ?? null,
         canceled: row.Canceled === "X" || row.Deleted === "X" });
     }
-    return { available: true, error: null, appointments: rows, statusTypes };
+    return { available: true, integrationState, error: null, appointments: rows, statusTypes };
   } catch {
-    return unavailable("Clinicorp indisponível. O relatório permanece em rascunho para conferência.");
+    return unavailable("Não foi possível concluir a consulta do Clinicorp. Comparecimentos vinculados permanecem pendentes para conferência.");
   }
 }
 
