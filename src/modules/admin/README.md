@@ -44,6 +44,20 @@ restaurável nem coleta de logs de servidor ou da agenda externa. A solicitaçã
 
 **Todas** são cross-tenant e assumem SUPERADMIN. A checagem fica na rota `(admin)/` (`requireSuperadmin`) e nas server actions do painel — nunca exponha estas funções a rotas do cliente.
 
+## Relatórios mensais de ROI
+
+O menu **ROI mensal** abre `/admin/relatorios`, com clientes ativos que possuem
+usuário `OWNER` que utiliza o produto. A listagem exibe Cliente, Data de entrada
+do cliente (`Tenant.createdAt`, data de Brasília), Revisão e Ação, com
+cabeçalhos centralizados e selo **Por clientes**, sem contador. Entrega e
+reunião são registradas na revisão individual, não em colunas da listagem.
+
+A revisão individual carrega dados e premissas existentes e permite correções
+manuais dos indicadores atuais/anteriores antes do fechamento. Usa os
+componentes do painel e exporta PDF preto/cinza com logos locais. Operação,
+fórmulas, publicação no tenant, arquivos e limites estão no
+[contrato P-79](../../../docs/P-79-relatorio-mensal-roi.md).
+
 ## O que NÃO faz
 
 - Não faz billing real (trocar plano aqui é manual, não mexe na Stripe).

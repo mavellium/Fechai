@@ -38,6 +38,7 @@ Ver [CHANGELOG.md](./CHANGELOG.md) para o último milestone concluído.
 - Módulo whatsapp (provider Evolution) → `src/modules/whatsapp/README.md`
 - Disparos pela Meta (`/disparos`, Excel/JSON, testes, agenda, entrega e resultados) → [passo a passo e operação](../src/modules/broadcasts/README.md)
 - Módulo reports → `src/modules/reports/README.md`
+- ROI mensal (P-79): revisão administrativa, correções manuais, fórmulas, publicação no tenant e PDF → [contrato e operação](./P-79-relatorio-mensal-roi.md); [mapa da área de relatórios](../src/app/(dashboard)/relatorios/README.md)
 - Módulo admin → `src/modules/admin/README.md`
 - Laboratório do administrador com banco isolado → [ambiente-de-testes-admin.md](./ambiente-de-testes-admin.md)
 - Módulo feedback → `src/modules/feedback/README.md`

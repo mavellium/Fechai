@@ -2,6 +2,27 @@
 
 Uma linha por milestone concluído (mais recente no topo).
 
+## ROI mensal: revisão, edição manual, PDF e listagem por cliente — 2026-09-28
+
+- Revisão administrativa carrega a competência e os dados existentes, com
+  correções manuais dos indicadores atuais e anteriores, restauração por campo,
+  auditoria e proteção contra sobrescrita concorrente. Receita/economia/ROI
+  continuam derivados das premissas; correções ficam no JSON existente.
+- Comparativo prioriza o snapshot anterior; reabertura preserva indicadores e
+  base comparativa. Relatórios enviados continuam preservados.
+- Componentes e tokens do painel no editor e no seletor de competência.
+  No tenant, a aba ROI mensal e o seletor aparecem apenas com publicações
+  fechadas, oferecendo somente competências disponíveis.
+- PDF A4 de uma página, preto/cinza, com logos locais do fechai e da Mavellium.
+- Listagem administrativa **Por clientes**, sem contador nem texto sobre
+  prazo/reunião. Cabeçalhos centralizados; Entrega/Reunião substituídas por
+  Data de entrada do cliente, baseada em `Tenant.createdAt` no fuso de Brasília.
+  Registros de envio e reunião permanecem na revisão individual.
+- Último ajuste de listagem validado visualmente com dados fictícios no banco
+  isolado, checagem de tipos e lint. Este registro não confirma implantação
+  em produção nem entrega do relatório real do Instituto do Sorriso.
+- Regras e operação: [P-79](./P-79-relatorio-mensal-roi.md).
+
 ## Prioridade: aviso no grupo interno sem incluir o lead — 2026-09-27
 
 - Corrigida a transferência para humano: o grupo configurado recebe um aviso

@@ -5,7 +5,11 @@
 
 ## O que faz
 
-Calcula as métricas do tenant para `/relatorios` e a home. Só leitura, sempre filtrado por `tenantId` e por `isTest: false` (o sandbox não pode inflar os números).
+Calcula as métricas do tenant para `/relatorios` e a home. As consultas de
+indicadores filtram por `tenantId` e por `isTest: false` (o sandbox não pode
+inflar os números). No ROI mensal, também registra eventos operacionais e
+apoia a revisão administrativa, com correções, fechamento em snapshot e
+controle de publicação.
 
 ## Arquivos
 
@@ -14,6 +18,11 @@ Calcula as métricas do tenant para `/relatorios` e a home. Só leitura, sempre 
   pelo superadmin, comparecimento confirmado, receita apenas da chegada fora
   do horário humano, economia estimada declarada, fechamento em snapshot e
   PDF A4 de uma página. Contrato: [`docs/P-79-relatorio-mensal-roi.md`](../../../docs/P-79-relatorio-mensal-roi.md).
+- `monthly-overrides.ts`: valida `assumptions.metricOverrides` para o mês e o
+  comparativo, aplica correções manuais e recalcula receita/economia/ROI.
+  Correções não são herdadas ao copiar premissas para outro mês.
+- `monthly-publication.ts`: lista apenas competências `ready` com snapshot;
+  resolve a competência pedida ou a última publicação para o tenant.
 
 - `service.ts`:
   - `computeTenantReport(tenantId)` — totais desde o início da conta (legado).
@@ -34,6 +43,8 @@ computeFinancialSummary(tenantId, range): Promise<FinancialSummary>
 
 ## O que NÃO faz
 
-- Não faz cache — recalcula a cada carga da página.
+- Operacional e Financeiro recalculam a cada carga da página. O ROI mensal
+  fechado usa o snapshot; não recalcula o histórico nem consulta Clinicorp
+  para exibir ou exportar uma publicação.
 - A visão Financeira é estimativa: não há histórico de assinatura no modelo (o investido presume o plano atual por todo o período) nem valor de lead automático.
 - Gráficos são componentes locais em `/relatorios` (SVG/divs, sem biblioteca de charts).

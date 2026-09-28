@@ -6,7 +6,7 @@ a especificação citada no Obsidian não estava disponível.
 
 ## Operação mensal
 
-1. Mavellium abre **Admin → ROI mensal**, seleciona a clínica e a competência.
+1. Mavellium abre **Admin → ROI mensal**, seleciona o cliente e a competência.
 2. Preenche os números levantados com a clínica (P-78): ticket e conversão de
    cada procedimento, custo mensal do atendente, carga mensal em horas,
    expediente humano e mensalidade. Declara também os minutos humanos por
@@ -33,6 +33,62 @@ snapshot. Abre a competência publicada mais recente e oferece apenas meses
 disponíveis. Uma URL com competência indisponível exibe a última publicação;
 sem publicações, a página permanece na visão Operacional.
 
+### Listagem administrativa
+
+`/admin/relatorios` lista contas ativas com usuário `OWNER` que utiliza o
+produto. O card **Acompanhamento dos relatórios** tem o selo **Por clientes**,
+sem contador, e quatro colunas: **Cliente**, **Data de entrada do cliente**,
+**Revisão** e **Ação**. Todos os cabeçalhos são centralizados; nomes ficam à
+esquerda e os demais valores, centralizados. A data de entrada vem de
+`Tenant.createdAt`, exibida em `dd/mm/aaaa` no fuso `America/Sao_Paulo`.
+
+Não há texto sobre prazo/reunião no cabeçalho da listagem nem colunas
+**Entrega** e **Reunião**. Os registros de envio e reunião continuam na revisão
+individual; a remoção da listagem não muda o prazo nem elimina o histórico.
+Os estados são **Não iniciado**, **Em revisão** e **Fechado**; a ação é
+**Revisar** ou **Ver relatório**, conforme a competência selecionada.
+
+### Dados carregados e correções manuais
+
+Na revisão individual, `mes=YYYY-MM` abre a competência pedida. Sem `mes`,
+abre a última revisão existente do cliente; sem revisões, o mês anterior.
+O editor carrega as premissas salvas, os indicadores disponíveis de
+mensagens/agenda/Clinicorp e as correções já registradas. O admin pode corrigir
+os indicadores do mês e do comparativo: contatos, conversas/agendamentos/
+comparecimentos dentro, fora e sem classificação de horário, tempo de resposta,
+qualificados, transbordos, perguntas sem resposta, conversas exclusivas da IA,
+horas assumidas, procedimentos e horários de pico. Há restauração por campo
+para o dado carregado sem a correção da revisão atual.
+
+As correções são guardadas em
+`MonthlyRoiReport.assumptions.metricOverrides: { current, previous }`,
+separadas das premissas na leitura, sem coluna ou tabela adicional. Só os
+campos alterados viram correção; copiar premissas para outro mês não copia
+correções. Contagens exigem inteiros não negativos; tempos e horas aceitam
+decimais. Campos sem medição permanecem explícitos como ausentes.
+
+Receita, economia e ROI são recalculados a partir dos indicadores e premissas,
+sem edição direta dos valores derivados. A soma de avaliações realizadas fora
+do expediente por procedimento deve bater com o total antes do fechamento.
+O comparativo prioriza o snapshot fechado do mês anterior. Corrigir esse
+comparativo não altera o relatório anterior; reabrir preserva os indicadores
+e a base comparativa do snapshot da revisão reaberta. `updatedAt` protege
+contra sobrescrita por uma revisão concorrente. Correções entram na auditoria
+e no snapshot; a tela e o PDF identificam a existência de ajustes manuais.
+
+### Componentes e PDF
+
+A tela usa os componentes e tokens do painel: `PageHeader`, `Card`, `Badge`,
+`DataTable`, `Field`, `Input`, `CurrencyInput`, `Switch` e `SelectMenu`.
+`MonthPicker` compartilha menus de mês/ano e setas no admin; no tenant,
+oferece apenas competências publicadas. A navegação protege alterações não
+salvas. O retorno aparece antes da edição recolhível.
+
+O PDF A4 de uma página usa preto e cinza, com as imagens locais
+`public/brand/fechai-black.png` e `public/brand/mavellium-black.png` no
+cabeçalho. Não busca logos externamente durante a exportação. Origem dos
+arquivos em [`public/brand/README.md`](../public/brand/README.md).
+
 ## Regra do ROI
 
 Por procedimento:
@@ -46,6 +102,11 @@ agendamento foi criado. Contato sem origem identificável não vira “fora”.
 
 `horas estimadas = conversas respondidas pela IA, sem resposta humana no mês
 × minutos humanos declarados por conversa ÷ 60`
+
+Essa é a estimativa automática de horas; uma correção manual de horas
+assumidas substitui esse resultado na competência e permanece identificada
+como ajuste. A economia usa as horas resultantes, mantendo custo/carga
+mensal declarados.
 
 `custo/hora = custo mensal em centavos ÷ carga mensal em horas`
 
@@ -110,10 +171,21 @@ pacientes.
 
 - `src/modules/reports/monthly-config.ts`: validação e competências/fusos.
 - `src/modules/reports/monthly.ts`: cálculo e carregamento.
+- `src/modules/reports/monthly-overrides.ts`: validação das correções e
+  recálculo dos valores derivados.
+- `src/modules/reports/monthly-publication.ts`: competências publicadas e
+  seleção do mês disponível no tenant.
 - `src/modules/reports/events.ts`: registro explícito, best-effort e idempotente.
 - `src/modules/reports/monthly-pdf.ts`: PDF de uma página.
 - `src/app/(admin)/admin/relatorios/`: fila mensal, revisão, fechamento, entrega.
+- `src/app/(admin)/admin/relatorios/[tenantId]/MonthlyMetricFields.tsx`:
+  edição dos indicadores atuais e anteriores.
+- `src/app/(admin)/admin/relatorios/[tenantId]/actions.ts`: gravação,
+  fechamento, reabertura e registro de envio/reunião, com autorização.
 - `src/app/(dashboard)/relatorios/MonthlyView.tsx`: apresentação das cinco partes.
+- `src/components/ui/month-picker.tsx`: navegação entre competências.
+- `src/components/ui/data-table.tsx`: tabela compartilhada; `headerAlign` e
+  `columnAlign` permitem o alinhamento local sem mudar o padrão das outras telas.
 - `scripts/check-monthly-roi.ts`: consulta de prontidão no banco configurado.
 - `scripts/preview-monthly-roi.ts`: gera PDFs **fictícios** para inspeção visual.
 
@@ -121,6 +193,8 @@ O projeto usa `prisma db push` + `prisma generate`. Na implantação, regenerar 
 client e reiniciar **web e worker**; não iniciar o worker em uma amostra de
 teste que tenha números/compromissos reais. O novo client é necessário tanto
 para `Appointment.serviceType` quanto para os eventos das tools.
+As correções manuais em JSON, logos e ajustes de listagem não exigem nova
+alteração de schema.
 
 Validação: testes de fórmula, limites/fusos, presença, isolamento, autorização,
 snapshot, concorrência e PDF A4 de uma página. Typecheck, lint e inspeção visual

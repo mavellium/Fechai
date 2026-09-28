@@ -14,7 +14,12 @@ O `MonthPicker` compartilhado usa `SelectMenu` e setas, sem input mensal nativo.
 No admin, o retorno vem antes da edição recolhível, com `Field`, `CurrencyInput`
 e `Switch`. Alterações de formulário são protegidas ao navegar entre meses.
 O admin prepara em `/admin/relatorios`, acessível pelo menu **ROI mensal** e
-pelo painel de edição da conta. O PDF A4 tem uma página e as cinco partes
+pelo painel de edição da conta. A listagem usa **Por clientes**, sem contador,
+com cabeçalhos centralizados: Cliente, Data de entrada do cliente, Revisão e
+Ação. A entrada é `Tenant.createdAt`, em data curta de Brasília. O texto sobre
+prazo/reunião e as colunas Entrega/Reunião foram retirados da listagem;
+seus registros permanecem na revisão individual.
+O PDF A4 tem uma página e as cinco partes
 solicitadas. Leia [`docs/P-79-relatorio-mensal-roi.md`](../../../../docs/P-79-relatorio-mensal-roi.md)
 antes de alterar a nova visão: **não usa a regra do Financeiro legado**.
 Receita só vem de avaliações realizadas cuja primeira chegada foi fora do
@@ -61,7 +66,8 @@ Tudo começa na `page.tsx`, que resolve a janela (`?periodo=`/`?de=&ate=`), comp
 
 | Arquivo | Papel |
 | --- | --- |
-| `page.tsx` | Server Component: lê `?periodo/de/ate/visao`, `resolveRange`, computa sob demanda, toggle `FilterTabs`, estado vazio, renderiza Operacional **ou** Financeiro. |
+| `page.tsx` | Server Component: lê `?periodo/de/ate/visao/mes`, resolve janela e publicações, computa sob demanda e renderiza Operacional, Financeiro, ROI mensal ou afiliados conforme papel/visão. |
+| `MonthlyView.tsx` | Cinco partes do ROI mensal, comparação, premissas, fontes e link para exportação do snapshot em PDF. |
 | `RangePicker.tsx` | `<details>` com presets de período + intervalo custom; **preserva `?visao=`** nos links e no form (hidden input). |
 | `FinancialView.tsx` | "use client": linha de KPIs, card "Retorno estimado" + "Valor do lead" com `<dialog>` (campo com máscara `CurrencyInput`), delega os gráficos a `FinancialCharts.tsx`. |
 | `TriagePanel.tsx` | "use client": KPIs da triagem (filtrados / tempo / economia), quebra por motivo e `<dialog>` do custo do atendimento. |
@@ -87,6 +93,8 @@ Tudo começa na `page.tsx`, que resolve a janela (`?periodo=`/`?de=&ate=`), comp
 | `HorizontalBars.tsx` | Lista rankeada de barras horizontais — tempo até resposta, retorno por agente. |
 | `src/components/ui/currency-input.tsx` | Campo de preço com máscara pt-BR (client). |
 | `src/components/ui/filter-tabs.tsx` | Toggle por links (`aria-current="page"`). |
+| `src/components/ui/month-picker.tsx` | Competência via `SelectMenu` e setas; lista restrita de publicações no tenant e proteção de dados não salvos. |
+| `src/components/ui/data-table.tsx` | Tabelas do painel; `headerAlign`/`columnAlign` permitem centralizar a listagem administrativa sem alterar as outras tabelas. |
 
 ## Regras de cálculo (definições exatas)
 
