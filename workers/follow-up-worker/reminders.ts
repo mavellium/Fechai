@@ -6,14 +6,19 @@ import {
 } from "../../src/modules/whatsapp/meta-config";
 import {
   parseScheduleConfig,
+  reminderDueAt,
   renderReminder,
   type ReminderRule,
   type ScheduleConfig,
 } from "../../src/modules/scheduling/config";
 import { parseReminderOverride } from "../../src/modules/scheduling/reminder-override";
+import { contactForImportedAppointment, IMPORT_FRESH_MINUTES } from "../../src/modules/scheduling/clinicorp-import";
+import { IMPORTED_SOURCE } from "../../src/modules/scheduling/source";
 import { parseConversationVariables } from "../../src/modules/agent-engine/variables";
 import { isPhoneBlocked } from "../../src/modules/whatsapp/blocklist";
-import { dateInZone, partsInZone, timeInZone, zonedTimeToUtc } from "../../src/modules/scheduling/time";
+import { dateInZone, timeInZone } from "../../src/modules/scheduling/time";
+
+export { reminderDueAt };
 
 /**
  * Lembretes pré-consulta. Rodam no mesmo worker do follow-up (mesma varredura
@@ -31,15 +36,6 @@ type ReminderCandidate = {
   startsAt: Date;
   remindersSent: number[];
 };
-
-/** Instante de disparo no fuso da agenda; sem horário fixo, duração exata. */
-export function reminderDueAt(startsAt: Date, rule: ReminderRule, timezone: string): Date {
-  if (!rule.sendTime) return new Date(startsAt.getTime() - rule.minutesBefore * 60_000);
-  const local = partsInZone(startsAt, timezone);
-  const day = new Date(Date.UTC(local.year, local.month - 1, local.day - rule.minutesBefore / 1440));
-  const [hour, minute] = rule.sendTime.split(":").map(Number);
-  return zonedTimeToUtc(day.getUTCFullYear(), day.getUTCMonth() + 1, day.getUTCDate(), hour, minute, timezone);
-}
 
 /**
  * Quais disparos estão vencidos agora, do mais distante para o mais próximo.
@@ -159,9 +155,27 @@ export async function scanAndSendReminders(now: Date = new Date()) {
       tenantId: { in: [...configByTenant.keys()] },
       status: "scheduled",
       startsAt: { gte: now },
-      // Conversa de teste não recebe lembrete: o sandbox usa telefone
-      // sintético, mesma regra do follow-up e do grupo de handoff.
-      lead: { isTest: false },
+      AND: [
+        {
+          OR: [
+            // Conversa de teste não recebe lembrete: o sandbox usa telefone
+            // sintético, mesma regra do follow-up e do grupo de handoff.
+            { lead: { isTest: false } },
+            // Importada do Clinicorp sem contato ainda: o paciente da recepção
+            // pode nunca ter escrito, e o telefone é o que veio de lá.
+            { leadId: null, source: IMPORTED_SOURCE, patientPhone: { not: null } },
+          ],
+        },
+        {
+          // Importada só com o Clinicorp confirmando há pouco que ela continua
+          // lá: com a API fora (ou a importação desligada), ela pode ter sido
+          // desmarcada sem a gente saber. Volta sozinha quando a leitura volta.
+          OR: [
+            { source: { not: IMPORTED_SOURCE } },
+            { clinicorpSeenAt: { gte: new Date(now.getTime() - IMPORT_FRESH_MINUTES * 60_000) } },
+          ],
+        },
+      ],
       OR: [
         { startsAt: { lte: new Date(now.getTime() + maxLeadMinutes * 60_000) } },
         // Consulta com lembretes próprios: a antecedência dela pode ser maior
@@ -211,7 +225,14 @@ export async function scanAndSendReminders(now: Date = new Date()) {
     const [toSend] = [...due].sort((a, b) => a.minutesBefore - b.minutesBefore);
     const closing = due.map((r) => r.minutesBefore);
 
-    if (!appt.lead?.phone) {
+    // Importada do Clinicorp ainda sem contato: vai para o telefone que veio de
+    // lá, e o contato só nasce depois que a mensagem de fato sai (ver
+    // `contactForImportedAppointment`) — número que o WhatsApp recusa não vira
+    // contato vazio em Contatos.
+    const imported = appt.source === IMPORTED_SOURCE;
+    const pendingContact = !appt.lead && imported;
+    const phone = appt.lead?.phone ?? (pendingContact ? appt.patientPhone : null);
+    if (!phone) {
       await markSent(appt.id, appt.remindersSent, closing, null);
       continue;
     }
@@ -219,15 +240,16 @@ export async function scanAndSendReminders(now: Date = new Date()) {
     // Uma consulta anterior ao bloqueio ainda aparece nesta varredura.
     // Fecha os disparos sem envio para não surgir lembrete atrasado depois de
     // desbloquear, preservando reminderSentAt como registro de envio real.
-    if (await isPhoneBlocked(appt.tenantId, appt.lead.phone)) {
+    if (await isPhoneBlocked(appt.tenantId, phone)) {
       await markSent(appt.id, appt.remindersSent, closing, null);
       continue;
     }
 
     const text = renderReminder(toSend.template, {
       // Contato sem nome cadastrado existe (o WhatsApp nem sempre entrega um):
-      // `renderReminder` limpa o espaço e a pontuação que sobram.
-      nome: appt.lead.name?.trim() ?? "",
+      // `renderReminder` limpa o espaço e a pontuação que sobram. Na importada,
+      // o nome do cadastro da clínica cobre o contato que ainda não tem nome.
+      nome: appt.lead?.name?.trim() || (imported ? appt.patientName?.trim() : "") || "",
       data: dateInZone(appt.startsAt, cfg.timezone),
       hora: timeInZone(appt.startsAt, cfg.timezone),
       local: cfg.location,
@@ -240,6 +262,7 @@ export async function scanAndSendReminders(now: Date = new Date()) {
 
     let keyId: string | null = null;
     let delivered = false;
+    let conversationId = appt.conversationId;
     {
       const instance = await prisma.whatsappInstance.findUnique({
         where: { tenantId: appt.tenantId },
@@ -249,7 +272,7 @@ export async function scanAndSendReminders(now: Date = new Date()) {
         try {
           const provider = getWhatsAppProviderForInstance(instance);
           if (provider.isConfigured()) {
-            keyId = await provider.sendMessage(instance.externalId, appt.lead.phone, text);
+            keyId = await provider.sendMessage(instance.externalId, phone, text);
             delivered = true;
           }
         } catch (err) {
@@ -262,14 +285,25 @@ export async function scanAndSendReminders(now: Date = new Date()) {
     // a consulta ainda não começou, a próxima varredura tenta novamente.
     if (!delivered) continue;
 
+    if (pendingContact) {
+      // Fora do try do envio: a mensagem já saiu, e uma falha aqui não pode
+      // fazer a próxima varredura mandá-la de novo. Sem contato, o lembrete só
+      // não fica registrado numa conversa.
+      const contact = await contactForImportedAppointment(appt).catch((err) => {
+        console.error("[lembrete] falha ao criar o contato da consulta importada", appt.id, err);
+        return null;
+      });
+      conversationId = contact?.conversationId ?? null;
+    }
+
     // A mensagem entra na conversa como fala do agente. É isso que faz a
     // resposta do paciente ("não vou poder") cair no `runAgentTurn` normal,
     // com o contexto da consulta vindo de `recognizeExisting` — cancelar e
     // reagendar já existem, o lembrete só precisa abrir a porta.
-    if (appt.conversationId) {
+    if (conversationId) {
       await prisma.message.create({
         data: {
-          conversationId: appt.conversationId,
+          conversationId,
           role: "assistant",
           content: text,
           whatsappMessageId: keyId ?? undefined,

@@ -6,6 +6,7 @@ import {
   costPerLeadCents as costPerLeadManual,
   reasonLabel,
 } from "@/modules/agent-engine/disqualify";
+import { NOT_IMPORTED } from "@/modules/scheduling/source";
 
 /**
  * Fuso do painel para todo agrupamento por dia/hora/mês de /relatorios. Sem
@@ -402,6 +403,9 @@ export async function computePeriodReport(tenantId: string, range: ReportRange):
     prisma.appointment.count({
       where: {
         tenantId,
+        // Em todas as consultas de agendamento deste relatório: a importada do
+        // Clinicorp é agenda da clínica, não resultado do fechai.
+        ...NOT_IMPORTED,
         startsAt: { gte: from ?? undefined, lt: toExcl },
         status: { in: ["scheduled", "done"] },
       },
@@ -421,6 +425,7 @@ export async function computePeriodReport(tenantId: string, range: ReportRange):
     prisma.appointment.findMany({
       where: {
         tenantId,
+        ...NOT_IMPORTED,
         startsAt: { gte: from ?? undefined, lt: toExcl },
         status: { in: ["scheduled", "done"] },
       },
@@ -464,6 +469,7 @@ export async function computePeriodReport(tenantId: string, range: ReportRange):
     prisma.appointment.findMany({
       where: {
         tenantId,
+        ...NOT_IMPORTED,
         createdAt: { gte: from ?? undefined, lt: toExcl },
         status: { in: ["scheduled", "done"] },
       },
@@ -473,6 +479,7 @@ export async function computePeriodReport(tenantId: string, range: ReportRange):
     prisma.appointment.findMany({
       where: {
         tenantId,
+        ...NOT_IMPORTED,
         createdAt: { gte: from ?? undefined, lt: toExcl },
         status: "canceled",
       },
@@ -482,6 +489,7 @@ export async function computePeriodReport(tenantId: string, range: ReportRange):
     prisma.appointment.findMany({
       where: {
         tenantId,
+        ...NOT_IMPORTED,
         createdAt: { gte: from ?? undefined, lt: toExcl },
         status: "done",
       },
@@ -523,7 +531,7 @@ export async function computePeriodReport(tenantId: string, range: ReportRange):
         where: { tenantId, isTest: false, createdAt: { gte: prevFrom, lt: prevLt } },
       }),
       prisma.appointment.count({
-        where: { tenantId, startsAt: { gte: prevFrom, lt: prevLt }, status: { in: ["scheduled", "done"] } },
+        where: { tenantId, ...NOT_IMPORTED, startsAt: { gte: prevFrom, lt: prevLt }, status: { in: ["scheduled", "done"] } },
       }),
       prisma.message.groupBy({
         by: ["role"],
@@ -861,6 +869,7 @@ export async function computeFinancialSummary(
     prisma.appointment.findMany({
       where: {
         tenantId,
+        ...NOT_IMPORTED,
         createdAt: { gte: range.from ?? undefined, lt: toExcl },
         status: { in: ["scheduled", "done"] },
       },

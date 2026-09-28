@@ -1,6 +1,7 @@
 import { Queue, Worker, type ConnectionOptions } from "bullmq";
 import { scanAndSendFollowUps } from "./scan";
 import { scanAndSendReminders } from "./reminders";
+import { importClinicorpAppointments } from "../../src/modules/scheduling/clinicorp-import";
 import { scanWhatsappHealth } from "../../src/modules/whatsapp/health";
 import { scanBroadcasts } from "../../src/modules/broadcasts/worker";
 import { touchBroadcastWorker } from "../../src/modules/broadcasts/health";
@@ -11,7 +12,9 @@ import { touchBroadcastWorker } from "../../src/modules/broadcasts/health";
 // - follow-up: conversas em que o lead ficou em silêncio (ver scan.ts);
 // - lembrete: consultas que estão chegando (ver reminders.ts);
 // - saúde do WhatsApp: número que caiu sem ninguém perceber (ver
-//   modules/whatsapp/health.ts).
+//   modules/whatsapp/health.ts);
+// - importação do Clinicorp: o que a recepção marca lá entra na agenda daqui
+//   para receber lembrete (ver modules/scheduling/clinicorp-import.ts).
 //
 // Continuam no mesmo processo para não criar outro deploy, mas não na mesma
 // cadência: depois de um auto-restart, esperar 15 minutos para restaurar o
@@ -23,17 +26,24 @@ const connection: ConnectionOptions = {
 const FOLLOWUP_QUEUE = "follow-up";
 const REMINDER_QUEUE = "appointment-reminders";
 const HEALTH_QUEUE = "whatsapp-health";
+const CLINICORP_IMPORT_QUEUE = "clinicorp-import";
 const FOLLOWUP_EVERY_MS =
   Number(process.env.FOLLOWUP_SCAN_EVERY_MINUTES ?? 15) * 60_000;
 const REMINDER_EVERY_MS =
   Number(process.env.REMINDER_SCAN_EVERY_MINUTES ?? 1) * 60_000;
 const HEALTH_EVERY_MS =
   Number(process.env.WHATSAPP_HEALTH_SCAN_EVERY_MINUTES ?? 1) * 60_000;
+// Uma chamada à API da clínica por conta a cada volta. Mais espaçado que os
+// lembretes: o que importa é a consulta chegar antes do primeiro disparo, e a
+// tolerância de atraso (`IMPORT_LATE_REMINDER_MINUTES`) cobre uma volta.
+const CLINICORP_IMPORT_EVERY_MS =
+  Number(process.env.CLINICORP_IMPORT_EVERY_MINUTES ?? 10) * 60_000;
 
 async function main() {
   const followUpQueue = new Queue(FOLLOWUP_QUEUE, { connection });
   const reminderQueue = new Queue(REMINDER_QUEUE, { connection });
   const healthQueue = new Queue(HEALTH_QUEUE, { connection });
+  const clinicorpImportQueue = new Queue(CLINICORP_IMPORT_QUEUE, { connection });
   const broadcastQueue = new Queue("whatsapp-broadcasts", { connection });
   await broadcastQueue.setGlobalConcurrency(1);
   await broadcastQueue.upsertJobScheduler(
@@ -100,6 +110,12 @@ async function main() {
     { every: HEALTH_EVERY_MS },
     { name: "whatsapp-health" },
   );
+  // Fila própria: a API de um terceiro lenta não pode atrasar os lembretes.
+  await clinicorpImportQueue.upsertJobScheduler(
+    "clinicorp-import-scheduler",
+    { every: CLINICORP_IMPORT_EVERY_MS },
+    { name: "clinicorp-import" },
+  );
 
   const followUpWorker = new Worker(
     FOLLOWUP_QUEUE,
@@ -131,6 +147,19 @@ async function main() {
     { connection },
   );
 
+  const clinicorpImportWorker = new Worker(
+    CLINICORP_IMPORT_QUEUE,
+    async () => {
+      const result = await importClinicorpAppointments();
+      console.log(
+        `[clinicorp import] contas=${result.accounts} novas=${result.created} ` +
+          `alteradas=${result.updated} removidas=${result.removed} falhas=${result.failed}`,
+      );
+      return result;
+    },
+    { connection },
+  );
+
   followUpWorker.on("failed", (job, err) =>
     console.error(`[follow-up] job ${job?.id} falhou`, err),
   );
@@ -140,10 +169,14 @@ async function main() {
   healthWorker.on("failed", (job, err) =>
     console.error(`[whatsapp health] job ${job?.id} falhou`, err),
   );
+  clinicorpImportWorker.on("failed", (job, err) =>
+    console.error(`[clinicorp import] job ${job?.id} falhou`, err),
+  );
   console.log(
     `[worker] online — follow-up a cada ${FOLLOWUP_EVERY_MS / 60000} min; ` +
       `lembretes a cada ${REMINDER_EVERY_MS / 60000} min; ` +
-      `saúde do WhatsApp a cada ${HEALTH_EVERY_MS / 60000} min`,
+      `saúde do WhatsApp a cada ${HEALTH_EVERY_MS / 60000} min; ` +
+      `importação do Clinicorp a cada ${CLINICORP_IMPORT_EVERY_MS / 60000} min`,
   );
 }
 

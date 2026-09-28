@@ -18,6 +18,7 @@ vi.mock("@/modules/agent-engine/handoff", async (importOriginal) => ({
 import { getToolSchemas, runToolHandler, type ToolContext } from "@/modules/agent-engine/tools";
 import { parseScheduleConfig } from "@/modules/scheduling/config";
 import { leadAppointmentsContext, offerAlternativeSlots } from "@/modules/agent-engine/scheduling-tools";
+import { hasConflict } from "@/modules/scheduling/repository";
 import { emptyWeek } from "@/modules/scheduling/weekly-availability";
 
 const ctx = { tenantId: "conta-1", leadId: "cliente-1", agentId: "agente-1", conversationId: "conversa-1" };
@@ -404,5 +405,39 @@ describe("horários livres antes de sugerir", () => {
     expect(result).toContain("09:00");
     expect(result).toContain("10:30");
     expect(db.appointment.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("consulta importada do Clinicorp", () => {
+  const importada = { ...appointment, source: "clinicorp" };
+  beforeEach(() => {
+    db.appointment.findFirst.mockImplementation(async ({ where }) => where.id === appointment.id ? { ...importada } : null);
+  });
+
+  it("não remarca pelo agente nem pede ao contato para confirmar uma troca que não vai acontecer", async () => {
+    const reply = await reschedule({ confirmed: false });
+    expect(reply).toContain("marcada pela clínica");
+    expect(reply).not.toContain("Confirme");
+    expect(db.appointment.updateMany).not.toHaveBeenCalled();
+    expect(mirrors.clinicorpCancel).not.toHaveBeenCalled();
+    expect(mirrors.clinicorpPush).not.toHaveBeenCalled();
+  });
+
+  it("desmarcar pelo agente desmarca também no Clinicorp", async () => {
+    await cancel();
+    expect(mirrors.clinicorpCancel).toHaveBeenCalledWith(ctx.tenantId, "123");
+  });
+
+  it("aparece para o agente como marcada pela clínica", async () => {
+    db.appointment.findMany.mockResolvedValue([importada]);
+    expect(await leadAppointmentsContext(ctx, cfg)).toContain("marcada pela clínica no Clinicorp");
+  });
+
+  it("não ocupa horário na agenda local: a ocupação do Clinicorp já é lida por lá", async () => {
+    db.appointment.findFirst.mockResolvedValue(null);
+    await hasConflict(ctx.tenantId, appointment.startsAt, appointment.endsAt);
+    expect(db.appointment.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ source: { not: "clinicorp" } }),
+    }));
   });
 });

@@ -11,6 +11,13 @@ relógio, não por uma resposta do contato:
 | **follow-up** | silêncio do lead sem consulta atual/futura | tenants com a ação `follow_up` ativa |
 | **lembretes** | consultas chegando | tenants com `schedule_meeting` ativa **e** lembrete configurado |
 
+Uma terceira fila, `clinicorp-import`, **alimenta** os lembretes: traz para a
+agenda o que a recepção marca direto no Clinicorp (a cada
+`CLINICORP_IMPORT_EVERY_MINUTES`, padrão 10). As regras estão em
+[`src/modules/scheduling/README.md`](../../src/modules/scheduling/README.md#importação-o-que-a-recepção-marca-no-clinicorp);
+o código, em `src/modules/scheduling/clinicorp-import.ts`. Fila própria porque
+a API de um terceiro lenta não pode atrasar os lembretes.
+
 Cada varredura tem sua própria fila: follow-up roda a cada 15 minutos e
 lembretes a cada minuto por padrão. Assim um lembrete configurado para 23h
 não espera o próximo ciclo do follow-up. As falhas de uma fila não param a outra.
@@ -40,7 +47,8 @@ recibos assinados da Meta, reconciliados também nesta varredura.
   - `staleReminders(appt, reminders, now)` — quais perderam a janela e são fechados sem envio.
   - `remindersFor(appt, cfg)` — os da consulta, ou os do agente.
   - `scanAndSendReminders(now?)` — varre consultas próximas e marca `Appointment.remindersSent`.
-- `index.ts` — cria as filas, agenda os jobs repetíveis (`upsertJobScheduler`) e roda os workers.
+- `index.ts` — cria as filas, agenda os jobs repetíveis (`upsertJobScheduler`) e roda os workers
+  (inclusive `clinicorp-import`, que chama `importClinicorpAppointments`).
 
 ## Lembretes de consulta (`reminders.ts`)
 
@@ -88,6 +96,14 @@ Regras que não são óbvias:
   reagendamento pelo fluxo que já existe, em vez de chegar como conversa nova.
 - **Conversa de teste fica de fora** (`lead.isTest`), como no follow-up: o
   telefone do sandbox é sintético.
+- **Consulta importada do Clinicorp** (`source: "clinicorp"`) entra na mesma
+  regra, com duas diferenças. Ela pode não ter contato ainda: vai para
+  `patientPhone` (o celular de lá) e o contato é criado **depois** do envio
+  (`contactForImportedAppointment`), fora do `try` do envio — uma falha ali não
+  pode fazer a mensagem sair de novo. E ela só recebe lembrete com
+  `clinicorpSeenAt` da última hora (`IMPORT_FRESH_MINUTES`): com a API fora ou a
+  importação desligada, pode ter sido desmarcada lá sem a gente saber. O
+  lembrete espera, não é fechado, e sai quando a leitura volta.
 - **Número bloqueado não recebe lembrete.** Os disparos vencidos são fechados
   em `remindersSent`, sem mensagem e sem `reminderSentAt`, para não voltarem
   depois de desbloquear o contato nem aparecerem como enviados na agenda.
@@ -104,7 +120,8 @@ npm run db:up        # Redis precisa estar de pé
 npm run worker       # tsx workers/follow-up-worker/index.ts
 ```
 
-Env: `REDIS_URL`, `FOLLOWUP_SCAN_EVERY_MINUTES` (intervalo da varredura, padrão 15).
+Env: `REDIS_URL`, `FOLLOWUP_SCAN_EVERY_MINUTES` (intervalo da varredura, padrão 15),
+`REMINDER_SCAN_EVERY_MINUTES` (padrão 1), `CLINICORP_IMPORT_EVERY_MINUTES` (padrão 10).
 
 ## Follow-up em esteira (`scan.ts`)
 

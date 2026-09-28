@@ -666,7 +666,11 @@ model Appointment {
   startsAt               DateTime
   endsAt                 DateTime
   status                 String    @default("scheduled") // scheduled | done | canceled
-  source                 String    @default("agent") // agent | manual
+  /// agent | manual | clinicorp. "clinicorp" é consulta que a recepção marcou
+  /// direto no Clinicorp e a importação trouxe (`scheduling/clinicorp-import.ts`):
+  /// existe aqui para receber lembrete, não é resultado do atendimento — fica
+  /// fora de relatório, ROI e conflito local (`NOT_IMPORTED`).
+  source                 String    @default("agent")
   serviceType            String? // tipo explicitamente escolhido; relatórios de avaliações
   /// Id do evento espelhado no Google Agenda, quando a conta está integrada.
   /// Null = só existe aqui (integração desligada ou sincronização falhou).
@@ -675,6 +679,18 @@ model Appointment {
   /// Guardado como String porque o id de lá é um inteiro de 64 bits (ex.:
   /// 4791226171916288) — fora do alcance seguro do Number do JS.
   clinicorpAppointmentId String?
+  /// Celular do paciente como veio do Clinicorp, já no formato do WhatsApp
+  /// (55 + DDD + número). Só nas importadas: o paciente da recepção pode nunca
+  /// ter escrito para o número, e o contato só é criado quando o primeiro
+  /// lembrete sai — criar na importação encheria Contatos de quem não conversou.
+  patientPhone           String?
+  /// Última vez que a importação viu esta consulta ativa no Clinicorp. Só nas
+  /// importadas. O lembrete delas exige uma visita recente (a consulta pode ter
+  /// sido desmarcada lá enquanto a API estava fora). Quando a importação tira a
+  /// consulta da agenda (cancelada/excluída lá, ou sumiu do período), zera: é
+  /// assim que ela sabe que pode trazê-la de volta se reaparecer, e que um
+  /// cancelamento feito por uma pessoa aqui (com a data preenchida) não se desfaz.
+  clinicorpSeenAt        DateTime?
   /// Antecedências (em minutos) dos lembretes que JÁ foram enviados para esta
   /// consulta. Fica aqui, e não em `Conversation` como `followUpSentAt`,
   /// porque é lembrete POR CONSULTA: o mesmo paciente marca de novo no mês
@@ -698,6 +714,8 @@ model Appointment {
   @@index([tenantId, startsAt])
   @@index([leadId])
   @@index([agentId])
+  /// A importação do Clinicorp casa cada item de lá com a linha daqui por este id.
+  @@index([tenantId, clinicorpAppointmentId])
   /// Varredura do worker de lembrete: consultas marcadas, pelo começo. Quais
   /// disparos ainda faltam é decidido em memória (`remindersSent` é uma
   /// lista, que um índice não ajudaria a filtrar).
@@ -782,6 +800,15 @@ model ClinicorpIntegration {
   /// Consultar a agenda do Clinicorp antes de oferecer horário. Separado do
   /// espelhamento: uma clínica pode querer só enviar, sem a leitura extra.
   checkAvailability Boolean @default(true)
+  /// Trazer para a agenda daqui o que a recepção marca direto no Clinicorp, para
+  /// o agente mandar os lembretes também dessas consultas. Independente dos dois
+  /// acima. Ver `scheduling/clinicorp-import.ts`.
+  importAppointments Boolean @default(true)
+  /// Estado da importação, separado de `lastSyncAt`/`lastError`: aqueles falam
+  /// do ENVIO, e uma importação bem-sucedida não pode apagar o aviso de um
+  /// agendamento que não chegou na clínica.
+  lastImportAt       DateTime?
+  lastImportError    String?
 
   /// Diagnóstico da última chamada — a tela mostra para a pessoa saber que a
   /// credencial venceu sem precisar abrir o log do servidor.

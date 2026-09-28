@@ -2,6 +2,23 @@
 
 Uma linha por milestone concluído (mais recente no topo).
 
+## Clinicorp: agendamentos da recepção recebem lembrete — 2026-09-28
+
+- O que a recepção marca direto no Clinicorp passa a entrar na agenda
+  (`source: "clinicorp"`) por uma varredura do worker a cada 10 min, de hoje
+  até 8 semanas à frente, para o agente mandar os lembretes também a esses
+  pacientes. Toggle próprio no card do Clinicorp, **ligado por padrão**.
+- Importada segue o Clinicorp (horário, desmarcação, sumiço); a criada pelo
+  fechai só sai daqui quando é excluída/desmarcada lá. Sem duplicar o que o
+  próprio fechai enviou; lembretes que já tinham vencido ao chegar não saem.
+- Contato criado só quando o primeiro lembrete sai. Lembrete da importada
+  exige leitura do Clinicorp na última hora. O agente não remarca importada.
+- Importadas ficam fora dos relatórios, ROI, atribuição de Disparos e do
+  conflito da agenda local.
+- Schema: `Appointment.patientPhone`, `clinicorpSeenAt`, índice
+  `[tenantId, clinicorpAppointmentId]`; `ClinicorpIntegration.importAppointments`,
+  `lastImportAt`, `lastImportError`. Pede `db push` + `generate` na web e no worker.
+
 ## ROI mensal: assistente Fazer com I.A — 2026-09-28
 
 - Botão **Fazer com I.A** na revisão administrativa abre conversa em
