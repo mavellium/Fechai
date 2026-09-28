@@ -122,6 +122,9 @@ export default async function IntegracoesPage({
           categoryDescription: clinicorpRow.categoryDescription,
           syncEnabled: clinicorpRow.syncEnabled,
           checkAvailability: clinicorpRow.checkAvailability,
+          importAppointments: clinicorpRow.importAppointments,
+          lastImportWhen: clinicorpRow.lastImportAt ? relativeTime(clinicorpRow.lastImportAt) : null,
+          lastImportError: clinicorpRow.lastImportError,
           lastError: clinicorpRow.lastError,
           // Calculado aqui, não no cliente: "há 3 horas" com o relógio do
           // navegador divergiria do HTML do servidor na hidratação.

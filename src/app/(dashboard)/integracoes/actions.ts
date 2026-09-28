@@ -861,12 +861,19 @@ export async function saveClinicorpSettingsAction(
   return { ok: true, info: "Preferências salvas." };
 }
 
-/** Espelhar novos horários e ler a agenda de lá são dois botões separados. */
+/**
+ * Espelhar novos horários, ler a agenda de lá e trazer o que a recepção marca
+ * são botões separados: cada clínica usa uma combinação.
+ */
 export async function setClinicorpToggle(
-  field: "syncEnabled" | "checkAvailability",
+  field: "syncEnabled" | "checkAvailability" | "importAppointments",
   enabled: boolean,
 ): Promise<WhatsappControlResult> {
   const { tenantId } = await requireTenant();
+  // Server action: o tipo acima não chega ao runtime, e `field` vira coluna.
+  if (!["syncEnabled", "checkAvailability", "importAppointments"].includes(field) || typeof enabled !== "boolean") {
+    return { ok: false, error: "Opção inválida." };
+  }
   const { count } = await prisma.clinicorpIntegration.updateMany({
     where: { tenantId },
     data: { [field]: enabled },

@@ -33,6 +33,10 @@ export type ClinicorpState =
       categoryDescription: string | null;
       syncEnabled: boolean;
       checkAvailability: boolean;
+      importAppointments: boolean;
+      /** "há 5 minutos" — última importação bem-sucedida, formatada no servidor. */
+      lastImportWhen: string | null;
+      lastImportError: string | null;
       lastError: string | null;
       /** "há 3 horas" — quando o erro aconteceu, já formatado no servidor. */
       lastErrorWhen: string | null;
@@ -65,7 +69,8 @@ function ClinicorpConnectForm() {
     <UnsavedForm action={action} result={result} label="Conexão Clinicorp" className="space-y-3">
       <p className="text-sm text-white/55">
         Conecte para que os horários marcados aqui entrem na agenda da clínica, já ligados à ficha
-        do paciente — e para o agente não oferecer um horário que a recepção já ocupou.
+        do paciente, para o agente não oferecer um horário que a recepção já ocupou e para ele
+        lembrar também os pacientes que a recepção marcou por lá.
       </p>
 
       <details className="rounded-surface border border-white/10 bg-white/5 p-3">
@@ -124,7 +129,7 @@ function ClinicorpConnected({ state }: { state: Extract<ClinicorpState, { connec
   const router = useRouter();
   const id = useId();
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<"sync" | "availability" | null>(null);
+  const [busy, setBusy] = useState<"syncEnabled" | "checkAvailability" | "importAppointments" | null>(null);
   const [, startTransition] = useTransition();
   const [settings, saveSettings, savingSettings] = useActionState(
     saveClinicorpSettingsAction,
@@ -203,8 +208,8 @@ function ClinicorpConnected({ state }: { state: Extract<ClinicorpState, { connec
     };
   }, [state.dentistId, state.categoryDescription]);
 
-  function toggle(field: "syncEnabled" | "checkAvailability", next: boolean) {
-    setBusy(field === "syncEnabled" ? "sync" : "availability");
+  function toggle(field: "syncEnabled" | "checkAvailability" | "importAppointments", next: boolean) {
+    setBusy(field);
     setError(null);
     startTransition(async () => {
       const res = await setClinicorpToggle(field, next);
@@ -396,7 +401,7 @@ function ClinicorpConnected({ state }: { state: Extract<ClinicorpState, { connec
           </p>
           <Switch
             checked={state.syncEnabled}
-            loading={busy === "sync"}
+            loading={busy === "syncEnabled"}
             label={`Enviar para o Clinicorp: ${state.syncEnabled ? "ligado" : "desligado"}`}
             describedBy="clinicorp-sync-desc"
             onCheckedChange={(next) => toggle("syncEnabled", next)}
@@ -409,11 +414,40 @@ function ClinicorpConnected({ state }: { state: Extract<ClinicorpState, { connec
           </p>
           <Switch
             checked={state.checkAvailability}
-            loading={busy === "availability"}
+            loading={busy === "checkAvailability"}
             label={`Consultar a agenda do Clinicorp: ${state.checkAvailability ? "ligado" : "desligado"}`}
             describedBy="clinicorp-avail-desc"
             onCheckedChange={(next) => toggle("checkAvailability", next)}
           />
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between gap-3">
+            <p id="clinicorp-import-desc" className="text-sm text-white/65">
+              Trazer os agendamentos feitos no Clinicorp
+            </p>
+            <Switch
+              checked={state.importAppointments}
+              loading={busy === "importAppointments"}
+              label={`Trazer agendamentos do Clinicorp: ${state.importAppointments ? "ligado" : "desligado"}`}
+              describedBy="clinicorp-import-desc clinicorp-import-status"
+              onCheckedChange={(next) => toggle("importAppointments", next)}
+            />
+          </div>
+          {/* O efeito que importa para quem liga: o paciente da recepção passa
+              a receber os lembretes do agente, pelo número da clínica. */}
+          <p id="clinicorp-import-status" className="mt-1 text-xs text-white/50">
+            {state.importAppointments
+              ? `Os pacientes marcados pela recepção recebem os lembretes do agente. ${
+                  state.lastImportWhen ? `Última leitura ${state.lastImportWhen}.` : "A primeira leitura acontece em alguns minutos."
+                }`
+              : "Desligado: só recebem lembrete os horários marcados pelo fechai."}
+          </p>
+          {state.importAppointments && state.lastImportError && (
+            <Alert tone="warn" className="mt-2">
+              Não conseguimos trazer os agendamentos do Clinicorp: {state.lastImportError}
+            </Alert>
+          )}
         </div>
       </div>
 
@@ -422,7 +456,7 @@ function ClinicorpConnected({ state }: { state: Extract<ClinicorpState, { connec
         confirm={{
           title: "Desconectar o Clinicorp?",
           description:
-            "Os horários já enviados continuam lá; os novos deixam de ser enviados e o agente volta a olhar só a agenda daqui. Suas credenciais são apagadas.",
+            "Os horários já enviados continuam lá; os novos deixam de ser enviados, o agente volta a olhar só a agenda daqui e os pacientes marcados no Clinicorp deixam de receber lembrete. Suas credenciais são apagadas.",
           confirmLabel: "Desconectar",
           tone: "danger",
         }}

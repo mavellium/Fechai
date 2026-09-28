@@ -2,6 +2,7 @@ import type { LlmToolSchema } from "@/modules/ai";
 import { isWithinBusinessHours, type ScheduleConfig } from "@/modules/scheduling/config";
 import { cancelAppointment, findLeadAppointment, listFreeSlots, listUpcomingLeadAppointments, rescheduleAppointment } from "@/modules/scheduling/repository";
 import { dayKeyInZone, formatInZone, parseLocalDateTime, partsInZone, timeInZone } from "@/modules/scheduling/time";
+import { IMPORTED_SOURCE } from "@/modules/scheduling/source";
 import type { ToolContext } from "./tools";
 import { describeRanges, getWeeklyAvailability } from "@/modules/scheduling/weekly-availability";
 
@@ -102,7 +103,9 @@ export async function leadAppointmentsContext(ctx: Pick<ToolContext, "tenantId" 
   if (!appointments.length) return "Nenhuma consulta futura deste contato na agenda do fechai.";
   // Só IDs e horários: títulos/notas livres não viram instruções de sistema.
   return "Consultas futuras deste contato na agenda do fechai:\n" + appointments.map((a) =>
-    `- ID ${a.id}: ${formatInZone(a.startsAt, cfg.timezone)} (${Math.round((a.endsAt.getTime() - a.startsAt.getTime()) / 60_000)} min).`,
+    `- ID ${a.id}: ${formatInZone(a.startsAt, cfg.timezone)} (${Math.round((a.endsAt.getTime() - a.startsAt.getTime()) / 60_000)} min)` +
+    // O agente precisa saber antes de oferecer: estas não se remarcam por aqui.
+    `${a.source === IMPORTED_SOURCE ? ", marcada pela clínica no Clinicorp (remarcação só com a equipe)" : ""}.`,
   ).join("\n");
 }
 
@@ -234,6 +237,11 @@ export async function runSchedulingTool(name: string, ctx: ToolContext, args: Re
   if (!appointment) return "Consulta não encontrada para este contato. Consulte os agendamentos novamente.";
   if (name === "cancel_meeting" && appointment.status === "canceled") return "Essa consulta já está cancelada. Não é necessário cancelar novamente.";
   if (appointment.status !== "scheduled" || appointment.startsAt <= new Date()) return "Essa consulta não está disponível para alteração. Consulte os próximos horários do contato.";
+  // Antes da confirmação: pedir ao contato para confirmar uma troca que não
+  // vai acontecer seria prometer o que a ferramenta recusa depois.
+  if (name === "reschedule_meeting" && appointment.source === IMPORTED_SOURCE) {
+    return "Essa consulta foi marcada pela clínica direto no Clinicorp e não pode ser remarcada pelo agente. Nenhuma alteração foi feita. Diga ao contato que a equipe da clínica vai combinar a nova data e ofereça atendimento humano.";
+  }
   const previous = formatInZone(appointment.startsAt, cfg.timezone);
   if (args.confirmed !== true) return `Nenhuma alteração foi feita. Confirme com o cliente a ${name === "cancel_meeting" ? "exclusão" : "troca"} da consulta de ${previous} e espere a resposta clara antes de chamar novamente com confirmed=true.`;
 

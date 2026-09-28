@@ -109,6 +109,16 @@ Tudo começa na `page.tsx`, que resolve a janela (`?periodo=`/`?de=&ate=`), comp
 - A série começa na **primeira mensagem da conta** quando `from` é null (evita gráfico vazio).
 - Todos os limites de dia/mês/hora são calculados no fuso do painel (regra de ouro 6) — "hoje" começa à meia-noite de Brasília, não do servidor.
 
+### Agendamentos importados do Clinicorp não contam
+
+Toda consulta de `Appointment` deste relatório (KPI, séries, `closed`,
+comparecimento e `computeFinancialSummary`) usa `NOT_IMPORTED`
+(`src/modules/scheduling/source.ts`): a consulta com `source: "clinicorp"` foi
+marcada pela recepção direto no Clinicorp e só está na agenda para receber
+lembrete. Contá-la inflaria "Agendamentos", o "humano" do IA × humano e o ROI
+no dia em que a importação fosse ligada. Consulta nova de agendamento aqui
+precisa do mesmo filtro — `tests/clinicorp-import.test.ts` confere.
+
 ### `computePeriodReport`
 
 - **KPIs**: conversas ativas (por `updatedAt`), leads novos, agendamentos (`Appointment` com `startsAt` no período e `status in ["scheduled","done"]`), mensagens recebidas/enviadas (`role user/assistant`), taxa de resposta (conversas com 2+ mensagens do lead), leads quentes e "precisam de você" (**estado atual**, não do período).

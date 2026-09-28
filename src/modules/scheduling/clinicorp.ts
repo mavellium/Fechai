@@ -216,9 +216,11 @@ export async function getClinicorpStatus(tenantId: string) {
   const integration = await getIntegration(tenantId, { ignoreFeatureFlag: true });
   if (!integration) return null;
   const { subscriberId, businessId, dentistId, categoryDescription, syncEnabled,
-    checkAvailability, lastError, lastErrorAt, lastSyncAt } = integration;
+    checkAvailability, importAppointments, lastError, lastErrorAt, lastSyncAt,
+    lastImportAt, lastImportError } = integration;
   return { subscriberId, businessId, dentistId, categoryDescription, syncEnabled,
-    checkAvailability, lastError, lastErrorAt, lastSyncAt };
+    checkAvailability, importAppointments, lastError, lastErrorAt, lastSyncAt,
+    lastImportAt, lastImportError };
 }
 
 /**
@@ -763,6 +765,173 @@ export async function hasClinicorpConflict(
     console.error("[clinicorp] consultar agenda falhou", err);
     return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Importação: o que a recepção marca direto no Clinicorp
+// ---------------------------------------------------------------------------
+
+/**
+ * Um agendamento de paciente da agenda do Clinicorp, já lido no fuso da
+ * clínica. Quem decide o que fazer com ele é `clinicorp-import.ts`.
+ */
+export type ClinicorpAgendaItem = {
+  id: string;
+  /** Desmarcado ou excluído lá. */
+  removed: boolean;
+  /** Null quando data/hora não puderam ser lidas com segurança (ver `agendaDay`). */
+  startsAt: Date | null;
+  endsAt: Date | null;
+  patientName: string | null;
+  /** Como veio do Clinicorp ("(47) 98870-0805"); a importação normaliza. */
+  mobilePhone: string | null;
+};
+
+export type ClinicorpAgendaResult =
+  /** `complete: false` = algum item veio sem id legível; não dá para dizer o que sumiu. */
+  | { status: "ok"; items: ClinicorpAgendaItem[]; complete: boolean }
+  /** Desligado, sem conexão ou com a importação desligada: nada a fazer, nada a avisar. */
+  | { status: "inactive" }
+  | { status: "failed"; error: string };
+
+/** A API não documenta teto de período; o exemplo da documentação é um mês. */
+const AGENDA_CHUNK_DAYS = 31;
+
+/** "2026-09-30" + 2 -> "2026-10-02". Aritmética de calendário, sem fuso. */
+function shiftDay(day: string, days: number): string {
+  const [y, m, d] = day.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+}
+
+/** Id inteiro dentro da faixa segura do JS, como string; null se não for. */
+function safeClinicorpId(value: unknown): string | null {
+  if (typeof value === "string" && /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) && Number(value) > 0) return value;
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return String(value);
+  return null;
+}
+
+/** Os campos "X" do Clinicorp (Canceled, Deleted…). */
+function isFlagged(value: unknown): boolean {
+  return value === true || (typeof value === "string" && value.trim().toUpperCase() === "X");
+}
+
+/**
+ * O dia local do agendamento.
+ *
+ * `AtomicDate` (YYYYMMDD) é o dia na agenda da clínica e vem primeiro. Sem ele,
+ * `date` — que a documentação chama de "data e hora em UTC", mas que a criação
+ * por API recebe como o dia local à meia-noite UTC (ver
+ * `pushAppointmentToClinicorp`). As duas leituras só se confundem quando `date`
+ * é meia-noite UTC e o início é exatamente a hora local desse instante (21:00
+ * em Brasília): aí não há como saber o dia, e o item fica sem horário em vez
+ * de ir para o dia errado — lembrete na véspera errada é pior que nenhum.
+ */
+function agendaDay(row: Record<string, unknown>, fromTime: string, timeZone: string): string | null {
+  const atomic = String(row.AtomicDate ?? "");
+  if (/^\d{8}$/.test(atomic)) {
+    const day = `${atomic.slice(0, 4)}-${atomic.slice(4, 6)}-${atomic.slice(6, 8)}`;
+    return parseLocalDateTime(day, "12:00", timeZone) ? day : null;
+  }
+  if (typeof row.date !== "string") return null;
+  const at = new Date(row.date);
+  if (Number.isNaN(at.getTime())) return null;
+  const startsHere = localTime(at, timeZone) === fromTime.padStart(5, "0");
+  if (at.toISOString().endsWith("T00:00:00.000Z")) return startsHere ? null : at.toISOString().slice(0, 10);
+  // Um instante de verdade só é o do agendamento se bater com o início; outra
+  // hora qualquer (data de criação, por exemplo) não diz o dia da consulta.
+  return startsHere ? localDate(at, timeZone) : null;
+}
+
+/**
+ * Os agendamentos de paciente da clínica escolhida entre dois dias locais
+ * (inclusive), com desmarcados e excluídos — que a importação precisa ver para
+ * tirar da agenda daqui o que saiu de lá.
+ *
+ * Com profissional fixado na conta, só os dele: é a mesma regra da
+ * disponibilidade, a conta fala da agenda daquele profissional.
+ *
+ * Tudo ou nada: se um pedaço do período falhar, o resultado é `failed`, porque
+ * uma lista pela metade faria consultas de verdade parecerem canceladas. Não
+ * grava nada em `lastError` (isso é do envio). Nunca lança.
+ */
+export async function listClinicorpAgenda(
+  tenantId: string,
+  from: string,
+  to: string,
+  timeZone: string,
+): Promise<ClinicorpAgendaResult> {
+  try {
+    const integration = await getIntegration(tenantId);
+    if (!integration || !integration.importAppointments) return { status: "inactive" };
+    if (!integration.businessId) {
+      return { status: "failed", error: "Escolha a clínica em Integrações → Calendários para trazer os agendamentos do Clinicorp." };
+    }
+
+    const rows: unknown[] = [];
+    for (let start = from; start <= to; start = shiftDay(start, AGENDA_CHUNK_DAYS)) {
+      const end = [shiftDay(start, AGENDA_CHUNK_DAYS - 1), to].sort()[0];
+      const res = await call<unknown>(integration, "/appointment/list", {
+        query: { from: start, to: end, businessId: integration.businessId, includeCanceled: "X", includeDeleted: "X" },
+      });
+      // Sem o corpo da resposta: pode trazer dado de paciente, e a mensagem vai para a tela.
+      if (!res.ok) {
+        return {
+          status: "failed",
+          error: res.status === 401 || res.status === 403
+            ? `O Clinicorp recusou o acesso à agenda (HTTP ${res.status}). Confira o token e as permissões da API.`
+            : `Não foi possível ler a agenda do Clinicorp${res.status ? ` (HTTP ${res.status})` : ""}. A próxima tentativa é automática.`,
+        };
+      }
+      if (!Array.isArray(res.data)) return { status: "failed", error: "O Clinicorp não devolveu uma agenda válida. A próxima tentativa é automática." };
+      rows.push(...res.data);
+    }
+
+    let complete = true;
+    const items = new Map<string, ClinicorpAgendaItem>();
+    for (const raw of rows) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) { complete = false; continue; }
+      const r = raw as Record<string, unknown>;
+      if (r.ItemType && r.ItemType !== "APPOINTMENT") continue;
+      const id = safeClinicorpId(r.id);
+      if (!id) { complete = false; continue; }
+      if (integration.dentistId && r.Dentist_PersonId != null && String(r.Dentist_PersonId) !== integration.dentistId) continue;
+
+      const fromTime = typeof r.fromTime === "string" ? r.fromTime.trim() : "";
+      const toTime = typeof r.toTime === "string" ? r.toTime.trim() : "";
+      const day = fromTime ? agendaDay(r, fromTime, timeZone) : null;
+      const startsAt = day ? parseLocalDateTime(day, fromTime, timeZone) : null;
+      const endsAt = day && toTime ? parseLocalDateTime(day, toTime, timeZone) : null;
+      const readable = Boolean(startsAt && endsAt && endsAt > startsAt);
+      const text = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : null);
+
+      items.set(id, {
+        id,
+        removed: isFlagged(r.Canceled) || isFlagged(r.Deleted),
+        startsAt: readable ? startsAt : null,
+        endsAt: readable ? endsAt : null,
+        patientName: text(r.PatientName),
+        mobilePhone: text(r.MobilePhone),
+      });
+    }
+    return { status: "ok", items: [...items.values()], complete };
+  } catch (err) {
+    console.error("[clinicorp] ler agenda para importação falhou", err);
+    return { status: "failed", error: "Erro inesperado ao ler a agenda do Clinicorp. A próxima tentativa é automática." };
+  }
+}
+
+/**
+ * Resultado da importação, para o card. Não toca em `lastError`/`lastSyncAt`:
+ * uma importação que deu certo não pode apagar o aviso de um horário que não
+ * chegou na clínica.
+ */
+export async function recordClinicorpImport(tenantId: string, error: string | null): Promise<void> {
+  await prisma.clinicorpIntegration
+    .update({
+      where: { tenantId },
+      data: error ? { lastImportError: error.slice(0, 500) } : { lastImportAt: new Date(), lastImportError: null },
+    })
+    .catch(() => {});
 }
 
 /**

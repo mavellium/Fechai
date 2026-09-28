@@ -32,8 +32,14 @@ const provider = vi.hoisted(() => ({
   }),
 }));
 
+const importacao = vi.hoisted(() => ({ contactForImportedAppointment: vi.fn() }));
+
 vi.mock("../src/lib/prisma", () => ({ prisma: db }));
 vi.mock("../src/modules/whatsapp", () => ({ getWhatsAppProvider: () => provider }));
+vi.mock("@/modules/scheduling/clinicorp-import", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/modules/scheduling/clinicorp-import")>()),
+  contactForImportedAppointment: importacao.contactForImportedAppointment,
+}));
 
 import {
   DEFAULT_REMINDER_MINUTES,
@@ -640,12 +646,78 @@ describe("Varredura (scanAndSendReminders)", () => {
       1,
       expect.objectContaining({
         where: expect.objectContaining({
-          lead: { isTest: false },
           status: "scheduled",
           startsAt: { gte: AGORA },
         }),
       }),
     );
+    // A alternativa ao contato real é só a importada SEM contato (`leadId:
+    // null`): ela não tem como alcançar um lead de teste.
+    const [{ where }] = db.appointment.findMany.mock.calls[0];
+    expect(where.AND[0].OR).toEqual([
+      { lead: { isTest: false } },
+      { leadId: null, source: "clinicorp", patientPhone: { not: null } },
+    ]);
+  });
+
+  // Consulta que a recepção marcou no Clinicorp: o paciente pode nunca ter
+  // escrito para o número, e o contato só nasce quando o lembrete sai.
+  const importadaSemContato = () => ({
+    ...consultaAmanha(), source: "clinicorp", lead: null, leadId: null, conversationId: null,
+    patientPhone: "5547988700805", patientName: "Ana Lima",
+  });
+
+  it("consulta importada sem contato: vai para o telefone do Clinicorp e entra na conversa criada", async () => {
+    acaoConfigurada();
+    importacao.contactForImportedAppointment.mockResolvedValue({ phone: "554788700805", name: null, conversationId: "conv-nova" });
+    consultas([importadaSemContato()]);
+
+    const r = await scanAndSendReminders(AGORA);
+
+    expect(r.sent).toBe(1);
+    expect(provider.sendMessage).toHaveBeenCalledWith("inst-1", "5547988700805", expect.stringContaining("Ana Lima"));
+    expect(db.message.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ conversationId: "conv-nova", role: "assistant" }),
+    }));
+  });
+
+  it("contato que falha depois do envio não faz o lembrete sair de novo", async () => {
+    acaoConfigurada();
+    importacao.contactForImportedAppointment.mockRejectedValue(new Error("banco fora"));
+    consultas([importadaSemContato()]);
+
+    const r = await scanAndSendReminders(AGORA);
+
+    expect(r.sent).toBe(1);
+    expect(db.message.create).not.toHaveBeenCalled();
+    expect(db.appointment.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ remindersSent: { set: [UMA_SEMANA, UM_DIA] }, reminderSentAt: AGORA }),
+    }));
+  });
+
+  it("sem WhatsApp conectado, não cria o contato da importada", async () => {
+    acaoConfigurada();
+    db.whatsappInstance.findUnique.mockResolvedValue({ externalId: "inst-1", status: "disconnected" });
+    consultas([importadaSemContato()]);
+
+    const r = await scanAndSendReminders(AGORA);
+
+    expect(r.sent).toBe(0);
+    expect(importacao.contactForImportedAppointment).not.toHaveBeenCalled();
+    expect(db.appointment.update).not.toHaveBeenCalled();
+  });
+
+  it("importada só recebe lembrete com o Clinicorp confirmando há pouco que ela continua lá", async () => {
+    acaoConfigurada();
+    consultas([]);
+
+    await scanAndSendReminders(AGORA);
+
+    const [{ where }] = db.appointment.findMany.mock.calls[0];
+    expect(where.AND[1].OR).toEqual([
+      { source: { not: "clinicorp" } },
+      { clinicorpSeenAt: { gte: new Date(AGORA.getTime() - 60 * 60_000) } },
+    ]);
   });
 
   it("fecha sem enviar os disparos de uma consulta que já passou", async () => {

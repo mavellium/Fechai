@@ -172,7 +172,9 @@ mesmo tenant/telefone. Se o último envio foi um teste, não atribui à campanha
 anterior. Primeira resposta conta uma vez; duplicatas não mudam a data.
 Oportunidade conta se o contato está `hot`/`scheduled` ao processar uma resposta
 e não estava nesses estados no envio. Consulta conta uma vez por destinatário
-se criada após o envio, dentro dos sete dias, não cancelada quando observada.
+se criada após o envio, dentro dos sete dias, não cancelada quando observada;
+consulta importada do Clinicorp não conta (`NOT_IMPORTED`), porque o `createdAt`
+dela é o da importação, não o da marcação.
 São fotografias históricas: cancelamentos e alterações manuais posteriores não
 reescrevem esses números. Agendamentos sem nova resposta não são atribuídos.
 

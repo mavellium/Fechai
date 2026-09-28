@@ -10,6 +10,7 @@ import {
   pushAppointmentToClinicorp,
 } from "./clinicorp";
 import { dayKeyInZone, monthRangeUtc, parseLocalDateTime, partsInZone, zonedTimeToUtc } from "./time";
+import { IMPORTED_SOURCE, NOT_IMPORTED } from "./source";
 
 /**
  * Leitura e escrita da agenda. Toda query filtra por tenantId (regra do
@@ -72,6 +73,9 @@ export async function hasConflict(
     where: {
       tenantId,
       status: "scheduled",
+      // A cópia importada do Clinicorp já é lida por `hasClinicorpConflict`,
+      // com o filtro de profissional da conta (ver `NOT_IMPORTED`).
+      ...NOT_IMPORTED,
       ...(ignoreId ? { id: { not: ignoreId } } : {}),
       startsAt: { lt: endsAt },
       endsAt: { gt: startsAt },
@@ -141,7 +145,7 @@ export async function listFreeSlots(
 
   const [local, clinicorp] = await Promise.all([
     prisma.appointment.findMany({
-      where: { tenantId, status: "scheduled", startsAt: { lt: dayEnd }, endsAt: { gt: dayStart } },
+      where: { tenantId, status: "scheduled", ...NOT_IMPORTED, startsAt: { lt: dayEnd }, endsAt: { gt: dayStart } },
       select: { startsAt: true, endsAt: true },
     }),
     listClinicorpBusyBlocks(tenantId, date, cfg.timezone),
@@ -300,6 +304,10 @@ export async function rescheduleAppointment(input: {
 }) {
   const previous = await findLeadAppointment(input.tenantId, input.leadId, input.id);
   if (!previous || previous.status !== "scheduled" || previous.startsAt <= new Date()) return { status: "unavailable" } as const;
+  // Importada do Clinicorp: a API não altera agendamento, só cancela e cria —
+  // e criar de novo sairia com o profissional e a categoria da conta, não com
+  // os que a recepção escolheu. Quem remarca é a clínica.
+  if (previous.source === IMPORTED_SOURCE) return { status: "unavailable" } as const;
   if (previous.startsAt.getTime() === input.startsAt.getTime()) return { status: "unchanged" } as const;
   const endsAt = new Date(input.startsAt.getTime() + previous.endsAt.getTime() - previous.startsAt.getTime());
   if (await hasConflictAnywhere(input.tenantId, input.startsAt, endsAt, input.timezone, previous.id, previous.clinicorpAppointmentId ?? undefined)) {

@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { NOT_IMPORTED } from "@/modules/scheduling/source";
 import { broadcastPhoneVariants } from "./phone";
 export const ATTRIBUTION_DAYS = 7;
 
@@ -51,6 +52,10 @@ export async function recordBroadcastResponse(
   const appointment = await prisma.appointment.findFirst({
     where: {
       tenantId,
+      // A importada do Clinicorp ganha `createdAt` quando chega aqui, não
+      // quando foi marcada: uma consulta de meses atrás pareceria "criada após
+      // o envio" e seria atribuída ao Disparo.
+      ...NOT_IMPORTED,
       leadId: message.conversation.lead.id,
       status: { not: "canceled" },
       createdAt: {

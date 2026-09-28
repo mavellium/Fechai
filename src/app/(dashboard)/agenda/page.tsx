@@ -13,6 +13,8 @@ import { getCalendarFeatures } from "@/modules/scheduling/features";
 import { getClinicorpStatus } from "@/modules/scheduling/clinicorp";
 import { listMonthAppointments } from "@/modules/scheduling/repository";
 import { timeInZone, todayInZone } from "@/modules/scheduling/time";
+import { IMPORTED_SOURCE } from "@/modules/scheduling/source";
+import { phoneLabel } from "@/lib/format";
 import { leadStatusLabel } from "../conversas/leadStatus";
 import { CalendarMonth } from "./CalendarMonth";
 import { AppointmentActions } from "./AppointmentActions";
@@ -125,7 +127,11 @@ export default async function AgendaPage({
           connected: Boolean(clinicorp),
           sending: Boolean(clinicorp?.syncEnabled),
           receiving: Boolean(clinicorp?.checkAvailability),
-          error: clinicorp?.lastError ?? (clinicorp && !clinicorp.businessId ? "Escolha a clínica em Integrações." : null),
+          importing: Boolean(clinicorp?.importAppointments),
+          error:
+            clinicorp?.lastError ??
+            (clinicorp?.importAppointments ? clinicorp.lastImportError : null) ??
+            (clinicorp && !clinicorp.businessId ? "Escolha a clínica em Integrações." : null),
         }
       : null,
   ] as (CalendarSyncItem | null)[]).filter((x) => x !== null);
@@ -315,7 +321,21 @@ export default async function AgendaPage({
                                 • pelo agente
                               </span>
                             )}
+                            {appointment.source === IMPORTED_SOURCE && (
+                              <span className="font-mono text-micro uppercase tracking-wider text-white/55">
+                                • do Clinicorp
+                              </span>
+                            )}
                           </div>
+
+                          {/* Importada ainda sem contato: ele só é criado quando o
+                              primeiro lembrete sai, mas o telefone já é o de lá. */}
+                          {!appointment.lead && appointment.patientPhone && (
+                            <p className="mt-1 flex items-center gap-1 font-mono text-micro uppercase tracking-wider text-white/70">
+                              <User size={12} aria-hidden className="text-white/40" />
+                              Telefone: {phoneLabel(appointment.patientPhone)}
+                            </p>
+                          )}
 
                           {appointment.lead && (
                             <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-white/60">
@@ -346,7 +366,8 @@ export default async function AgendaPage({
                               </span>
                             )}
 
-                            {appointment.status === "scheduled" && features.clinicorpEnabled && (
+                            {/* Envio só existe para o que o fechai marcou; a importada veio de lá. */}
+                            {appointment.status === "scheduled" && features.clinicorpEnabled && appointment.source !== IMPORTED_SOURCE && (
                               <span
                                 className={cn(
                                   "inline-flex items-center gap-1.5 font-mono text-micro uppercase tracking-wide",

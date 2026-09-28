@@ -14,6 +14,8 @@ mostrada no painel, e o horário combinado com o lead continua de pé.
 | `time.ts` | Fuso: `parseLocalDateTime`, `partsInZone`, `monthRangeUtc`. Nada de data no projeto sem passar por aqui. |
 | `google.ts` | Espelho no Google Agenda (OAuth por tenant). |
 | `clinicorp.ts` | Espelho + leitura de disponibilidade no Clinicorp (Basic auth por tenant). |
+| `clinicorp-import.ts` | Importação do que a recepção marca direto no Clinicorp, para receber lembrete. Roda no worker. |
+| `source.ts` | `IMPORTED_SOURCE` e `NOT_IMPORTED`: a consulta importada fica fora de métrica e do conflito local. |
 | `features.ts` | Quais calendários a conta habilitou em /integracoes. |
 
 ## Configuração do agendamento por agente
@@ -343,6 +345,9 @@ Base: `https://api.clinicorp.com/rest/v1`. Quase todo endpoint pede
 2. **Disponibilidade** (`hasClinicorpConflict`) — `GET /appointment/list` do dia,
    com `includeAssigns` para trazer também eventos e bloqueios (almoço, férias):
    para o agente, esses horários são tão ocupados quanto uma consulta.
+3. **Importação** (`clinicorp-import.ts`) — o que a recepção marca direto no
+   Clinicorp entra na agenda daqui como `source: "clinicorp"`, para o agente
+   mandar lembrete também a esses pacientes. Ver a seção abaixo.
 
 ### Regras que não são óbvias
 
@@ -497,7 +502,106 @@ tirar a duração média real por categoria. Daria nome *e* tempo de verdade, ma
 depende de haver histórico, são várias chamadas e leva segundos — foi avaliado e
 deixado de fora do botão de importar, que é síncrono.
 
-Não há webhook de entrada: o que for marcado **no** Clinicorp não aparece na
-agenda daqui. Só a checagem de conflito enxerga esses horários. Trazer os
-agendamentos de lá exigiria polling, deduplicação e uma regra de quem vence em
-divergência — decisão em aberto, não um esquecimento.
+### Importação: o que a recepção marca no Clinicorp
+
+Sem isto, o lembrete só alcançava quem marcou pelo agente (ou à mão na
+`/agenda`); o paciente que ligou para a recepção ficava sem aviso nenhum. A API
+**não tem webhook**, então a importação é uma varredura do worker
+(`workers/follow-up-worker`, fila `clinicorp-import`, a cada
+`CLINICORP_IMPORT_EVERY_MINUTES`, padrão 10) sobre `GET /appointment/list`.
+
+**Ligar e desligar**: `ClinicorpIntegration.importAppointments` (nasce ligado),
+terceiro toggle do card, independente de `syncEnabled` e `checkAvailability`.
+Também respeita `clinicorpEnabled` — a leitura passa por `getIntegration()`.
+O resultado vai para `lastImportAt`/`lastImportError`, **nunca** para
+`lastSyncAt`/`lastError`: aqueles falam do envio, e uma importação bem-sucedida
+não pode apagar o aviso de um horário que não chegou na clínica.
+
+**O que é lido**: de hoje até `IMPORT_HORIZON_DAYS` (o lembrete mais distante
+que a tela aceita, 8 semanas, mais a véspera de um horário fixo), em pedaços de
+31 dias, da clínica escolhida, com `includeCanceled` e `includeDeleted` — é
+assim que o desmarcado lá sai daqui. Sem `includeAssigns`: compromisso e
+bloqueio não são paciente. Com `dentistId` fixado, só a agenda desse
+profissional (mesma regra da disponibilidade). Tudo ou nada: um pedaço que
+falha anula a volta inteira, porque uma lista pela metade faria consultas de
+verdade parecerem canceladas.
+
+**O dia vem de `AtomicDate`** (YYYYMMDD, dia da clínica). Sem ele, de `date`,
+que a documentação chama de UTC mas que a criação por API recebe como o dia
+local à meia-noite UTC. As duas leituras só colidem quando `date` é meia-noite
+UTC e o início é a hora local desse instante (21:00 em Brasília); aí o item
+fica sem horário em vez de ir para o dia errado. Instante que não bate com
+`fromTime` também é descartado (pode ser a data de criação).
+
+**Quem vence em divergência** depende de quem criou:
+
+| consulta | horário, nome, telefone | desmarcada/excluída lá | sumiu do período lá |
+| --- | --- | --- | --- |
+| importada (`source: "clinicorp"`) | seguem o Clinicorp | sai daqui | sai daqui, depois de 1h sem aparecer |
+| criada pelo fechai e espelhada | ficam os daqui | sai daqui (e do Google) | nada |
+
+- A do fechai não segue o horário de lá porque um reagendamento cujo
+  cancelamento no Clinicorp falhou deixa o id antigo ativo lá **de propósito**
+  (`rescheduleAppointment`); seguir o horário de lá desfaria o reagendamento.
+  Linha do fechai alterada há menos de 15 min também não é tocada (operação em
+  andamento: o reagendamento cancela lá antes de gravar o id novo).
+- "Sumiu" = ausente de uma lista **inteira** (todo item com id legível) por mais
+  de `IMPORT_FRESH_MINUTES` (1h). Uma resposta incompleta num ciclo não derruba
+  ninguém. Cobre remarcar para depois do período, trocar de profissional
+  (com `dentistId`) ou de clínica.
+- **`clinicorpSeenAt`** é a última vez que a varredura viu a importada ativa.
+  O lembrete dela **exige** uma visita na última hora (ver o worker): com a API
+  fora ou a importação desligada, ela pode ter sido desmarcada sem a gente
+  saber. Quando é a importação que tira a consulta da agenda, zera o campo; é
+  assim que ela sabe que pode trazê-la de volta se reaparecer. Um cancelamento
+  feito aqui por uma pessoa mantém a data e **não é desfeito** (se a consulta
+  continua ativa lá, o cancelamento no Clinicorp falhou e o aviso já está no card).
+- Importada remarcada lá tem `remindersSent` refeito: os disparos enviados eram
+  do horário antigo.
+
+**Sem duplicar**: o item de lá casa com a linha daqui por
+`clinicorpAppointmentId` (índice `[tenantId, clinicorpAppointmentId]`). Item
+novo não vira consulta quando (a) uma consulta do fechai sem id do Clinicorp,
+criada há menos de 15 min, tem exatamente o mesmo início e fim (o envio ainda
+não gravou o id), ou (b) o mesmo contato já tem consulta do fechai no mesmo
+início (envio sem confirmação, ou a recepção copiou à mão o que o agente
+marcou) — senão cada lembrete chegaria duas vezes.
+
+**Lembrete que já tinha vencido quando a consulta chegou** é fechado sem envio
+(`remindersSent` preenchido na criação), com tolerância de
+`IMPORT_LATE_REMINDER_MINUTES` (30) para o atraso normal da varredura. Sem
+isso, no dia em que a importação é ligada a agenda inteira chega de uma vez e
+"falta uma semana" iria para a consulta de depois de amanhã.
+
+**Contato**: o celular de lá é normalizado (`clinicorpPhoneToWhatsApp`, 55 +
+DDD + número; o que não fecha como telefone brasileiro vira null) e casado com
+um contato existente pela forma canônica (`canonicalPhone`, com ou sem o nono
+dígito). Sem contato, a consulta guarda `patientPhone` e o contato só é criado
+**depois que o primeiro lembrete sai** (`contactForImportedAppointment`, mesmo
+caminho do Disparo): criar na importação encheria Contatos e Conversas com
+pacientes que nunca falaram com o número, e criar antes do envio faria de um
+telefone fixo um contato vazio. Uma vez criado, ele é um contato como outro
+qualquer — conta em "leads novos" do relatório, como o destinatário de um
+Disparo. A importação não muda `Lead.status` nem envia nada ao Google.
+
+**Fora das métricas e da disponibilidade** (`NOT_IMPORTED`): relatórios, ROI,
+IA × humano e atribuição de Disparo excluem `source: "clinicorp"` — é agenda da
+clínica, não resultado do fechai, e o `createdAt` dela é o da importação, não o
+da marcação. O conflito local (`hasConflict`, `listFreeSlots`) também: a
+ocupação do Clinicorp já é lida por `hasClinicorpConflict`, com o filtro de
+profissional e a escolha de `checkAvailability`; contar a cópia de novo
+bloquearia o horário de um dentista pelo paciente de outro.
+
+**No agente**: a importada aparece em `list_appointments`/`recognizeExisting`
+marcada como "marcada pela clínica", e `cancel_meeting` a desmarca também no
+Clinicorp. `reschedule_meeting` recusa **antes** de pedir confirmação: a API não
+altera agendamento (só cancela e cria), e criar de novo sairia com o
+profissional e a categoria da conta, não com os que a recepção escolheu.
+
+**Limitações conhecidas**: na Meta, texto livre para quem não escreveu nas
+últimas 24h não é entregue (vale para todo lembrete, não só o importado).
+Número que o WhatsApp recusa continua sendo tentado a cada varredura até a
+consulta começar, como qualquer lembrete com falha de envio.
+
+Regressões: `tests/clinicorp-import.test.ts`, `tests/agendamento-lembrete.test.ts`
+e `tests/agendamento-tools.test.ts`.

@@ -11,6 +11,8 @@ export type CalendarSyncItem = {
   sending: boolean;
   /** Lê a agenda de lá para não marcar em cima do que já está ocupado. */
   receiving: boolean;
+  /** Traz para cá o que foi marcado lá, para receber lembrete (só Clinicorp). */
+  importing?: boolean;
   /** Última falha, quando houver — a credencial pode ter vencido. */
   error?: string | null;
 };
@@ -73,7 +75,7 @@ export function CalendarSyncStatus({ items }: { items: CalendarSyncItem[] }) {
                   <p className="mt-0.5 text-xs text-white/55">
                     {/* Enviando/recebendo em vez de só "conectado": é o que a
                         pessoa quer saber ao marcar um horário. */}
-                    {item.error ? "Sincronização precisa de atenção" : describeFlow(item.sending, item.receiving)}
+                    {item.error ? "Sincronização precisa de atenção" : describeFlow(item.sending, item.receiving, item.importing)}
                   </p>
                 )}
 
@@ -92,10 +94,15 @@ export function CalendarSyncStatus({ items }: { items: CalendarSyncItem[] }) {
   );
 }
 
-function describeFlow(sending: boolean, receiving: boolean): string {
-  if (sending && receiving) return "Credenciais salvas · envio e consulta de disponibilidade ativados";
-  if (sending) return "Credenciais salvas · envio de horários ativado";
-  if (receiving) return "Credenciais salvas · consulta de disponibilidade ativada";
-  // Conectado com os dois desligados: a sincronização está pausada nos toggles.
+function describeFlow(sending: boolean, receiving: boolean, importing = false): string {
+  const imported = "agendamentos da clínica trazidos para os lembretes";
+  const base =
+    sending && receiving ? "Credenciais salvas · envio e consulta de disponibilidade ativados"
+    : sending ? "Credenciais salvas · envio de horários ativado"
+    : receiving ? "Credenciais salvas · consulta de disponibilidade ativada"
+    : null;
+  if (base) return importing ? `${base} · ${imported}` : base;
+  if (importing) return `Credenciais salvas · ${imported}`;
+  // Conectado com tudo desligado: a sincronização está pausada nos toggles.
   return "Conectado · sincronização pausada";
 }

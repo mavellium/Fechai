@@ -1,4 +1,4 @@
-import { partsInZone } from "./time";
+import { partsInZone, zonedTimeToUtc } from "./time";
 import { describeRanges, getWeeklyAvailability, mergeRanges, minuteLabel, parseWeeklyAvailability, type WeeklyAvailability } from "./weekly-availability";
 
 /**
@@ -102,6 +102,19 @@ export type ReminderRule = {
   /** Texto deste disparo, com as variáveis de `REMINDER_VARIABLES`. */
   template: string;
 };
+
+/**
+ * Instante de disparo no fuso da agenda; sem horário fixo, duração exata.
+ * Mora aqui (e não só no worker) porque a importação do Clinicorp também
+ * precisa saber quais disparos já tinham vencido quando a consulta chegou.
+ */
+export function reminderDueAt(startsAt: Date, rule: ReminderRule, timezone: string): Date {
+  if (!rule.sendTime) return new Date(startsAt.getTime() - rule.minutesBefore * 60_000);
+  const local = partsInZone(startsAt, timezone);
+  const day = new Date(Date.UTC(local.year, local.month - 1, local.day - rule.minutesBefore / 1440));
+  const [hour, minute] = rule.sendTime.split(":").map(Number);
+  return zonedTimeToUtc(day.getUTCFullYear(), day.getUTCMonth() + 1, day.getUTCDate(), hour, minute, timezone);
+}
 
 /**
  * O que o template do lembrete aceita. Exportado porque a tela lista os
