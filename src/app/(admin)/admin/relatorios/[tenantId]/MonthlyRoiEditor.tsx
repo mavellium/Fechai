@@ -1,125 +1,136 @@
 "use client";
-import { useActionState, useState, useTransition } from "react";
+import { startTransition, useActionState, useRef, useState, useTransition } from "react";
+import { Check, ChevronDown, Download, Pencil, Plus, Trash2 } from "lucide-react";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { CurrencyInput } from "@/components/ui/currency-input";
 import { Textarea } from "@/components/ui/textarea";
 import { SelectMenu } from "@/components/ui/select-menu";
 import { Card, CardTitle } from "@/components/ui/card";
-import { FormFeedback } from "@/components/ui/alert";
+import { Field, fieldProps } from "@/components/ui/field";
+import { Switch } from "@/components/ui/switch";
+import { Badge } from "@/components/ui/badge";
+import { Alert, FormFeedback } from "@/components/ui/alert";
+import { UnsavedForm, useUnsavedNavigation } from "@/components/ui/unsaved-changes";
 import { TIMEZONES } from "@/modules/scheduling/time";
+import { minuteLabel } from "@/modules/scheduling/weekly-availability";
 import type { MonthlyReport } from "@/modules/reports/monthly";
 import { saveMonthlyRoi, finalizeMonthlyRoi, reopenMonthlyRoi, recordMonthlyDelivery } from "./actions";
 
 const decimal = (v: number | null, scale = 1) => v === null ? "" : String(v / scale).replace(".", ",");
-function readNumber(value: FormDataEntryValue | null, scale = 1): number | null {
-  const text = String(value ?? "").trim();
+function readNumber(value: FormDataEntryValue | null, scale = 1, currency = false): number | null {
+  const raw = String(value ?? "").trim();
+  const text = currency ? raw.replace(/\./g, "") : raw;
   if (!text) return null;
-  if (!/^\d+(?:[.,]\d{1,2})?$/.test(text)) throw new Error("Use valores numéricos, sem separador de milhar.");
+  if (!/^\d+(?:[.,]\d{1,2})?$/.test(text)) throw new Error("Revise os valores numéricos. Use vírgula para os decimais.");
   const result = Number(text.replace(",", ".")) * scale;
   return scale === 100 ? Math.round(result) : result;
 }
-function humanHours(form: FormData) {
-  if (form.get("hoursConfirmed") !== "on") return null;
-  return Array.from({ length: 7 }, (_, i) => {
-    const text = String(form.get(`day-${i}`) ?? "").trim();
-    if (!text) return [];
-    return text.split(",").map((value) => {
-      const match = /^\s*(\d{2}):(\d{2})\s*-\s*(\d{2}):(\d{2})\s*$/.exec(value);
-      if (!match) throw new Error("Use HH:mm-HH:mm, separando intervalos com vírgula.");
-      const [, ah, am, bh, bm] = match.map(Number);
-      if (ah > 23 || am > 59 || bh > 24 || bm > 59 || (bh === 24 && bm !== 0)) throw new Error("Revise as horas do expediente.");
-      return { start: ah * 60 + am, end: bh * 60 + bm };
-    });
-  });
+const DAYS = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
+type HourRange = { start: string; end: string };
+function readTime(text: string) {
+  const match = /^(\d{2}):(\d{2})$/.exec(text);
+  if (!match) throw new Error("Preencha os horários no formato 09:00.");
+  const h = Number(match[1]), m = Number(match[2]);
+  if (h > 24 || m > 59 || (h === 24 && m !== 0)) throw new Error("Revise os horários do atendimento humano.");
+  return h * 60 + m;
 }
+
 export function MonthlyRoiEditor({ tenantId, report: r }: { tenantId: string; report: MonthlyReport }) {
   const c = r.assumptions;
+  const [open, setOpen] = useState(false);
   const [timezone, setTimezone] = useState(c.timezone);
-  const [procedures, setProcedures] = useState(c.procedures.map((p) => p.name));
+  const [hoursConfirmed, setHoursConfirmed] = useState(c.humanHours !== null);
+  const [hours, setHours] = useState<HourRange[][]>(() => Array.from({ length: 7 }, (_, day) => c.humanHours?.[day].map((h) => ({ start: minuteLabel(h.start), end: minuteLabel(h.end) })) ?? []));
+  const [procedures, setProcedures] = useState(() => c.procedures.map((p, id) => ({ ...p, id })));
+  const nextId = useRef(procedures.length);
+  const [untyped, setUntyped] = useState(c.countUntypedAsEvaluations);
+  const [statuses, setStatuses] = useState(c.completedStatusTypes);
   const [error, setError] = useState<string | null>(null);
   const [actionFeedback, setActionFeedback] = useState<{ ok: boolean; error?: string; info?: string } | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
   const [busy, start] = useTransition();
   const [state, submit, saving] = useActionState(saveMonthlyRoi.bind(null, tenantId, r.month), null);
+  const confirmNavigation = useUnsavedNavigation();
   const locked = r.status === "ready";
   const pending = busy || saving;
-  const time = (v: number) => `${String(Math.floor(v / 60)).padStart(2, "0")}:${String(v % 60).padStart(2, "0")}`;
   const act = (fn: () => Promise<{ ok: boolean; error?: string; info?: string }>) => start(async () => {
     try { setActionFeedback(await fn()); } catch { setActionFeedback({ ok: false, error: "Não foi possível salvar. Tente novamente." }); }
   });
-  return <Card>
-    <CardTitle>Revisão mensal · Mavellium</CardTitle>
-    <p className="mb-4 text-sm text-neutral panel:text-white/55">Preencha os números levantados com a clínica (P-78). Campos vazios ficam pendentes. O fechamento congela esta competência; o envio e a reunião são registrados depois que acontecerem.</p>
-    {r.assumptionsFromMonth && <p className="mb-4 text-sm text-warn">Premissas copiadas de {r.assumptionsFromMonth} para facilitar a preparação. Confira e salve a revisão deste mês antes de fechar.</p>}
-    <form onSubmit={(event) => {
+  const moneyField = (name: string, label: string, value: number | null) => <Field label={label} htmlFor={`roi-${name}`}><CurrencyInput {...fieldProps(`roi-${name}`)} name={name} defaultValueCents={value} placeholder="Não informado" /></Field>;
+  const numberField = (name: string, label: string, value: number | null, hint?: string) => <Field label={label} htmlFor={`roi-${name}`} hint={hint}><Input {...fieldProps(`roi-${name}`, { hint: Boolean(hint) })} name={name} inputMode="decimal" defaultValue={decimal(value)} placeholder="Não informado" /></Field>;
+
+  return <Card className="text-ink panel:text-white/85">
+    <CardTitle action={<Badge tone={locked ? "success" : "neutral"}>{locked ? "Fechado" : "Rascunho"}</Badge>}>Preparação e entrega</CardTitle>
+    <div className="flex flex-wrap items-start justify-between gap-4">
+      <div className="max-w-xl text-sm text-neutral panel:text-white/60"><p>{locked ? `Relatório disponível para a clínica${r.decisionMaker ? ` · decisor: ${r.decisionMaker}` : ""}.` : "Confira as premissas e registre os ajustes antes de fechar o relatório."}</p><p className="mt-1">Prazo de entrega: {new Intl.DateTimeFormat("pt-BR", { timeZone: c.timezone }).format(new Date(r.dueAt))}.</p></div>
+      {!locked && <Button variant="outline" disabled={pending} aria-expanded={open} aria-controls="roi-edit-form" onClick={() => setOpen(!open)}><Pencil size={15} aria-hidden />{open ? "Recolher edição" : "Editar premissas e revisão"}<ChevronDown size={15} aria-hidden className={open ? "rotate-180" : ""} /></Button>}
+    </div>
+    {!locked && <UnsavedForm id="roi-edit-form" hidden={!open} result={state} label="Revisão do relatório mensal" className="mt-6 space-y-6 border-t border-ink/10 pt-6 panel:border-white/10" onSubmit={(event) => {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
       try {
-        const assumptions = { timezone, humanHours: humanHours(form),
-          attendantMonthlyCents: readNumber(form.get("attendantMonthlyCents"), 100),
-          attendantMonthlyHours: readNumber(form.get("attendantMonthlyHours")),
-          minutesPerConversation: readNumber(form.get("minutesPerConversation")),
-          investmentCents: readNumber(form.get("investmentCents"), 100),
-          procedureVariable: String(form.get("procedureVariable") ?? ""),
-          evaluationTypes: String(form.get("evaluationTypes") ?? "").split("\n").map((v) => v.trim()).filter(Boolean),
-          countUntypedAsEvaluations: form.get("countUntypedAsEvaluations") === "on",
-          completedStatusTypes: form.getAll("completedStatusTypes").map(String),
-          procedures: procedures.map((_, i) => ({ name: String(form.get(`procedure-${i}`) ?? ""),
-            ticketCents: readNumber(form.get(`ticket-${i}`), 100), conversionBps: readNumber(form.get(`conversion-${i}`), 100) })),
+        const assumptions = { timezone, humanHours: hoursConfirmed ? hours.map((day) => day.map((h) => ({ start: readTime(h.start), end: readTime(h.end) }))) : null,
+          attendantMonthlyCents: readNumber(form.get("attendantMonthlyCents"), 100, true), attendantMonthlyHours: readNumber(form.get("attendantMonthlyHours")),
+          minutesPerConversation: readNumber(form.get("minutesPerConversation")), investmentCents: readNumber(form.get("investmentCents"), 100, true),
+          procedureVariable: String(form.get("procedureVariable") ?? ""), evaluationTypes: String(form.get("evaluationTypes") ?? "").split("\n").map((v) => v.trim()).filter(Boolean),
+          countUntypedAsEvaluations: untyped, completedStatusTypes: statuses,
+          procedures: procedures.map((p) => ({ name: String(form.get(`procedure-${p.id}`) ?? ""), ticketCents: readNumber(form.get(`ticket-${p.id}`), 100, true), conversionBps: readNumber(form.get(`conversion-${p.id}`), 100) })),
         };
-        form.set("assumptions", JSON.stringify(assumptions));
-        setError(null);
-        start(() => submit(form));
+        form.set("assumptions", JSON.stringify(assumptions)); setError(null); startTransition(() => submit(form));
       } catch (err) { setError(err instanceof Error ? err.message : "Revise os campos."); }
-    }} className="space-y-5">
-      <fieldset disabled={locked || pending} className="space-y-5 disabled:opacity-65">
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <label className="text-sm">Mensalidade / investimento (R$)<Input name="investmentCents" inputMode="decimal" defaultValue={decimal(c.investmentCents, 100)} /></label>
-          <label className="text-sm">Custo mensal do atendente (R$)<Input name="attendantMonthlyCents" inputMode="decimal" defaultValue={decimal(c.attendantMonthlyCents, 100)} /></label>
-          <label className="text-sm">Carga mensal do atendente (horas)<Input name="attendantMonthlyHours" inputMode="decimal" defaultValue={decimal(c.attendantMonthlyHours)} /></label>
-          <label className="text-sm">Minutos humanos por conversa (estimativa)<Input name="minutesPerConversation" inputMode="decimal" defaultValue={decimal(c.minutesPerConversation)} /></label>
-        </div>
-        <div className="max-w-sm"><p id="monthly-zone" className="mb-1 text-sm">Fuso da clínica</p><SelectMenu label="Fuso da clínica" labelledBy="monthly-zone" options={TIMEZONES} value={timezone} onChange={setTimezone} disabled={locked || pending} /></div>
-        <div><label className="flex items-center gap-2 text-sm"><input type="checkbox" name="hoursConfirmed" defaultChecked={c.humanHours !== null} />Horário humano levantado e conferido</label>
-          <p className="my-2 text-xs text-neutral panel:text-white/55">Ex.: 08:00-12:00,13:00-18:00. Dia vazio = fechado, quando o horário está conferido. Use o expediente do atendente, que pode ser diferente da agenda de consultas.</p>
-          <div className="grid gap-3 sm:grid-cols-4">{["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"].map((day, i) => <label key={day} className="text-sm">{day}<Input name={`day-${i}`} defaultValue={c.humanHours?.[i].map((h) => `${time(h.start)}-${time(h.end)}`).join(",") ?? ""} placeholder="Fechado" /></label>)}</div>
-        </div>
-        <div><p className="mb-2 text-sm font-medium">Ticket e conversão avaliação → tratamento por procedimento</p>
-          <div className="space-y-3">{procedures.map((_, i) => <div key={i} className="grid gap-3 sm:grid-cols-3">
-            <label className="text-xs">Procedimento<Input name={`procedure-${i}`} maxLength={60} defaultValue={c.procedures[i]?.name ?? ""} required /></label>
-            <label className="text-xs">Ticket médio (R$)<Input name={`ticket-${i}`} inputMode="decimal" defaultValue={decimal(c.procedures[i]?.ticketCents ?? null, 100)} /></label>
-            <label className="text-xs">Conversão (%)<Input name={`conversion-${i}`} inputMode="decimal" defaultValue={decimal(c.procedures[i]?.conversionBps ?? null, 100)} /></label>
+    }}>
+      {r.assumptionsFromMonth && <Alert>Premissas trazidas de {r.assumptionsFromMonth.split("-").reverse().join("/")}. Confira os valores e salve a revisão deste mês.</Alert>}
+      <fieldset disabled={pending} className="min-w-0 space-y-8">
+        <section className="space-y-4"><CardTitle as="h3" hint="Campos vazios ficam pendentes até serem levantados com a clínica.">Investimento e equipe</CardTitle><div className="grid items-end gap-5 sm:grid-cols-2 xl:grid-cols-4">
+          {moneyField("investmentCents", "Mensalidade do Fechai (R$)", c.investmentCents)}{moneyField("attendantMonthlyCents", "Custo mensal do atendente (R$)", c.attendantMonthlyCents)}
+          {numberField("attendantMonthlyHours", "Carga mensal do atendente (h)", c.attendantMonthlyHours)}{numberField("minutesPerConversation", "Tempo humano por conversa (min)", c.minutesPerConversation, "Estimativa usada para calcular a economia.")}
+        </div></section>
+        <section className="space-y-4 border-t border-ink/10 pt-6 panel:border-white/10">
+          <CardTitle as="h3" hint="A receita considera somente contatos cuja primeira mensagem chegou fora deste expediente.">Horário de atendimento humano</CardTitle>
+          <div className="flex flex-wrap items-center justify-between gap-4"><div className="flex items-center gap-3"><Switch checked={hoursConfirmed} onCheckedChange={setHoursConfirmed} disabled={pending} label="Horário humano conferido com a clínica" /><span className="text-sm">Horário conferido com a clínica</span></div><div className="w-full sm:w-64"><SelectMenu label="Fuso da clínica" options={TIMEZONES} value={timezone} onChange={setTimezone} disabled={pending} /></div></div>
+          <input type="hidden" name="humanHours" value={JSON.stringify({ hoursConfirmed, hours })} />
+          <p className="text-sm text-neutral panel:text-white/55">Use o expediente da recepção. Adicione um período para cada turno; deixe as pausas fora dos intervalos.</p>
+          {!hoursConfirmed && <Alert tone="warn">Confirme o expediente para separar atendimentos dentro e fora do horário.</Alert>}
+          <div className="divide-y divide-ink/10 rounded-control border border-ink/10 panel:divide-white/10 panel:border-white/10">{DAYS.map((day, index) => <div key={day} className="flex flex-wrap items-start gap-3 p-3 sm:p-4">
+            <div className="flex w-full shrink-0 items-center gap-3 pt-2 sm:w-36"><Switch label={`Atendimento humano: ${day}`} checked={hours[index].length > 0} disabled={pending} onCheckedChange={(checked) => setHours(hours.map((h, i) => i === index ? checked ? [{ start: "09:00", end: "18:00" }] : [] : h))} /><span className="text-sm font-medium">{day}</span></div>
+            <div className="min-w-0 flex-1 space-y-3">{hours[index].length === 0 ? <p className="py-2 text-sm text-neutral panel:text-white/50">Sem atendimento humano</p> : hours[index].map((range, j) => <div key={j} className="flex flex-wrap items-end gap-2">
+              {(["start", "end"] as const).map((key) => <Field key={key} htmlFor={`hour-${index}-${j}-${key}`} label={key === "start" ? "Das" : "Até"} className="w-24"><Input {...fieldProps(`hour-${index}-${j}-${key}`)} inputMode="numeric" placeholder="09:00" maxLength={5} value={range[key]} onChange={(e) => setHours(hours.map((h, i) => i === index ? h.map((v, k) => k === j ? { ...v, [key]: e.target.value } : v) : h))} /></Field>)}
+              <Button type="button" size="icon" variant="ghost" aria-label={`Remover período ${j + 1} de ${day}`} onClick={() => setHours(hours.map((h, i) => i === index ? h.filter((_, k) => k !== j) : h))}><Trash2 size={15} aria-hidden /></Button>
+              {j === hours[index].length - 1 && hours[index].length < 4 && <Button type="button" size="sm" variant="ghost" onClick={() => setHours(hours.map((h, i) => i === index ? [...h, { start: "13:00", end: "18:00" }] : h))}><Plus size={14} aria-hidden />Período</Button>}
+            </div>)}</div>
           </div>)}</div>
-          <div className="mt-3 flex gap-2"><Button type="button" size="sm" variant="outline" disabled={procedures.length >= 12} onClick={() => setProcedures([...procedures, ""])}>Adicionar procedimento</Button>{procedures.length > 0 && <Button type="button" size="sm" variant="ghost" onClick={() => setProcedures(procedures.slice(0, -1))}>Remover último</Button>}</div>
-        </div>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <label className="text-sm">Variável da conversa com o procedimento<Input name="procedureVariable" maxLength={60} defaultValue={c.procedureVariable} /><span className="text-xs text-neutral panel:text-white/55">Nome da chave em Agentes → Variáveis. Os valores precisam corresponder aos procedimentos acima.</span></label>
-          <label className="text-sm">Tipos de atendimento que são avaliações<Textarea name="evaluationTypes" defaultValue={c.evaluationTypes.join("\n")} /><span className="text-xs text-neutral panel:text-white/55">Um nome exato por linha, conforme a ação Agendar horário.</span></label>
-        </div>
-        <label className="flex items-start gap-2 text-sm"><input type="checkbox" name="countUntypedAsEvaluations" defaultChecked={c.countUntypedAsEvaluations} />Conferi que os agendamentos antigos sem tipo, criados pelo agente, são avaliações. Essa confirmação vale só para esta competência.</label>
-        <div><p className="mb-2 text-sm font-medium">Status do Clinicorp que comprovam avaliação realizada</p>
-          <p className="mb-2 text-xs text-neutral panel:text-white/55">Selecione após conferir com a clínica. “Confirmado” e “agendado” não comprovam comparecimento.</p>
-          {[...new Map([...c.completedStatusTypes.map((type) => ({ type, description: `${type} (salvo)` })), ...r.clinicorpStatusTypes].map((s) => [s.type, s])).values()].map((s) => <label key={s.type} className="mr-4 inline-flex items-center gap-2 text-sm"><input type="checkbox" name="completedStatusTypes" value={s.type} disabled={s.type.toUpperCase() === "CONFIRMED"} defaultChecked={c.completedStatusTypes.includes(s.type)} />{s.description} · {s.type}</label>)}
-          {r.clinicorpStatusTypes.length === 0 && <p className="text-sm text-warn">Conecte o Clinicorp para conferir os status. Sem integração, apenas consultas marcadas como realizadas na agenda local comprovam comparecimento.</p>}
-        </div>
-        <label className="block text-sm">Decisor que recebe o relatório<Input name="decisionMaker" maxLength={100} defaultValue={r.decisionMaker} /></label>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <label className="text-sm">O que ajustamos no agente (até 400 caracteres)<Textarea name="adjustments" maxLength={400} defaultValue={r.adjustments} /></label>
-          <label className="text-sm">Próximo mês (até 400 caracteres)<Textarea name="nextMonth" maxLength={400} defaultValue={r.nextMonth} /></label>
-        </div>
-        <Button type="submit" loading={saving}>Salvar revisão deste mês</Button>
-      </fieldset>
-      <FormFeedback error={error ?? state?.error} info={state?.info} />
-    </form>
-    <div className="mt-6 space-y-3 border-t border-ink/10 pt-5 panel:border-white/10">
-      {!locked && !r.current.trackingComplete && <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={acknowledged} onChange={(e) => setAcknowledged(e.target.checked)} />Revisei o aviso de cobertura parcial: os eventos históricos ausentes serão apresentados como não medidos.</label>}
-      <div className="flex flex-wrap gap-3">
-        <ButtonLink href={`/admin/relatorios/${tenantId}/pdf?mes=${r.month}`} variant="outline">Exportar PDF de 1 página{locked ? "" : " · rascunho"}</ButtonLink>
-        {!locked ? <Button loading={busy} disabled={pending || r.partial} onClick={() => act(() => finalizeMonthlyRoi(tenantId, r.month, acknowledged))}>Fechar para entrega</Button>
-          : <><Button disabled={pending || Boolean(r.sentAt)} loading={busy} onClick={() => act(() => recordMonthlyDelivery(tenantId, r.month, "sent"))}>{r.sentAt ? "Envio registrado" : "Já enviei ao decisor"}</Button><Button variant="outline" disabled={pending || !r.sentAt || Boolean(r.meetingAt)} onClick={() => act(() => recordMonthlyDelivery(tenantId, r.month, "meeting"))}>{r.meetingAt ? "Reunião registrada" : "Reunião realizada"}</Button>{!r.sentAt && <Button variant="ghost" disabled={pending} onClick={() => act(() => reopenMonthlyRoi(tenantId, r.month))}>Reabrir revisão</Button>}</>}
-      </div>
-      <FormFeedback error={actionFeedback?.error} info={actionFeedback?.info} />
-      <p className="text-xs text-neutral panel:text-white/55">O envio é feito pela Mavellium com o PDF exportado. Estes botões registram a entrega e a apresentação; não enviam mensagens automaticamente.</p>
+        </section>
+        <section className="space-y-4 border-t border-ink/10 pt-6 panel:border-white/10"><CardTitle as="h3" hint="Conversão é a porcentagem das avaliações que viram tratamento.">Ticket e conversão por procedimento</CardTitle>
+          {procedures.length === 0 && <p className="text-sm text-neutral panel:text-white/55">Adicione os procedimentos para estimar a receita.</p>}
+          <div className="space-y-4">{procedures.map((p) => <div key={p.id} className="grid items-end gap-4 rounded-control border border-ink/10 p-4 panel:border-white/10 sm:grid-cols-[1fr_1fr_1fr_auto]">
+            <Field label="Procedimento" htmlFor={`procedure-${p.id}`}><Input {...fieldProps(`procedure-${p.id}`)} name={`procedure-${p.id}`} maxLength={60} defaultValue={p.name} required placeholder="Ex.: Implante" /></Field>
+            {moneyField(`ticket-${p.id}`, "Ticket médio (R$)", p.ticketCents)}<Field label="Conversão (%)" htmlFor={`conversion-${p.id}`}><Input {...fieldProps(`conversion-${p.id}`)} name={`conversion-${p.id}`} inputMode="decimal" defaultValue={decimal(p.conversionBps, 100)} placeholder="Ex.: 30" /></Field>
+            <Button type="button" size="icon" variant="ghost" aria-label={`Remover procedimento ${p.name || "sem nome"}`} onClick={() => setProcedures(procedures.filter((v) => v.id !== p.id))}><Trash2 size={16} aria-hidden /></Button>
+          </div>)}</div>
+          <Button type="button" size="sm" variant="outline" disabled={procedures.length >= 12} onClick={() => setProcedures([...procedures, { id: nextId.current++, name: "", ticketCents: null, conversionBps: null }])}><Plus size={14} aria-hidden />Adicionar procedimento</Button>
+        </section>
+        <section className="space-y-4 border-t border-ink/10 pt-6 panel:border-white/10"><CardTitle as="h3">Revisão para o decisor</CardTitle>
+          <Field label="Nome do decisor" htmlFor="roi-decisionMaker"><Input {...fieldProps("roi-decisionMaker")} name="decisionMaker" maxLength={100} defaultValue={r.decisionMaker} placeholder="Quem recebe e acompanha o resultado" /></Field>
+          <div className="grid gap-5 lg:grid-cols-2"><Field label="O que ajustamos no agente" htmlFor="roi-adjustments" hint="Até 400 caracteres. Cite os ajustes feitos neste mês."><Textarea {...fieldProps("roi-adjustments", { hint: true })} name="adjustments" maxLength={400} defaultValue={r.adjustments} rows={4} /></Field><Field label="Próximo mês" htmlFor="roi-nextMonth" hint="Até 400 caracteres. Descreva as próximas ações."><Textarea {...fieldProps("roi-nextMonth", { hint: true })} name="nextMonth" maxLength={400} defaultValue={r.nextMonth} rows={4} /></Field></div>
+        </section>
+        <details className="rounded-control border border-ink/10 p-4 panel:border-white/10"><summary className="cursor-pointer text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-iris">Critérios de classificação e Clinicorp</summary><div className="mt-5 space-y-5">
+          <div className="grid gap-5 lg:grid-cols-2"><Field label="Variável que identifica o procedimento" htmlFor="roi-procedureVariable" hint="Use o nome configurado em Agentes → Variáveis."><Input {...fieldProps("roi-procedureVariable", { hint: true })} name="procedureVariable" maxLength={60} defaultValue={c.procedureVariable} /></Field><Field label="Tipos de atendimento considerados avaliações" htmlFor="roi-evaluationTypes" hint="Um nome por linha, conforme o agendamento do agente."><Textarea {...fieldProps("roi-evaluationTypes", { hint: true })} name="evaluationTypes" defaultValue={c.evaluationTypes.join("\n")} /></Field></div>
+          <div className="flex items-start gap-3"><Switch label="Agendamentos antigos sem tipo conferidos como avaliações" checked={untyped} onCheckedChange={setUntyped} disabled={pending} /><p className="text-sm">Conferi que as marcações antigas do agente sem tipo são avaliações.</p></div><input type="hidden" name="untypedConfirmed" value={String(untyped)} />
+          <div><p className="text-sm font-medium">Status que comprovam comparecimento no Clinicorp</p><p className="mt-1 text-sm text-neutral panel:text-white/55">Confira com a clínica. Confirmado e agendado não comprovam presença.</p></div>
+          {[...new Map([...c.completedStatusTypes.map((type) => ({ type, description: type })), ...r.clinicorpStatusTypes].map((s) => [s.type, s])).values()].map((s) => <div key={s.type} className="flex items-center gap-3"><Switch label={`Comparecimento: ${s.description}`} disabled={pending || s.type.toUpperCase() === "CONFIRMED"} checked={statuses.includes(s.type)} onCheckedChange={(checked) => setStatuses(checked ? [...statuses, s.type] : statuses.filter((type) => type !== s.type))} /><span className="text-sm">{s.description}</span></div>)}<input type="hidden" name="completedStatusTypes" value={JSON.stringify(statuses)} />
+          {r.clinicorpStatusTypes.length === 0 && <Alert>Sem status recebidos do Clinicorp. As avaliações marcadas como realizadas na agenda do Fechai continuam válidas.</Alert>}
+        </div></details>
+        <Button type="submit" loading={saving}><Check size={15} aria-hidden />Salvar revisão</Button>
+      </fieldset><FormFeedback error={error ?? state?.error} info={state?.info} />
+    </UnsavedForm>}
+    <div className="mt-5 space-y-4 border-t border-ink/10 pt-5 panel:border-white/10">
+      {!locked && !r.current.trackingComplete && <div className="flex items-start gap-3"><Switch checked={acknowledged} onCheckedChange={setAcknowledged} disabled={pending} label="Cobertura parcial revisada" /><p className="text-sm text-neutral panel:text-white/65">Revisei a cobertura parcial. Os eventos históricos ausentes aparecerão como não medidos.</p></div>}
+      <div className="flex flex-wrap items-center gap-3"><ButtonLink href={`/admin/relatorios/${tenantId}/pdf?mes=${r.month}`} variant="outline" size="sm"><Download size={14} aria-hidden />PDF de 1 página{locked ? "" : " · rascunho"}</ButtonLink>
+        {!locked ? <Button size="sm" loading={busy} disabled={pending || r.partial} onClick={() => confirmNavigation(() => act(() => finalizeMonthlyRoi(tenantId, r.month, acknowledged)))}>Fechar para entrega</Button> : <>
+          <Button size="sm" disabled={pending || Boolean(r.sentAt)} loading={busy} onClick={() => act(() => recordMonthlyDelivery(tenantId, r.month, "sent"))}>{r.sentAt ? "Envio registrado" : "Registrar envio ao decisor"}</Button><Button size="sm" variant="outline" disabled={pending || !r.sentAt || Boolean(r.meetingAt)} onClick={() => act(() => recordMonthlyDelivery(tenantId, r.month, "meeting"))}>{r.meetingAt ? "Reunião registrada" : "Registrar reunião"}</Button>{!r.sentAt && <Button size="sm" variant="ghost" disabled={pending} onClick={() => act(() => reopenMonthlyRoi(tenantId, r.month))}>Reabrir revisão</Button>}
+        </>}
+      </div>{r.partial && !locked && <p className="text-xs text-neutral panel:text-white/55">O fechamento fica disponível após o fim do mês.</p>}<FormFeedback error={actionFeedback?.error} info={actionFeedback?.info} /><p className="text-xs text-neutral panel:text-white/55">A Mavellium envia o PDF e apresenta os resultados. Registre o envio e a reunião após acontecerem.</p>
     </div>
   </Card>;
 }

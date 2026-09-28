@@ -7,6 +7,12 @@ Guia para qualquer agente/pessoa dar prosseguimento nesta seção. Cobre **o que
 ### ROI mensal odontológico (P-79)
 
 A visão `?visao=mensal&mes=YYYY-MM` apresenta relatórios revisados pela Mavellium.
+No tenant, a aba só aparece quando há relatório `ready` com snapshot. O seletor
+oferece somente competências publicadas e abre a mais recente; um mês ausente
+cai na última publicação, e uma conta sem publicações fica na visão Operacional.
+O `MonthPicker` compartilhado usa `SelectMenu` e setas, sem input mensal nativo.
+No admin, o retorno vem antes da edição recolhível, com `Field`, `CurrencyInput`
+e `Switch`. Alterações de formulário são protegidas ao navegar entre meses.
 O admin prepara em `/admin/relatorios`, acessível pelo menu **ROI mensal** e
 pelo painel de edição da conta. O PDF A4 tem uma página e as cinco partes
 solicitadas. Leia [`docs/P-79-relatorio-mensal-roi.md`](../../../../docs/P-79-relatorio-mensal-roi.md)

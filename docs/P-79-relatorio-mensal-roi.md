@@ -21,13 +21,17 @@ a especificação citada no Obsidian não estava disponível.
 6. Salva, confere o relatório e fecha após o término do mês. Pendências de
    dados e premissas bloqueiam o fechamento. Eventos históricos com cobertura
    parcial exigem ciência explícita; o aviso continua no PDF e no painel.
-7. Exporta o PDF A4 de uma página, envia ao decisor e registra **Já enviei ao
-   decisor**. Depois da reunião curta, registra **Reunião realizada**.
+7. Exporta o PDF A4 de uma página, envia ao decisor e usa **Registrar envio ao
+   decisor**. Depois da reunião curta, usa **Registrar reunião**.
 
 O painel registra o envio e a reunião feitos pela equipe. Não há disparo
 automático de e-mail/WhatsApp nem automação de apresentação. O cliente vê a
 versão fechada em **Relatórios → ROI mensal** e pode baixar o mesmo PDF.
 Rascunhos e a revisão das premissas são restritos ao superadmin.
+A aba do tenant aparece somente quando existe uma publicação fechada com
+snapshot. Abre a competência publicada mais recente e oferece apenas meses
+disponíveis. Uma URL com competência indisponível exibe a última publicação;
+sem publicações, a página permanece na visão Operacional.
 
 ## Regra do ROI
 

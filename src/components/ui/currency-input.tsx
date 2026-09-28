@@ -25,9 +25,12 @@ const MAX_DIGITS = 10;
  */
 export const CurrencyInput = React.forwardRef<
   HTMLInputElement,
-  Omit<React.InputHTMLAttributes<HTMLInputElement>, "value" | "onChange" | "defaultValue">
->(function CurrencyInput({ className, ...props }, ref) {
-  const [digits, setDigits] = React.useState("");
+  Omit<React.InputHTMLAttributes<HTMLInputElement>, "value" | "onChange" | "defaultValue"> & {
+    /** Valor inicial salvo, em centavos. null mantém o campo pendente. */
+    defaultValueCents?: number | null;
+  }
+>(function CurrencyInput({ className, defaultValueCents, ...props }, ref) {
+  const [digits, setDigits] = React.useState(() => defaultValueCents == null ? "" : String(defaultValueCents));
 
   const display = digits === "" ? "" : BRL.format(Number(digits) / 100);
 

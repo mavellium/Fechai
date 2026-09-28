@@ -3,10 +3,11 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { monthKey } from "@/modules/reports/monthly-config";
 import { computeMonthlyReport } from "@/modules/reports/monthly";
-import { MonthlyView } from "@/app/(dashboard)/relatorios/MonthlyView";
+import { MonthlyView, MonthlyRoiSummary } from "@/app/(dashboard)/relatorios/MonthlyView";
 import { PageHeader } from "@/components/ui/page-header";
-import { Button, ButtonLink } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { ButtonLink } from "@/components/ui/button";
+import { MonthPicker } from "@/components/ui/month-picker";
+import { ArrowLeft } from "lucide-react";
 import { MonthlyRoiEditor } from "./MonthlyRoiEditor";
 
 export default async function MonthlyRoiPage({ params, searchParams }: {
@@ -18,10 +19,10 @@ export default async function MonthlyRoiPage({ params, searchParams }: {
   if (!await prisma.tenant.findUnique({ where: { id: tenantId }, select: { id: true } })) notFound();
   const report = await computeMonthlyReport(tenantId, month);
   return <div className="space-y-6">
-    <PageHeader eyebrow="relatórios mensais · P-79" title={report.tenantName} description={`ROI estimado de ${report.label}. Entrega até dia 5 do mês seguinte.`} />
-    <div className="flex flex-wrap items-end justify-between gap-3"><form className="flex items-end gap-3"><label className="text-sm">Competência<Input type="month" name="mes" defaultValue={month} required /></label><Button type="submit" variant="outline">Ver mês</Button></form><ButtonLink href="/admin/relatorios" variant="ghost">Todas as clínicas</ButtonLink></div>
-    <p className="text-sm">{report.status === "ready" ? "Fechado para entrega" : "Em revisão"} · prazo: {new Intl.DateTimeFormat("pt-BR", { timeZone: report.assumptions.timezone }).format(new Date(report.dueAt))}{report.sentAt ? " · enviado ao decisor" : " · envio pendente"}{report.meetingAt ? " · apresentado em reunião" : " · reunião pendente"}</p>
+    <PageHeader eyebrow="ROI mensal" title={report.tenantName} description="Confira o retorno, revise as premissas e prepare a entrega ao decisor." />
+    <div className="flex flex-wrap items-center justify-between gap-3"><MonthPicker value={month} href={`/admin/relatorios/${tenantId}`} /><ButtonLink href={`/admin/relatorios?mes=${month}`} size="sm" variant="ghost"><ArrowLeft size={14} aria-hidden />Todas as clínicas</ButtonLink></div>
+    <MonthlyRoiSummary report={report} />
     <MonthlyRoiEditor key={`${month}:${report.status}`} tenantId={tenantId} report={report} />
-    <MonthlyView report={report} />
+    <MonthlyView report={report} showSummary={false} />
   </div>;
 }
