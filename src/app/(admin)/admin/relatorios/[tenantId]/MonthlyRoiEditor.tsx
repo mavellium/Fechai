@@ -17,7 +17,9 @@ import { minuteLabel } from "@/modules/scheduling/weekly-availability";
 import type { MonthlyReport } from "@/modules/reports/monthly";
 import { monthlyOverridesSchema } from "@/modules/reports/monthly-overrides";
 import { MonthlyMetricFields } from "./MonthlyMetricFields";
-import { saveMonthlyRoi, finalizeMonthlyRoi, reopenMonthlyRoi, recordMonthlyDelivery } from "./actions";
+import { MonthlyAgentImport } from "./MonthlyAgentImport";
+import { monthlyScheduleSuggestion, type MonthlyImportSources } from "@/modules/reports/monthly-import";
+import { saveMonthlyRoi, finalizeMonthlyRoi, reopenMonthlyRoi, recordMonthlyDelivery, previewMonthlyRoiImport } from "./actions";
 
 const decimal = (v: number | null, scale = 1) => v === null ? "" : String(v / scale).replace(".", ",");
 function readNumber(value: FormDataEntryValue | null, scale = 1, currency = false): number | null {
@@ -38,13 +40,21 @@ function readTime(text: string) {
   return h * 60 + m;
 }
 
-export function MonthlyRoiEditor({ tenantId, report: r }: { tenantId: string; report: MonthlyReport }) {
+export function MonthlyRoiEditor({ tenantId, report: r, sources }: { tenantId: string; report: MonthlyReport; sources: MonthlyImportSources }) {
   const c = r.assumptions;
+  const [agentIds, setAgentIds] = useState(c.agentIds ?? []);
+  const suggested = monthlyScheduleSuggestion(sources.agents, agentIds);
+  const formRef = useRef<HTMLFormElement>(null);
+  const [loaded, setLoaded] = useState(r);
+  const [importVersion, setImportVersion] = useState(0);
+  const [importedInvestment, setImportedInvestment] = useState<number | null>(null);
+  const [importInfo, setImportInfo] = useState<string | null>(null);
+  const [hoursOrigin, setHoursOrigin] = useState(c.humanHours ? "" : suggested.names.join(", "));
   const [open, setOpen] = useState(true);
   const [metricOverrides, setMetricOverrides] = useState(r.metricOverrides ?? { current: {}, previous: {} });
-  const [timezone, setTimezone] = useState(c.timezone);
+  const [timezone, setTimezone] = useState(c.humanHours ? c.timezone : suggested.timezone ?? c.timezone);
   const [hoursConfirmed, setHoursConfirmed] = useState(c.humanHours !== null);
-  const [hours, setHours] = useState<HourRange[][]>(() => Array.from({ length: 7 }, (_, day) => c.humanHours?.[day].map((h) => ({ start: minuteLabel(h.start), end: minuteLabel(h.end) })) ?? []));
+  const [hours, setHours] = useState<HourRange[][]>(() => Array.from({ length: 7 }, (_, day) => (c.humanHours ?? suggested.hours)?.[day].map((h) => ({ start: minuteLabel(h.start), end: minuteLabel(h.end) })) ?? []));
   const [procedures, setProcedures] = useState(() => c.procedures.map((p, id) => ({ ...p, id })));
   const nextId = useRef(procedures.length);
   const [untyped, setUntyped] = useState(c.countUntypedAsEvaluations);
@@ -60,8 +70,32 @@ export function MonthlyRoiEditor({ tenantId, report: r }: { tenantId: string; re
   const act = (fn: () => Promise<{ ok: boolean; error?: string; info?: string }>) => start(async () => {
     try { setActionFeedback(await fn()); } catch { setActionFeedback({ ok: false, error: "Não foi possível salvar. Tente novamente." }); }
   });
-  const moneyField = (name: string, label: string, value: number | null) => <Field label={label} htmlFor={`roi-${name}`}><CurrencyInput {...fieldProps(`roi-${name}`)} name={name} defaultValueCents={value} placeholder="Não informado" /></Field>;
+  const moneyField = (name: string, label: string, value: number | null) => <Field label={label} htmlFor={`roi-${name}`}><CurrencyInput key={name === "investmentCents" ? `${name}:${importedInvestment}` : name} {...fieldProps(`roi-${name}`)} name={name} defaultValueCents={name === "investmentCents" ? importedInvestment ?? value : value} placeholder="Não informado" /></Field>;
   const numberField = (name: string, label: string, value: number | null, hint?: string) => <Field label={label} htmlFor={`roi-${name}`} hint={hint}><Input {...fieldProps(`roi-${name}`, { hint: Boolean(hint) })} name={name} inputMode="decimal" defaultValue={decimal(value)} placeholder="Não informado" /></Field>;
+  const readAssumptions = (form: FormData) => ({
+    agentIds, timezone, humanHours: hoursConfirmed ? hours.map((day) => day.map((h) => ({ start: readTime(h.start), end: readTime(h.end) }))) : null,
+    attendantMonthlyCents: readNumber(form.get("attendantMonthlyCents"), 100, true), attendantMonthlyHours: readNumber(form.get("attendantMonthlyHours")),
+    minutesPerConversation: readNumber(form.get("minutesPerConversation")), investmentCents: readNumber(form.get("investmentCents"), 100, true),
+    procedureVariable: String(form.get("procedureVariable") ?? ""), evaluationTypes: String(form.get("evaluationTypes") ?? "").split("\n").map((v) => v.trim()).filter(Boolean),
+    countUntypedAsEvaluations: untyped, completedStatusTypes: statuses,
+    procedures: procedures.map((p) => ({ name: String(form.get(`procedure-${p.id}`) ?? ""), ticketCents: readNumber(form.get(`ticket-${p.id}`), 100, true), conversionBps: readNumber(form.get(`conversion-${p.id}`), 100) })),
+  });
+  const importData = () => start(async () => {
+    if (!formRef.current) return;
+    try {
+      const form = new FormData(formRef.current);
+      form.set("assumptions", JSON.stringify(readAssumptions(form)));
+      const result = await previewMonthlyRoiImport(tenantId, r.month, form);
+      if (!result.ok) { setError(result.error); return; }
+      setLoaded(result.report); setImportVersion((v) => v + 1); setError(null);
+      if (!String(form.get("investmentCents") ?? "").trim()) setImportedInvestment(sources.priceCents);
+      if (!hoursConfirmed && suggested.hours) {
+        setHours(suggested.hours.map((day) => day.map((h) => ({ start: minuteLabel(h.start), end: minuteLabel(h.end) }))));
+        setTimezone(suggested.timezone!); setHoursOrigin(suggested.names.join(", "));
+      }
+      setImportInfo(`Dados carregados para ${agentIds.length ? result.report.agentNames?.join(", ") : "todos os agentes"}. Ajustes manuais mantidos; confira e salve a revisão.${suggested.warning ? ` ${suggested.warning}` : ""}`);
+    } catch { setError("Não foi possível importar. Confira os campos e tente novamente."); }
+  });
 
   return <Card className="text-ink panel:text-white/85">
     <CardTitle action={<Badge tone={locked ? "success" : "neutral"}>{locked ? "Fechado" : "Rascunho"}</Badge>}>Preparação e entrega</CardTitle>
@@ -69,34 +103,31 @@ export function MonthlyRoiEditor({ tenantId, report: r }: { tenantId: string; re
       <div className="max-w-xl text-sm text-neutral panel:text-white/60"><p>{locked ? `Relatório disponível para a clínica${r.decisionMaker ? ` · decisor: ${r.decisionMaker}` : ""}.` : "Os indicadores e as premissas desta competência já estão carregados. Confira os dados e registre os ajustes antes de fechar."}</p><p className="mt-1">Prazo de entrega: {new Intl.DateTimeFormat("pt-BR", { timeZone: c.timezone }).format(new Date(r.dueAt))}.</p></div>
       {!locked && <Button variant="outline" disabled={pending} aria-expanded={open} aria-controls="roi-edit-form" onClick={() => setOpen(!open)}><Pencil size={15} aria-hidden />{open ? "Recolher edição" : "Editar dados e revisão"}<ChevronDown size={15} aria-hidden className={open ? "rotate-180" : ""} /></Button>}
     </div>
-    {!locked && <UnsavedForm id="roi-edit-form" hidden={!open} result={state} label="Revisão do relatório mensal" className="mt-6 space-y-6 border-t border-ink/10 pt-6 panel:border-white/10" onSubmit={(event) => {
+    {!locked && <UnsavedForm ref={formRef} id="roi-edit-form" hidden={!open} result={state} label="Revisão do relatório mensal" className="mt-6 space-y-6 border-t border-ink/10 pt-6 panel:border-white/10" onSubmit={(event) => {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
       try {
         if (!monthlyOverridesSchema.safeParse(metricOverrides).success) throw new Error("Revise os indicadores: contagens devem ser inteiras e positivas ou zero; tempos podem ter decimais.");
-        const assumptions = { timezone, humanHours: hoursConfirmed ? hours.map((day) => day.map((h) => ({ start: readTime(h.start), end: readTime(h.end) }))) : null,
-          attendantMonthlyCents: readNumber(form.get("attendantMonthlyCents"), 100, true), attendantMonthlyHours: readNumber(form.get("attendantMonthlyHours")),
-          minutesPerConversation: readNumber(form.get("minutesPerConversation")), investmentCents: readNumber(form.get("investmentCents"), 100, true),
-          procedureVariable: String(form.get("procedureVariable") ?? ""), evaluationTypes: String(form.get("evaluationTypes") ?? "").split("\n").map((v) => v.trim()).filter(Boolean),
-          countUntypedAsEvaluations: untyped, completedStatusTypes: statuses,
-          procedures: procedures.map((p) => ({ name: String(form.get(`procedure-${p.id}`) ?? ""), ticketCents: readNumber(form.get(`ticket-${p.id}`), 100, true), conversionBps: readNumber(form.get(`conversion-${p.id}`), 100) })),
-        };
+        const assumptions = readAssumptions(form);
         form.set("assumptions", JSON.stringify(assumptions)); setError(null); startTransition(() => submit(form));
       } catch (err) { setError(err instanceof Error ? err.message : "Revise os campos."); }
     }}>
       {r.assumptionsFromMonth && <Alert>Premissas trazidas de {r.assumptionsFromMonth.split("-").reverse().join("/")}. Confira os valores e salve a revisão deste mês.</Alert>}
       <input type="hidden" name="revision" value={r.revision ?? ""} />
       <fieldset disabled={pending} className="min-w-0 space-y-8">
-        <MonthlyMetricFields report={r} value={metricOverrides} onChange={setMetricOverrides} />
+        <MonthlyAgentImport sources={sources} agentIds={agentIds} onChange={setAgentIds} onImport={importData} pending={pending} />
+        {importInfo && <Alert>{importInfo}</Alert>}
+        <MonthlyMetricFields key={importVersion} report={loaded} value={metricOverrides} onChange={setMetricOverrides} />
         <section className="space-y-4"><CardTitle as="h3" hint="Campos vazios ficam pendentes até serem levantados com a clínica.">Investimento e equipe</CardTitle><div className="grid items-end gap-5 sm:grid-cols-2 xl:grid-cols-4">
           {moneyField("investmentCents", "Mensalidade do Fechai (R$)", c.investmentCents)}{moneyField("attendantMonthlyCents", "Custo mensal do atendente (R$)", c.attendantMonthlyCents)}
           {numberField("attendantMonthlyHours", "Carga mensal do atendente (h)", c.attendantMonthlyHours)}{numberField("minutesPerConversation", "Tempo humano por conversa (min)", c.minutesPerConversation, "Estimativa usada para calcular a economia.")}
-        </div></section>
+        </div>{r.investmentSource && <p className="text-xs text-neutral panel:text-white/55">Mensalidade carregada de: {r.investmentSource}. Confira o valor cobrado nesta competência antes de salvar.</p>}</section>
         <section className="space-y-4 border-t border-ink/10 pt-6 panel:border-white/10">
           <CardTitle as="h3" hint="A receita considera somente contatos cuja primeira mensagem chegou fora deste expediente.">Horário de atendimento humano</CardTitle>
           <div className="flex flex-wrap items-center justify-between gap-4"><div className="flex items-center gap-3"><Switch checked={hoursConfirmed} onCheckedChange={setHoursConfirmed} disabled={pending} label="Horário humano conferido com a clínica" /><span className="text-sm">Horário conferido com a clínica</span></div><div className="w-full sm:w-64"><SelectMenu label="Fuso da clínica" options={TIMEZONES} value={timezone} onChange={setTimezone} disabled={pending} /></div></div>
           <input type="hidden" name="humanHours" value={JSON.stringify({ hoursConfirmed, hours })} />
           <p className="text-sm text-neutral panel:text-white/55">Use o expediente da recepção. Adicione um período para cada turno; deixe as pausas fora dos intervalos.</p>
+          {hoursOrigin && <p className="text-sm text-neutral panel:text-white/65">Grade importada de {hoursOrigin}. Confira se esses turnos correspondem ao atendimento da equipe humana.</p>}
           {!hoursConfirmed && <Alert tone="warn">Confirme o expediente para separar atendimentos dentro e fora do horário.</Alert>}
           <div className="divide-y divide-ink/10 rounded-control border border-ink/10 panel:divide-white/10 panel:border-white/10">{DAYS.map((day, index) => <div key={day} className="flex flex-wrap items-start gap-3 p-3 sm:p-4">
             <div className="flex w-full shrink-0 items-center gap-3 pt-2 sm:w-36"><Switch label={`Atendimento humano: ${day}`} checked={hours[index].length > 0} disabled={pending} onCheckedChange={(checked) => setHours(hours.map((h, i) => i === index ? checked ? [{ start: "09:00", end: "18:00" }] : [] : h))} /><span className="text-sm font-medium">{day}</span></div>

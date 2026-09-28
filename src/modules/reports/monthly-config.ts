@@ -5,6 +5,9 @@ const nullableNumber = (max: number) => z.number().finite().min(0).max(max).null
 const period = z.object({ start: z.number().int().min(0).max(1439), end: z.number().int().min(1).max(1440) })
   .refine((p) => p.end > p.start, "O fim do expediente deve vir depois do início.");
 export const monthlyAssumptionsSchema = z.object({
+  // Ausente ou vazio = todos os agentes da conta (compatível com revisões antigas).
+  agentIds: z.array(z.string().trim().min(1).max(100)).max(100)
+    .refine((ids) => new Set(ids).size === ids.length, "Agente duplicado na seleção.").optional(),
   timezone: z.string().refine((v) => TIMEZONES.some((t) => t.value === v), "Fuso inválido."),
   // [] em um dia = fechado; null = horário ainda não levantado.
   humanHours: z.array(z.array(period).max(4)).length(7).nullable().refine((days) => !days || days.every((day) => {

@@ -23,6 +23,11 @@ controle de publicação.
   Correções não são herdadas ao copiar premissas para outro mês.
 - `monthly-publication.ts`: lista apenas competências `ready` com snapshot;
   resolve a competência pedida ou a última publicação para o tenant.
+- `monthly-import.ts`: mensalidade atual da conta (override/plano), competência
+  inicial limitada ao cadastro e sugestão dos horários cadastrados nos agentes.
+  O escopo em `assumptions.agentIds` vale para o mês e o comparativo; seleção
+  ausente/vazia significa toda a conta. A grade só classifica horários depois
+  de conferida como expediente humano.
 
 - `service.ts`:
   - `computeTenantReport(tenantId)` — totais desde o início da conta (legado).

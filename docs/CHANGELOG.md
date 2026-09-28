@@ -2,6 +2,22 @@
 
 Uma linha por milestone concluído (mais recente no topo).
 
+## ROI mensal: dados da conta e importação por agente — 2026-09-28
+
+- Corrigida a competência inicial de contas novas: nunca abre mês anterior
+  ao cadastro; ao ajustar uma competência pedida, explica o motivo na tela.
+- Mensalidade ausente recebe preço negociado ou plano atual, mantendo zero,
+  premissas salvas e publicações congeladas. Origem visível para conferência.
+- Seleção de um ou mais agentes do tenant, prévia sem gravação e escopo mensal
+  persistido no JSON existente. Indicadores e comparativo seguem a seleção;
+  snapshots de escopo diferente não fornecem totais da seleção menor.
+- Sugestão de expediente pela grade cadastrada dos agentes, com pausas e
+  minutos preservados, união no mesmo fuso e conferência explícita do horário
+  humano. Configuração vazia não importa um horário padrão.
+- Correções manuais são preservadas. Tipos de avaliação, comparecimento,
+  ticket/conversão/custo continuam exigindo seus dados e conferências.
+- Contrato, limites e arquivos: [P-79](./P-79-relatorio-mensal-roi.md).
+
 ## ROI mensal: revisão, edição manual, PDF e listagem por cliente — 2026-09-28
 
 - Revisão administrativa carrega a competência e os dados existentes, com

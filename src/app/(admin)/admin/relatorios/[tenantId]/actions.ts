@@ -16,6 +16,30 @@ function invalidate(tenantId: string) {
   revalidatePath("/relatorios");
 }
 function validMonth(month: string) { return monthKey(month) === month; }
+async function validAgents(tenantId: string, ids: string[] = []) {
+  if (!ids.length) return true;
+  const agents = await prisma.agent.findMany({ where: { tenantId, id: { in: ids } }, select: { id: true } });
+  return agents.length === ids.length;
+}
+
+/** Prévia somente de leitura; configurações do agente e agenda não são alteradas. */
+export async function previewMonthlyRoiImport(tenantId: string, month: string, form: FormData): Promise<
+  { ok: true; report: MonthlyReport } | { ok: false; error: string }
+> {
+  await requireSuperadmin();
+  if (!validMonth(month)) return { ok: false, error: "Competência inválida." };
+  const oversized = payloadTooLarge(form);
+  if (oversized) return { ok: false, error: oversized };
+  let raw: unknown;
+  try { raw = JSON.parse(String(form.get("assumptions"))); } catch { return { ok: false, error: "Premissas inválidas." }; }
+  const parsed = monthlyAssumptionsSchema.safeParse(raw);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Revise as premissas." };
+  if (!await validAgents(tenantId, parsed.data.agentIds)) return { ok: false, error: "Selecione somente agentes deste cliente." };
+  const saved = await prisma.monthlyRoiReport.findUnique({ where: { tenantId_month: { tenantId, month } }, select: { status: true } });
+  if (saved?.status === "ready") return { ok: false, error: "Reabra a revisão antes de importar dados." };
+  return { ok: true, report: await computeMonthlyReport(tenantId, month, false, parsed.data) };
+}
+
 export async function saveMonthlyRoi(tenantId: string, month: string, _previous: Result | null, form: FormData): Promise<Result> {
   const session = await requireSuperadmin();
   if (!validMonth(month)) return { ok: false, error: "Competência inválida." };
@@ -36,6 +60,7 @@ export async function saveMonthlyRoi(tenantId: string, month: string, _previous:
   if (adjustments.length > 400 || nextMonth.length > 400 || decisionMaker.length > 100) return { ok: false, error: "Use até 400 caracteres em cada bloco e 100 no decisor para caber em uma página." };
   const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { id: true } });
   if (!tenant) return { ok: false, error: "Clínica não encontrada." };
+  if (!await validAgents(tenantId, parsed.data.agentIds)) return { ok: false, error: "Selecione somente agentes deste cliente." };
   // Transação e filtro de status: um fechamento concorrente não pode ser sobrescrito.
   const saved = await prisma.$transaction(async (tx) => {
     const existing = await tx.monthlyRoiReport.findUnique({ where: { tenantId_month: { tenantId, month } } });

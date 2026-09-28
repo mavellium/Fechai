@@ -51,7 +51,10 @@ Os estados são **Não iniciado**, **Em revisão** e **Fechado**; a ação é
 ### Dados carregados e correções manuais
 
 Na revisão individual, `mes=YYYY-MM` abre a competência pedida. Sem `mes`,
-abre a última revisão existente do cliente; sem revisões, o mês anterior.
+abre a última revisão existente do cliente; sem revisões, o mês anterior,
+limitado ao mês do cadastro. Uma competência pedida anterior ao cadastro
+abre o primeiro mês da conta e mostra um aviso. Assim, uma conta criada em
+setembro não abre agosto vazio na primeira revisão.
 O editor carrega as premissas salvas, os indicadores disponíveis de
 mensagens/agenda/Clinicorp e as correções já registradas. O admin pode corrigir
 os indicadores do mês e do comparativo: contatos, conversas/agendamentos/
@@ -88,6 +91,43 @@ O PDF A4 de uma página usa preto e cinza, com as imagens locais
 `public/brand/fechai-black.png` e `public/brand/mavellium-black.png` no
 cabeçalho. Não busca logos externamente durante a exportação. Origem dos
 arquivos em [`public/brand/README.md`](../public/brand/README.md).
+
+### Importação da conta e seleção de agentes
+
+Mensalidade ausente é preenchida com `Tenant.priceCentsOverride` ou o preço
+do plano atual (`planOf`), preservando zero e valores já salvos. A origem é
+exibida para conferência da competência; não há histórico de preço do plano
+para inferir uma cobrança antiga. Comparativos financeiros antigos sem
+premissas não recebem o preço atual por aproximação. Publicações fechadas
+continuam usando o snapshot.
+
+**Importar dados da conta e dos agentes** permite todos os agentes ou uma
+seleção de um ou mais agentes do próprio tenant, inclusive arquivados com
+histórico. A seleção fica em `assumptions.agentIds`; ausente ou vazia conserva
+o comportamento anterior de considerar a conta inteira. A prévia é de
+leitura: carrega os indicadores sem gravar nem mudar o agente ou a agenda.
+**Salvar revisão** persiste o escopo e recalcula o relatório. Correções
+manuais são mantidas e devem ser conferidas para o escopo escolhido.
+
+Conversas e eventos seguem o agente atualmente associado à conversa;
+agendamentos seguem `Appointment.agentId`. A primeira chegada é preservada
+mesmo se a consulta foi marcada por outro agente. Uma seleção explícita não
+atribui registros sem agente conhecido. O mês anterior usa a mesma seleção;
+snapshot/correções antigos de um escopo diferente não são usados como totais
+da seleção menor. Os nomes dos agentes ficam no relatório e no PDF.
+
+Os horários vêm da configuração cadastrada de `schedule_meeting`: grade
+semanal ou formato antigo com dias, início/fim e pausas. Não importa horários
+padrão de uma ação vazia. Para vários agentes, oferece a união dos intervalos
+no mesmo fuso; fusos diferentes ou mais de quatro turnos em um dia exigem
+definição manual. Uma grade ausente não é tratada como expediente conhecido.
+
+A grade aparece como sugestão, com a origem visível, e só classifica
+atendimentos dentro/fora após conferir **Horário humano conferido com a
+clínica**. Horário de consultas pode diferir do expediente da recepção.
+Ticket, conversão, custo e carga do atendente continuam pendentes quando não
+cadastrados. Tipos da agenda não são automaticamente tratados como avaliações;
+marcações antigas sem tipo e comparecimento seguem a conferência já descrita.
 
 ## Regra do ROI
 
@@ -175,11 +215,15 @@ pacientes.
   recálculo dos valores derivados.
 - `src/modules/reports/monthly-publication.ts`: competências publicadas e
   seleção do mês disponível no tenant.
+- `src/modules/reports/monthly-import.ts`: preço da conta, competência inicial,
+  leitura de grades cadastradas e união dos horários dos agentes.
 - `src/modules/reports/events.ts`: registro explícito, best-effort e idempotente.
 - `src/modules/reports/monthly-pdf.ts`: PDF de uma página.
 - `src/app/(admin)/admin/relatorios/`: fila mensal, revisão, fechamento, entrega.
 - `src/app/(admin)/admin/relatorios/[tenantId]/MonthlyMetricFields.tsx`:
   edição dos indicadores atuais e anteriores.
+- `src/app/(admin)/admin/relatorios/[tenantId]/MonthlyAgentImport.tsx`:
+  seleção de agentes e importação de prévia para conferência.
 - `src/app/(admin)/admin/relatorios/[tenantId]/actions.ts`: gravação,
   fechamento, reabertura e registro de envio/reunião, com autorização.
 - `src/app/(dashboard)/relatorios/MonthlyView.tsx`: apresentação das cinco partes.
@@ -194,7 +238,7 @@ client e reiniciar **web e worker**; não iniciar o worker em uma amostra de
 teste que tenha números/compromissos reais. O novo client é necessário tanto
 para `Appointment.serviceType` quanto para os eventos das tools.
 As correções manuais em JSON, logos e ajustes de listagem não exigem nova
-alteração de schema.
+alteração de schema. A seleção de agentes também usa o JSON existente.
 
 Validação: testes de fórmula, limites/fusos, presença, isolamento, autorização,
 snapshot, concorrência e PDF A4 de uma página. Typecheck, lint e inspeção visual

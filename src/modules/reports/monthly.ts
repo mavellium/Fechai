@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { readClinicorpReport, type ClinicorpReportData } from "@/modules/scheduling/clinicorp";
 import { dayKeyInZone, partsInZone } from "@/modules/scheduling/time";
 import { applyMonthlyOverrides, parseMonthlyOverrides, type MonthlyOverrides } from "./monthly-overrides";
+import { monthlyAccountPrice, sameMonthlyAgentScope } from "./monthly-import";
 import { EMPTY_ASSUMPTIONS, monthlyWindow, normalizeLabel, outsideHumanHours,
   parseMonthlyAssumptions, type MonthlyAssumptions } from "./monthly-config";
 
@@ -19,6 +20,8 @@ export type MonthlyReport = {
   version: 1; tenantName: string; month: string; label: string; previousMonth: string;
   generatedAt: string; dueAt: string; partial: boolean; assumptions: MonthlyAssumptions;
   assumptionsFromMonth?: string;
+  investmentSource?: string;
+  agentNames?: string[];
   revision?: string; metricOverrides?: MonthlyOverrides;
   automatic?: { current: MonthlyMetrics; previous: MonthlyMetrics };
   previousAssumptions: MonthlyAssumptions; previousConfigured: boolean;
@@ -29,9 +32,9 @@ export type MonthlyReport = {
 };
 
 type Msg = { id: string; role: string; sentBy: string | null; createdAt: Date };
-export type MonthlyConversation = { id: string; leadId: string; lead: { createdAt: Date };
+export type MonthlyConversation = { id: string; agentId?: string | null; leadId: string; lead: { createdAt: Date };
   variables: unknown; messages: Msg[]; firstInbound: Date | null };
-export type MonthlyAppointment = { id: string; conversationId: string | null; leadId: string | null;
+export type MonthlyAppointment = { id: string; agentId?: string | null; conversationId: string | null; leadId: string | null;
   source: string; serviceType: string | null; status: string; startsAt: Date; createdAt: Date;
   clinicorpAppointmentId: string | null };
 export type MonthlyEvent = { conversationId: string; kind: string; procedure: string | null; createdAt: Date };
@@ -57,6 +60,7 @@ export function calculateMonthlyMetrics(input: {
   clinicorp: ClinicorpReportData;
 }): MonthlyMetrics {
   const { start, end, now, config, conversations, appointments, events, clinicorp } = input;
+  const includesAgent = (agentId?: string | null) => !config.agentIds?.length || Boolean(agentId && config.agentIds.includes(agentId));
   const current: MonthlyMetrics = { newContacts: 0, conversations: split(), firstResponseSeconds: null,
     scheduled: split(), attended: split(), attendanceUnknown: 0, untypedAppointments: 0,
     qualified: 0, handoffs: 0, unanswered: 0, trackingComplete: input.trackingSince.getTime() <= Math.max(start.getTime(), input.accountCreatedAt?.getTime() ?? start.getTime()),
@@ -67,6 +71,7 @@ export function calculateMonthlyMetrics(input: {
   const responseTimes: number[] = [];
   const hourCounts = new Map<number, number>();
   for (const conversation of conversations) {
+    if (!includesAgent(conversation.agentId)) continue;
     const messages = conversation.messages.filter((m) => inRange(m.createdAt, start, end));
     let pending: Date | null = null;
     // Uma chegada no fim do mês pode ser respondida no começo do seguinte.
@@ -110,6 +115,7 @@ export function calculateMonthlyMetrics(input: {
   };
   const qualified = new Set<string>();
   for (const event of events.filter((e) => inRange(e.createdAt, start, end))) {
+    if (!includesAgent(byConversation.get(event.conversationId)?.agentId)) continue;
     if (event.kind === "handoff") current.handoffs++;
     if (event.kind === "unanswered") current.unanswered++;
     if (event.kind === "qualified") {
@@ -123,6 +129,7 @@ export function calculateMonthlyMetrics(input: {
   current.qualified = qualified.size;
   const external = new Map(clinicorp.appointments.map((a) => [a.id, a]));
   for (const appointment of appointments) {
+    if (!includesAgent(appointment.agentId)) continue;
     if (appointment.source !== "agent" || appointment.status === "canceled") continue;
     const relevant = inRange(appointment.createdAt, start, end) || inRange(appointment.startsAt, start, end);
     if (!relevant) continue;
@@ -155,12 +162,12 @@ export function calculateMonthlyMetrics(input: {
   return applyMonthlyOverrides(current, {}, config);
 }
 
-export async function computeMonthlyReport(tenantId: string, month: string, useSnapshot = true): Promise<MonthlyReport> {
+export async function computeMonthlyReport(tenantId: string, month: string, useSnapshot = true, previewAssumptions?: MonthlyAssumptions): Promise<MonthlyReport> {
   const [tenant, saved] = await Promise.all([
-    prisma.tenant.findUniqueOrThrow({ where: { id: tenantId }, select: { name: true, createdAt: true, reportTrackingStartedAt: true } }),
+    prisma.tenant.findUniqueOrThrow({ where: { id: tenantId }, select: { name: true, createdAt: true, reportTrackingStartedAt: true, planKey: true, priceCentsOverride: true } }),
     prisma.monthlyRoiReport.findUnique({ where: { tenantId_month: { tenantId, month } } }),
   ]);
-  if (useSnapshot && saved?.status === "ready" && saved.snapshot) {
+  if (useSnapshot && !previewAssumptions && saved?.status === "ready" && saved.snapshot) {
     const snapshot = saved.snapshot as unknown as MonthlyReport;
     if (snapshot.version === 1 && snapshot.month === month) return { ...snapshot,
       revision: saved.updatedAt?.toISOString(), status: saved.status, finalizedAt: saved.finalizedAt?.toISOString() ?? null,
@@ -170,12 +177,16 @@ export async function computeMonthlyReport(tenantId: string, month: string, useS
     where: { tenantId, month: { lt: month } }, orderBy: { month: "desc" },
     select: { month: true, assumptions: true },
   });
-  const assumptions = parseMonthlyAssumptions(saved?.assumptions ?? inherited?.assumptions ?? EMPTY_ASSUMPTIONS);
+  const assumptions = { ...(previewAssumptions ?? parseMonthlyAssumptions(saved?.assumptions ?? inherited?.assumptions ?? EMPTY_ASSUMPTIONS)) };
+  const accountPrice = monthlyAccountPrice(tenant);
+  const investmentSource = assumptions.investmentCents === null ? accountPrice.priceLabel : undefined;
+  assumptions.investmentCents ??= accountPrice.priceCents;
   const window = monthlyWindow(month, assumptions.timezone);
   const previousSaved = await prisma.monthlyRoiReport.findUnique({ where: { tenantId_month: { tenantId, month: window.previousMonth } } });
   const reopened = saved?.status === "draft" && saved.snapshot ? saved.snapshot as unknown as MonthlyReport : null;
   const previousBase = reopened?.version === 1 && reopened.month === month && reopened.previousMonth === window.previousMonth ? reopened : null;
-  const previousAssumptions = previousBase?.previousAssumptions ?? parseMonthlyAssumptions(previousSaved?.assumptions ?? EMPTY_ASSUMPTIONS);
+  const originalPreviousAssumptions = previousBase?.previousAssumptions ?? parseMonthlyAssumptions(previousSaved?.assumptions ?? EMPTY_ASSUMPTIONS);
+  const previousAssumptions = { ...originalPreviousAssumptions, agentIds: assumptions.agentIds };
   const previousWindow = monthlyWindow(window.previousMonth, previousAssumptions.timezone);
   const start = new Date(Math.min(window.start.getTime(), previousWindow.start.getTime()));
   const end = new Date(Math.max(window.end.getTime(), previousWindow.end.getTime()));
@@ -184,11 +195,11 @@ export async function computeMonthlyReport(tenantId: string, month: string, useS
       { messages: { some: { createdAt: { gte: start, lt: end } } } },
       { appointments: { some: { OR: [{ startsAt: { gte: start, lt: end } }, { createdAt: { gte: start, lt: end } }] } } },
       { reportEvents: { some: { createdAt: { gte: start, lt: end } } } },
-    ] }, select: { id: true, leadId: true, lead: { select: { createdAt: true } }, variables: true,
+    ] }, select: { id: true, agentId: true, leadId: true, lead: { select: { createdAt: true } }, variables: true,
       messages: { where: { createdAt: { gte: start, lt: end }, role: { in: ["user", "assistant"] } }, orderBy: [{ createdAt: "asc" }, { id: "asc" }], select: { id: true, role: true, sentBy: true, createdAt: true } } } }),
     prisma.appointment.findMany({ where: { tenantId, source: "agent", lead: { isTest: false },
       OR: [{ startsAt: { gte: start, lt: end } }, { createdAt: { gte: start, lt: end } }] },
-      select: { id: true, conversationId: true, leadId: true, source: true, serviceType: true, status: true,
+      select: { id: true, agentId: true, conversationId: true, leadId: true, source: true, serviceType: true, status: true,
         startsAt: true, createdAt: true, clinicorpAppointmentId: true } }),
     prisma.reportEvent.findMany({ where: { tenantId, createdAt: { gte: start, lt: end }, conversation: { isTest: false, lead: { isTest: false } } },
       select: { conversationId: true, kind: true, procedure: true, createdAt: true } }),
@@ -204,14 +215,18 @@ export async function computeMonthlyReport(tenantId: string, month: string, useS
   const automaticCurrent = calculateMonthlyMetrics({ start: window.start, end: window.end, now, trackingSince, accountCreatedAt: tenant.createdAt, config: assumptions, conversations, appointments, events, clinicorp });
   const previousSnapshot = previousSaved?.status === "ready" && previousSaved.snapshot ? previousSaved.snapshot as unknown as MonthlyReport : null;
   const previousAuto = calculateMonthlyMetrics({ start: previousWindow.start, end: previousWindow.end, now, trackingSince, accountCreatedAt: tenant.createdAt, config: previousAssumptions, conversations, appointments, events, clinicorp });
-  const automaticPrevious = previousBase?.previous ?? (previousSnapshot?.version === 1 ? previousSnapshot.current : applyMonthlyOverrides(previousAuto, parseMonthlyOverrides(previousSaved?.assumptions).current, previousAssumptions));
+  const samePreviousScope = sameMonthlyAgentScope(assumptions, originalPreviousAssumptions);
+  const automaticPrevious = samePreviousScope && previousBase ? previousBase.previous
+    : samePreviousScope && previousSnapshot?.version === 1 ? previousSnapshot.current
+    : applyMonthlyOverrides(previousAuto, samePreviousScope ? parseMonthlyOverrides(previousSaved?.assumptions).current : {}, previousAssumptions);
   const metricOverrides = parseMonthlyOverrides(saved?.assumptions);
   const current = applyMonthlyOverrides(automaticCurrent, metricOverrides.current, assumptions);
   // Um comparativo fechado conserva sua base financeira quando não houve correção.
   const previous = Object.keys(metricOverrides.previous).length ? applyMonthlyOverrides(automaticPrevious, metricOverrides.previous, previousAssumptions) : automaticPrevious;
+  const agentNames = assumptions.agentIds?.length ? (await prisma.agent.findMany({ where: { tenantId, id: { in: assumptions.agentIds } }, select: { name: true }, orderBy: { name: "asc" } })).map((a) => a.name) : undefined;
   return { version: 1, tenantName: tenant.name, month, label: new Intl.DateTimeFormat("pt-BR", { timeZone: assumptions.timezone, month: "long", year: "numeric" }).format(window.start),
     previousMonth: window.previousMonth, generatedAt: now.toISOString(), dueAt: window.dueAt.toISOString(), partial: now < window.end,
-    assumptions, ...(inherited ? { assumptionsFromMonth: inherited.month } : {}), revision: saved?.updatedAt?.toISOString(), metricOverrides,
+    assumptions, investmentSource, agentNames, ...(inherited ? { assumptionsFromMonth: inherited.month } : {}), revision: saved?.updatedAt?.toISOString(), metricOverrides,
     automatic: { current: automaticCurrent, previous: automaticPrevious }, previousAssumptions, previousConfigured: previousBase?.previousConfigured ?? Boolean(previousSaved), current, previous,
     clinicorpError: clinicorp.error, clinicorpStatusTypes: clinicorp.statusTypes,
     adjustments: saved?.adjustments ?? "", nextMonth: saved?.nextMonth ?? "", decisionMaker: saved?.decisionMaker ?? "",

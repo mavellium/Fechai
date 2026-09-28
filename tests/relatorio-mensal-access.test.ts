@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const db = vi.hoisted(() => ({
   tenant: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn() },
+  agent: { findMany: vi.fn() },
   monthlyRoiReport: { findUnique: vi.fn(), findFirst: vi.fn(), create: vi.fn(), updateMany: vi.fn() },
   conversation: { findMany: vi.fn(), findFirst: vi.fn() },
   appointment: { findMany: vi.fn() },
@@ -18,7 +19,7 @@ vi.mock("@/modules/audit/log", () => ({ recordAudit: vi.fn() }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 import { computeMonthlyReport } from "@/modules/reports/monthly";
 import { recordReportEvent } from "@/modules/reports/events";
-import { saveMonthlyRoi, finalizeMonthlyRoi, reopenMonthlyRoi, recordMonthlyDelivery } from "@/app/(admin)/admin/relatorios/[tenantId]/actions";
+import { saveMonthlyRoi, finalizeMonthlyRoi, reopenMonthlyRoi, recordMonthlyDelivery, previewMonthlyRoiImport } from "@/app/(admin)/admin/relatorios/[tenantId]/actions";
 import { GET as ownerPdf } from "@/app/(dashboard)/relatorios/mensal/pdf/route";
 import { GET as adminPdf } from "@/app/(admin)/admin/relatorios/[tenantId]/pdf/route";
 import { roiConfig, roiFixture, roiInput } from "./fixtures/monthly-roi";
@@ -29,6 +30,7 @@ beforeEach(() => {
   guards.product.mockResolvedValue({}); guards.tenant.mockResolvedValue({ tenantId: "own" });
   db.tenant.findUnique.mockResolvedValue({ id: "own", status: "active" });
   db.tenant.findUniqueOrThrow.mockResolvedValue({ name: "Clinic", createdAt: new Date("2026-08-01T03:00:00Z"), reportTrackingStartedAt: new Date("2026-09-01T03:00:00Z") });
+  db.agent.findMany.mockResolvedValue([{ id: "a", name: "Agente A" }]);
   const input = roiInput();
   db.conversation.findMany.mockResolvedValue(input.conversations); db.appointment.findMany.mockResolvedValue(input.appointments);
   db.reportEvent.findMany.mockResolvedValue(input.events); db.message.groupBy.mockResolvedValue([{ conversationId: "outside", _min: { createdAt: input.conversations[0].firstInbound } }]);
@@ -38,12 +40,53 @@ beforeEach(() => {
 });
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
+describe("carregamento e importação por agente", () => {
+  it("preenche mensalidade ausente com preço do tenant sem inventar expediente", async () => {
+    db.tenant.findUniqueOrThrow.mockResolvedValue({ name: "Clinic", planKey: "STARTER", priceCentsOverride: 12345, createdAt: new Date("2026-09-01T03:00:00Z"), reportTrackingStartedAt: new Date("2026-09-01T03:00:00Z") });
+    db.monthlyRoiReport.findUnique.mockResolvedValue(null);
+    const report = await computeMonthlyReport("own", "2026-09");
+    expect(report.assumptions.investmentCents).toBe(12345);
+    expect(report.assumptions.humanHours).toBeNull(); expect(report.investmentSource).toBe("Preço negociado da conta");
+  });
+  it("recusa agente de outro tenant na importação e na gravação", async () => {
+    db.agent.findMany.mockResolvedValue([]);
+    const form = new FormData(); form.set("assumptions", JSON.stringify({ ...roiConfig(), agentIds: ["foreign"] }));
+    expect((await previewMonthlyRoiImport("own", "2026-09", form)).ok).toBe(false);
+    expect((await saveMonthlyRoi("own", "2026-09", null, form)).ok).toBe(false);
+    expect(db.agent.findMany.mock.calls[0][0].where).toEqual({ tenantId: "own", id: { in: ["foreign"] } });
+    expect(db.monthlyRoiReport.create).not.toHaveBeenCalled(); expect(db.monthlyRoiReport.updateMany).not.toHaveBeenCalled();
+  });
+  it("prévia recalcula a seleção sem gravar e preserva premissas do formulário", async () => {
+    db.monthlyRoiReport.findUnique.mockResolvedValue(null);
+    db.conversation.findMany.mockResolvedValue(roiInput().conversations.map((c) => ({ ...c, agentId: "a" })));
+    const form = new FormData(); form.set("assumptions", JSON.stringify({ ...roiConfig(), agentIds: ["a"], investmentCents: 45678 }));
+    const result = await previewMonthlyRoiImport("own", "2026-09", form);
+    expect(result.ok).toBe(true);
+    if (result.ok) { expect(result.report.current.newContacts).toBe(1); expect(result.report.assumptions.investmentCents).toBe(45678); expect(result.report.agentNames).toEqual(["Agente A"]); }
+    expect(db.monthlyRoiReport.create).not.toHaveBeenCalled(); expect(db.monthlyRoiReport.updateMany).not.toHaveBeenCalled();
+  });
+  it("não usa snapshot de todos os agentes para comparar uma seleção menor", async () => {
+    const previous = roiFixture(); previous.month = "2026-08"; previous.current.newContacts = 99;
+    db.monthlyRoiReport.findUnique.mockImplementation(async ({ where }) => where.tenantId_month.month === "2026-09"
+      ? { status: "draft", assumptions: { ...roiConfig(), agentIds: ["a"] } }
+      : { status: "ready", assumptions: roiConfig(), snapshot: previous });
+    const report = await computeMonthlyReport("own", "2026-09");
+    expect(report.previous.newContacts).toBe(0); expect(report.previousAssumptions.agentIds).toEqual(["a"]);
+  });
+  it("não importa uma revisão fechada", async () => {
+    db.monthlyRoiReport.findUnique.mockResolvedValue({ status: "ready" });
+    const form = new FormData(); form.set("assumptions", JSON.stringify(roiConfig()));
+    expect((await previewMonthlyRoiImport("own", "2026-09", form)).ok).toBe(false);
+    expect(db.conversation.findMany).not.toHaveBeenCalled();
+  });
+});
+
 describe("autorização e isolamento do relatório mensal", () => {
   it("recusa ações de revisão antes de qualquer acesso ao banco para não-admin", async () => {
     guards.superadmin.mockRejectedValue(new Error("Forbidden"));
     const form = new FormData(); form.set("assumptions", JSON.stringify(roiConfig()));
     for (const action of [() => saveMonthlyRoi("other", "2026-09", null, form), () => finalizeMonthlyRoi("other", "2026-09", true),
-      () => reopenMonthlyRoi("other", "2026-09"), () => recordMonthlyDelivery("other", "2026-09", "sent")]) {
+      () => reopenMonthlyRoi("other", "2026-09"), () => recordMonthlyDelivery("other", "2026-09", "sent"), () => previewMonthlyRoiImport("other", "2026-09", form)]) {
       await expect(action()).rejects.toThrow("Forbidden");
     }
     expect(db.monthlyRoiReport.findUnique).not.toHaveBeenCalled(); expect(db.tenant.findUnique).not.toHaveBeenCalled();

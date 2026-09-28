@@ -97,6 +97,7 @@ export async function generateMonthlyPdf(r: MonthlyReport): Promise<Uint8Array> 
     y -= 14;
   }
   const dataNote = [
+    r.agentNames?.length ? `Agentes: ${r.agentNames.slice(0, 2).map((name) => name.slice(0, 35)).join(", ")}${r.agentNames.length > 2 ? ` + ${r.agentNames.length - 2}; lista completa no painel` : ""}.` : "",
     !a.trackingComplete || !b.trackingComplete ? "* Cobertura parcial: somente eventos registrados; histórico ausente não significa zero." : "",
     `Sem horário classificado: ${a.conversations.unclassified} conversas; ${a.scheduled.unclassified} agendadas; ${a.attended.unclassified} realizadas. Presença pendente: ${a.attendanceUnknown}; sem tipo: ${a.untypedAppointments}.`,
     !r.previousConfigured ? "Mês anterior sem premissas financeiras/horário; apenas totais operacionais comparáveis." : "",

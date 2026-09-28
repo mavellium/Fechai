@@ -183,7 +183,10 @@ O toggle é `FilterTabs` (links, querystring) — preserva `periodo/de/ate` e se
 
 ### Revisão mensal de ROI
 
-- Admin carrega a competência solicitada (`mes`); sem parâmetro, abre a última revisão existente da clínica, com fallback para o mês anterior.
+- Admin carrega a competência solicitada (`mes`); sem parâmetro, abre a última revisão existente da clínica, com fallback para o mês anterior, limitado ao cadastro. Um pedido anterior à criação abre o primeiro mês da conta, com aviso.
+- Mensalidade ausente vem do preço negociado da conta ou do plano atual, com origem para conferência. Valores existentes e zero são preservados; snapshots fechados não são atualizados pelo preço atual.
+- Importação oferece todos os agentes ou uma seleção persistida em `assumptions.agentIds`. Prévia de leitura, validada no servidor, carrega métricas atuais/anteriores e mantém correções manuais. O comparativo usa o mesmo escopo; não reaproveita totais de um snapshot de escopo diferente.
+- Horários cadastrados de `schedule_meeting` aparecem como sugestão com origem; grades de agentes selecionados são unidas no mesmo fuso. A classificação depende da confirmação do expediente humano. Nunca importar horários padrão de configuração vazia nem inventar ticket/conversão/custo.
 - O documento `MonthlyRoiReport.assumptions` conserva as premissas originais e guarda `metricOverrides: { current, previous }` como chave adicional. `parseMonthlyAssumptions` lê apenas premissas; `parseMonthlyOverrides` valida as correções separadamente. Isso é compatível com registros existentes, sem alteração de schema.
 - Dados automáticos de mensagens, agenda e Clinicorp preenchem o editor. Só campos alterados viram correção persistente; restaurar um campo remove sua correção. Correções nunca passam para o próximo mês quando se copiam premissas.
 - Cada contagem, tempo de resposta, horas assumidas, procedimento e pico pode ser corrigido. Receita/economia/ROI continuam derivados pela regra definida, sem permitir que uma porcentagem arbitrária substitua a fórmula. Presenças fora do expediente devem bater com a soma por procedimento antes do fechamento.

@@ -57,6 +57,10 @@ manuais dos indicadores atuais/anteriores antes do fechamento. Usa os
 componentes do painel e exporta PDF preto/cinza com logos locais. Operação,
 fórmulas, publicação no tenant, arquivos e limites estão no
 [contrato P-79](../../../docs/P-79-relatorio-mensal-roi.md).
+Também preenche mensalidade ausente pelo preço atual da conta, respeita o
+mês do cadastro na primeira revisão e permite importar indicadores de um ou
+mais agentes. Horários cadastrados são sugestões para conferir com a equipe;
+o importador não altera o agente nem a agenda e mantém as correções manuais.
 
 ## O que NÃO faz
 

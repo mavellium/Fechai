@@ -139,8 +139,9 @@ describe("PDF mensal", () => {
     const doc = await PDFDocument.load(await generateMonthlyPdf(roiFixture()));
     expect(doc.getPageCount()).toBe(1); expect(doc.getPage(0).getSize().width).toBeCloseTo(595.28);
   });
-  it("comporta 12 procedimentos e os limites dos textos", async () => {
+  it("comporta vários agentes, 12 procedimentos e os limites dos textos", async () => {
     const report = roiFixture();
+    report.agentNames = Array.from({ length: 5 }, (_, i) => `Agente de atendimento com nome extenso ${i}`);
     report.adjustments = "Revisamos a abordagem do agente e conferimos as informações. ".repeat(7).slice(0, 400);
     report.nextMonth = report.adjustments;
     report.assumptions.procedures = Array.from({ length: 12 }, (_, i) => ({ name: `Procedimento de avaliação com nome extenso e referência ${i}`, ticketCents: 100_000, conversionBps: 5000 }));
