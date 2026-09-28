@@ -2,6 +2,42 @@
 
 Uma linha por milestone concluído (mais recente no topo).
 
+## Prioridade: aviso no grupo interno sem incluir o lead — 2026-09-27
+
+- Corrigida a transferência para humano: o grupo configurado recebe um aviso
+  com `Nome:`, `Número:` e `Resumo:`. O lead nunca é adicionado ao grupo.
+- O aviso reusa o resumo salvo e acrescenta o motivo da prioridade; sem resumo,
+  usa falas recentes do contato, sem uma chamada adicional de IA.
+- Configurações antigas com `addToGroup` preservam grupo, nome e motivo como
+  notificações (`notifyGroup`). Tela e descrição da habilidade foram atualizadas.
+- Removida a inclusão de participantes dos adapters. A tool notifica na
+  transição para prioridade; repetir a chamada não repete o aviso.
+- Validação local: simulação confirmou uma mensagem e participantes inalterados;
+  suíte com 710 testes, checagem de tipos e lint dos arquivos alterados passaram.
+- **Implantação pendente:** a validação foi local; este registro não confirma
+  publicação em produção nem intervenção no grupo real.
+- Contratos, formato e proteções: [agent-engine/README.md](../src/modules/agent-engine/README.md#transferir-para-humano-e-o-grupo-do-whatsapp-handoffts).
+
+## Disparos pela API oficial da Meta — 2026-09-27
+
+- Página `/disparos` visível apenas para contas do produto com Meta liberada,
+  com a mesma proteção no servidor para URL direta e todas as actions.
+- Importação Excel `.xlsx`/JSON com validação por linha, deduplicação, modelos
+  para download e revisão das mensagens personalizadas antes da confirmação.
+- Templates aprovados de texto da própria conta Meta, variáveis posicionais
+  no corpo, rascunhos retomáveis, cancelamento e resultado por destinatário.
+- Fila persistida no banco e processada pelo worker existente; bloqueados e
+  pedidos para parar são ignorados, envios incertos não são repetidos.
+- Pausa/retomada, agendamento com fuso/faixa diária, distribuição por tenant e
+  diagnóstico do serviço. Desconexão preserva destinatários pendentes.
+- Entrega/leitura/falha via recibos assinados, inclusive retornos antecipados;
+  webhook processa lotes inteiros e deduplica textos e áudios.
+- Associação de colunas, envio de teste explícito, busca/filtros/paginação/CSV,
+  confirmação com autor e aviso de envios recentes.
+- Respostas, oportunidades e agendamentos com atribuição documentada de sete dias.
+- Requer `prisma db push` para as novas tabelas e atualização do web/worker.
+  Regras e limitações: [broadcasts/README.md](../src/modules/broadcasts/README.md).
+
 ## Portabilidade de agentes e laboratório administrativo — 2026-09-20
 
 - **Duplicar e transportar agentes:** o dono pode duplicar um agente, exportar

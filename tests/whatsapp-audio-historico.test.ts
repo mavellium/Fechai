@@ -40,7 +40,7 @@ vi.mock("@/modules/agent-engine/orchestrator", () => ({
   resolveAgent: mocks.resolveAgent,
   runAgentTurn: mocks.runAgentTurn,
 }));
-vi.mock("@/modules/agent-engine/handoff", () => ({ addLeadToHandoffGroup: vi.fn() }));
+vi.mock("@/modules/agent-engine/handoff", () => ({ notifyHandoffGroup: vi.fn() }));
 vi.mock("@/modules/ai/transcribe", () => ({ transcribeAudio: mocks.transcribeAudio }));
 vi.mock("@/modules/voice/storage", () => ({ storeVoiceMessage: mocks.storeVoiceMessage }));
 vi.mock("@/modules/voice/reply", () => ({ speakReply: mocks.speakReply }));
@@ -66,6 +66,7 @@ const provider = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.messageFindUnique.mockResolvedValue(null);
   mocks.instanceFindFirst.mockResolvedValue({ tenantId: "tenant-1", status: "connected", tenant: {} });
   mocks.getOrCreateConversation.mockResolvedValue({
     lead: { id: "lead-1", isTest: false },

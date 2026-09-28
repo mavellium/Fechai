@@ -5,7 +5,7 @@ import { Eye, Settings2, ShieldAlert, Trash2 } from "lucide-react";
 import type { PlanKey } from "@prisma/client";
 import { PLANS, planOf } from "@/modules/billing/plans";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, ButtonLink } from "@/components/ui/button";
 import { ConfirmButton } from "@/components/ui/confirm-dialog";
 import { Select } from "@/components/ui/select";
 import { SidePanel } from "@/components/ui/side-panel";
@@ -338,6 +338,7 @@ export function TenantRow(t: Props) {
                 <Eye size={15} aria-hidden />
                 Ver como
               </Button>
+              {!t.isAdminAccount && <ButtonLink href={`/admin/relatorios/${t.id}`} variant="outline" size="sm">ROI mensal</ButtonLink>}
 
               <div className="flex items-center gap-2">
                 <ConfirmButton

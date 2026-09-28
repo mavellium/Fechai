@@ -940,7 +940,7 @@ const scheduleConfigSchema = z.object({
   // Lembrete ligado sem texto mandaria mensagem em branco para o paciente, e
   // dois no mesmo instante chegariam como duas mensagens coladas. As duas
   // checagens vêm no `superRefine` (e não num `transform` que desligaria o
-  // lembrete sozinho) pelo mesmo motivo de `addToGroup` sem `groupId`: a tela
+  // lembrete sozinho) pelo mesmo motivo de `notifyGroup` sem `groupId`: a tela
   // diria "salvo" com a opção silenciosamente desligada.
   if (!data.reminderEnabled) return;
   const error = validateReminders(data.reminders);
@@ -1157,7 +1157,7 @@ const handoffConfigSchema = z
     // explícita em vez de `z.coerce.boolean()`, que considera verdadeira
     // QUALQUER string não vazia — inclusive "false" e "off", o que inverteria
     // o desligado em silêncio se a tela um dia passasse a mandar esses valores.
-    addToGroup: z
+    notifyGroup: z
       .string()
       .optional()
       .transform((v) => v === "on" || v === "true"),
@@ -1171,12 +1171,12 @@ const handoffConfigSchema = z
       .default(""),
   })
   // A recusa vem ANTES da normalização, não depois: se `transform` rodasse
-  // primeiro, um ID inválido já teria virado `addToGroup: false` e o `refine`
+  // primeiro, um ID inválido já teria virado `notifyGroup: false` e o `refine`
   // olharia para um objeto coerente — a tela diria "salvo" com a opção
   // silenciosamente desligada, que é justamente o que o campo obrigatório
   // deveria impedir.
   .superRefine((data, ctx) => {
-    if (data.addToGroup && !normalizeGroupId(data.groupId)) {
+    if (data.notifyGroup && !normalizeGroupId(data.groupId)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["groupId"],
@@ -1190,7 +1190,7 @@ const handoffConfigSchema = z
   .transform((data): HandoffConfig => {
     const groupId = normalizeGroupId(data.groupId);
     return {
-      addToGroup: data.addToGroup && Boolean(groupId),
+      notifyGroup: data.notifyGroup && Boolean(groupId),
       groupId,
       groupName: groupId && data.groupName ? data.groupName.slice(0, MAX_GROUP_NAME) : null,
       groupReason: data.groupReason,
@@ -1210,7 +1210,7 @@ export async function loadWhatsAppGroupsAction(): Promise<GroupListResult> {
 
 /**
  * Config da ação "Transferir para humano" (ver módulo `agent-engine/handoff`):
- * o grupo do WhatsApp que recebe o contato transferido e quando mandá-lo para lá.
+ * o grupo interno do WhatsApp que recebe o aviso de transferência e quando avisar.
  */
 export async function saveHandoffConfigAction(
   _prev: Result | null,

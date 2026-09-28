@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { recordReportEvent } from "@/modules/reports/events";
 import { AvailabilityUnavailableError } from "@/modules/scheduling/availability-error";
 import type { LlmToolSchema } from "@/modules/ai";
 import { isWithinBusinessHours, parseScheduleConfig, resolveDuration, type ScheduleConfig } from "@/modules/scheduling/config";
@@ -11,7 +12,7 @@ import {
 } from "@/modules/scheduling/repository";
 import { formatInZone, parseLocalDateTime } from "@/modules/scheduling/time";
 import { DISQUALIFY_REASONS, parseReason } from "./disqualify";
-import { addLeadToHandoffGroup, handoffToolDescription, type HandoffConfig } from "./handoff";
+import { notifyHandoffGroup, handoffToolDescription, type HandoffConfig } from "./handoff";
 import { ACTION_BY_KEY, type ActionKey } from "./actions";
 import { offerAlternativeSlots, runSchedulingTool, SCHEDULING_TOOLS, schedulingToolAllowed } from "./scheduling-tools";
 import { allVariableDefinitions, parseVariableDefinitions, rememberConversationVariables, type VariableDefinition } from "./variables";
@@ -72,6 +73,11 @@ export function getToolSchemas(
       },
     });
   }
+  if (variableDefinitions) schemas.push({
+    name: "report_unanswered",
+    description: "Registra que há uma pergunta do contato sem resposta na base disponível, para o relatório mensal. Use somente quando você não souber responder; não invente a resposta. Esse registro não transfere nem pausa a conversa. Se handoff_human estiver disponível e for transferir, use unanswered=true nela em vez deste registro.",
+    parameters: { type: "object", properties: {} },
+  });
   return schemas;
 }
 
@@ -80,6 +86,10 @@ export async function runToolHandler(
   ctx: ToolContext,
   args: Record<string, unknown>,
 ): Promise<string> {
+  if (key === "report_unanswered") {
+    await recordReportEvent({ tenantId: ctx.tenantId, conversationId: ctx.conversationId, kind: "unanswered" });
+    return "Pergunta sem resposta registrada. Explique a limitação ao contato sem inventar informação.";
+  }
   if (key === "remember_variables") {
     try {
       if (!ctx.agentId) return "Agente não encontrado.";
@@ -162,11 +172,16 @@ const TOOLS: Record<ActionKey, ToolDef> = {
       description: "Marca o lead como quente quando o interesse de compra é alto.",
       parameters: {
         type: "object",
-        properties: { reason: { type: "string", description: "Motivo" } },
+        properties: {
+          reason: { type: "string", description: "Motivo" },
+          procedure: { type: "string", description: "Procedimento explicitamente informado pelo contato, se houver. Nunca deduza." },
+        },
       },
     },
     handler: async (ctx, args) => {
       await prisma.lead.update({ where: { id: ctx.leadId }, data: { status: "hot" } });
+      await recordReportEvent({ tenantId: ctx.tenantId, conversationId: ctx.conversationId,
+        kind: "qualified", procedure: str(args.procedure) });
       // Notificação simples (stub): trocar por e-mail/webhook real depois.
       console.log(`[notify] lead quente ${ctx.leadId} tenant ${ctx.tenantId}: ${str(args.reason) ?? ""}`);
       return "Lead marcado como quente e time notificado.";
@@ -263,6 +278,7 @@ const TOOLS: Record<ActionKey, ToolDef> = {
         startsAt,
         durationMinutes: duration.minutes,
         source: "agent",
+        serviceType: duration.label ?? null,
         timezone: cfg.timezone,
       });
 
@@ -333,27 +349,28 @@ const TOOLS: Record<ActionKey, ToolDef> = {
       description: handoffToolDescription(),
       parameters: {
         type: "object",
-        properties: { reason: { type: "string", description: "Motivo do repasse" } },
+        properties: {
+          reason: { type: "string", description: "Resumo curto do que o contato quer e por que precisa de atendimento humano ou prioridade." },
+          unanswered: { type: "boolean", description: "True somente quando há uma pergunta do contato que você não consegue responder com a base disponível. Não invente uma resposta; transfira para a equipe. False nos outros motivos." },
+        },
+        required: ["reason"],
       },
     },
-    handler: async (ctx) => {
-      await prisma.conversation.update({
-        where: { id: ctx.conversationId },
+    handler: async (ctx, args) => {
+      const marked = await prisma.conversation.updateMany({
+        where: { id: ctx.conversationId, tenantId: ctx.tenantId, needsHuman: false },
         data: { needsHuman: true },
       });
-
-      // `isTest` vem junto do telefone: no sandbox o número é sintético, e
-      // adicioná-lo ao grupo real da equipe é efeito colateral de um teste.
-      const lead = await prisma.lead.findUnique({
-        where: { id: ctx.leadId },
-        select: { phone: true, isTest: true },
-      });
-      if (lead) {
-        await addLeadToHandoffGroup(ctx.tenantId, ctx.agentId, lead.phone, {
-          isTest: lead.isTest,
+      // Avisa quando entra em prioridade, uma vez mesmo se o LLM repetir a tool.
+      if (marked.count > 0) {
+        await recordReportEvent({ tenantId: ctx.tenantId, conversationId: ctx.conversationId, kind: "handoff" });
+        await notifyHandoffGroup(ctx.tenantId, ctx.agentId, ctx.conversationId, {
+          reason: typeof args.reason === "string" ? args.reason : undefined,
         });
       }
 
+      if (args.unanswered === true) await recordReportEvent({ tenantId: ctx.tenantId,
+        conversationId: ctx.conversationId, kind: "unanswered" });
       return "Conversa marcada como 'precisa atenção' de um humano.";
     },
   },

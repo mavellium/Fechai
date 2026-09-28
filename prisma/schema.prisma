@@ -131,6 +131,140 @@ model Tenant {
   attendanceCosts  TenantAttendanceCost[]
   referral         Referral?
   auditLogs        AuditLog[]
+  broadcasts       BroadcastCampaign[]
+  broadcastReceipts BroadcastReceipt[]
+  monthlyRoiReports MonthlyRoiReport[]
+  reportEvents      ReportEvent[]
+  reportTrackingStartedAt DateTime @default(now())
+}
+
+/// Premissas e texto revisados pela Mavellium, por competência. O fechamento
+/// congela os dados usados no PDF; alterar outro mês não reescreve o passado.
+model MonthlyRoiReport {
+  id           String @id @default(cuid())
+  tenantId     String
+  tenant       Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  month        String // YYYY-MM, no fuso declarado nas premissas
+  assumptions  Json
+  adjustments  String @default("")
+  nextMonth    String @default("")
+  decisionMaker String @default("")
+  status       String @default("draft") // draft | ready
+  snapshot     Json?
+  preparedBy   String?
+  finalizedAt  DateTime?
+  sentAt       DateTime?
+  meetingAt    DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([tenantId, month])
+  @@index([month, status])
+}
+
+/// Eventos explícitos, sem inferir qualificação ou desconhecimento do texto.
+model ReportEvent {
+  id             String @id @default(cuid())
+  tenantId       String
+  tenant         Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  kind           String // qualified | handoff | unanswered
+  procedure      String?
+  dedupKey       String @unique
+  createdAt      DateTime @default(now())
+
+  @@index([tenantId, createdAt, kind])
+}
+
+// Disparos pela Meta: o rascunho revisado vira fila somente por confirmação.
+model BroadcastCampaign {
+  id              String   @id @default(cuid())
+  tenantId        String
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name            String
+  status          String   @default("draft") // draft | queued | paused | completed | cancelled
+  phoneNumberId   String
+  template        Json
+  createdAt       DateTime @default(now())
+  confirmedAt     DateTime?
+  confirmedBy     String?  // id do usuário que confirmou; snapshot preservado
+  confirmedByLabel String?
+  consentVersion  String?
+  scheduledAt     DateTime?
+  timezone        String   @default("America/Sao_Paulo")
+  windowStart     Int      @default(0) // minutos locais; legado = dia inteiro
+  windowEnd       Int      @default(1440)
+  nextAttemptAt   DateTime @default(now())
+  lastProcessedAt DateTime?
+  retryCount      Int      @default(0)
+  pausedAt        DateTime?
+  lastTestAt      DateTime?
+  finishedAt      DateTime?
+  error           String?
+  recipients      BroadcastRecipient[]
+
+  @@index([tenantId, createdAt])
+  @@index([status, createdAt])
+  @@index([status, nextAttemptAt, tenantId])
+}
+
+model BroadcastRecipient {
+  id                String   @id @default(cuid())
+  campaignId        String
+  campaign          BroadcastCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  row               Int
+  phone             String
+  name              String?
+  parameters        Json
+  content           String
+  status            String   @default("pending") // pending | sending | sent | failed | unknown | skipped | cancelled
+  error             String?
+  whatsappMessageId String?  @unique
+  attemptedAt       DateTime?
+  sentAt            DateTime?
+  isTest            Boolean  @default(false)
+  deliveryStatus    String?  // sent | delivered | read | failed (retorno Meta)
+  deliveredAt       DateTime?
+  readAt            DateTime?
+  deliveryFailedAt  DateTime?
+  deliveryError     String?
+  conversationId    String?
+  leadStatusAtSend   String?
+  repliedAt         DateTime?
+  qualifiedAt       DateTime?
+  appointmentId     String?
+  firstReplyMessageId String? @unique
+
+  @@unique([campaignId, phone, isTest])
+  @@index([campaignId, status])
+  @@index([status, attemptedAt])
+  @@index([phone, sentAt])
+}
+
+// Retorno pode chegar antes do commit do envio. Inbox durável e idempotente.
+model BroadcastReceipt {
+  id              String   @id @default(cuid())
+  tenantId        String
+  tenant          Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  messageId       String
+  phoneNumberId   String
+  recipientPhone  String
+  status          String
+  occurredAt      DateTime
+  error           String?
+  receivedAt      DateTime @default(now())
+  appliedAt       DateTime?
+  @@unique([tenantId, messageId, status, occurredAt])
+  @@index([tenantId, messageId])
+  @@index([appliedAt, receivedAt])
+}
+
+model WorkerHeartbeat {
+  key             String   @id
+  lastSeenAt      DateTime
+  lastCompletedAt DateTime?
+  error           String?
 }
 
 model User {
@@ -466,6 +600,7 @@ model Conversation {
   updatedAt       DateTime  @updatedAt
 
   appointments Appointment[]
+  reportEvents ReportEvent[]
 
   @@index([tenantId])
   @@index([agentId])
@@ -532,6 +667,7 @@ model Appointment {
   endsAt                 DateTime
   status                 String    @default("scheduled") // scheduled | done | canceled
   source                 String    @default("agent") // agent | manual
+  serviceType            String? // tipo explicitamente escolhido; relatórios de avaliações
   /// Id do evento espelhado no Google Agenda, quando a conta está integrada.
   /// Null = só existe aqui (integração desligada ou sincronização falhou).
   googleEventId          String?

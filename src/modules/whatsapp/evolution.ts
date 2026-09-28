@@ -213,23 +213,24 @@ export class EvolutionProvider implements WhatsAppProvider {
     return data.key?.id ?? null;
   }
 
-  async addParticipantToGroup(externalId: string, groupId: string, phone: string): Promise<void> {
-    // `/group/updateParticipant` com action "add" — mesma família de
-    // endpoints de grupo da Evolution v2. O número vai sem sufixo de JID (a
-    // API monta o `@s.whatsapp.net` internamente, igual sendText).
-    const res = await fetch(
-      `${this.baseUrl}/group/updateParticipant/${externalId}?groupJid=${encodeURIComponent(groupId)}`,
+  async sendGroupMessage(externalId: string, groupId: string, text: string): Promise<string | null> {
+    // O destino é exclusivamente um JID de grupo; nunca o telefone do lead.
+    if (!/^\d[\d-]*@g\.us$/.test(groupId)) throw new Error("ID de grupo inválido.");
+    const res = await this.fetchWithTimeout(
+      `${this.baseUrl}/message/sendText/${externalId}`,
       {
         method: "POST",
         headers: this.headers(),
-        body: JSON.stringify({ action: "add", participants: [phone] }),
+        body: JSON.stringify({ number: groupId, text }),
       },
     );
     if (!res.ok) {
       throw new Error(
-        `Evolution updateParticipant falhou (${res.status}): ${(await res.text().catch(() => "")).slice(0, 200)}`,
+        `Evolution sendText para grupo falhou (${res.status}): ${(await res.text().catch(() => "")).slice(0, 200)}`,
       );
     }
+    const data = (await res.json()) as { key?: { id?: string } };
+    return data.key?.id ?? null;
   }
 
   async listGroups(externalId: string): Promise<WhatsAppGroup[]> {

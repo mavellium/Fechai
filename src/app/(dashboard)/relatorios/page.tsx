@@ -1,5 +1,11 @@
 ﻿import { BarChart3, Download } from "lucide-react";
 import { requireTenant, requireOwner } from "@/lib/session";
+import { requireProductAccess } from "@/lib/require-product";
+import { monthKey } from "@/modules/reports/monthly-config";
+import { computeMonthlyReport } from "@/modules/reports/monthly";
+import { MonthlyView } from "./MonthlyView";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { prisma } from "@/lib/prisma";
 import {
   computeFinancialSummary,
@@ -28,17 +34,17 @@ const PERIODS: PeriodKey[] = ["hoje", "7", "30", "mes", "ano", "tudo"];
 // A aba "Afiliados" só existe para quem está no programa — o filtro abaixo
 // remove a opção de quem não é afiliado, e a página cai na visão padrão se
 // alguém digitar ?visao=afiliados na URL sem ter cadastro.
-const VIEWS = ["operacional", "financeiro", "afiliados"] as const;
+const VIEWS = ["operacional", "financeiro", "mensal", "afiliados"] as const;
 type View = (typeof VIEWS)[number];
 
 export default async function RelatoriosPage({
   searchParams,
 }: {
-  searchParams: Promise<{ periodo?: string; de?: string; ate?: string; visao?: string }>;
+  searchParams: Promise<{ periodo?: string; de?: string; ate?: string; visao?: string; mes?: string }>;
 }) {
   const { tenantId } = await requireTenant();
   const session = await requireOwner();
-  const { periodo, de, ate, visao } = await searchParams;
+  const { periodo, de, ate, visao, mes } = await searchParams;
   const period = (PERIODS as string[]).includes(periodo ?? "") ? (periodo as PeriodKey) : "30";
 
   // O afiliado é do USUÁRIO, não do tenant: a mesma pessoa pode ser cliente e
@@ -63,6 +69,12 @@ export default async function RelatoriosPage({
       : requested;
 
   const range = resolveRange(period, de, ate);
+  const month = monthKey(mes);
+  if (view === "mensal") await requireProductAccess();
+  const monthlySaved = view === "mensal" ? await prisma.monthlyRoiReport.findUnique({
+    where: { tenantId_month: { tenantId, month } }, select: { status: true },
+  }) : null;
+  const monthlyReport = monthlySaved?.status === "ready" ? await computeMonthlyReport(tenantId, month) : null;
 
   if (view === "afiliados" && affiliate) {
     // Amadurece as comissões antes de somar, para o card bater com o painel.
@@ -82,7 +94,7 @@ export default async function RelatoriosPage({
   // A aba de afiliados escapa dessa saída de propósito: os ganhos não dependem
   // de a conta ter conversas — um afiliado que nunca usou o agente ainda
   // precisa ver o que indicou.
-  if (hasAnyData === 0 && view !== "afiliados") {
+  if (hasAnyData === 0 && view !== "afiliados" && view !== "mensal") {
     return (
       <div className="w-full space-y-8">
         <PageHeader
@@ -110,6 +122,7 @@ export default async function RelatoriosPage({
     if (ate) qs.set("ate", ate);
     if (!de) qs.set("periodo", period);
     qs.set("visao", key);
+    if (mes) qs.set("mes", month);
     return `/relatorios?${qs.toString()}`;
   };
 
@@ -126,6 +139,8 @@ export default async function RelatoriosPage({
         description={
           view === "afiliados"
             ? "Seus ganhos como afiliado, mês a mês."
+            : view === "mensal"
+              ? "Relatório mensal de ROI estimado, revisado pela Mavellium e apresentado ao decisor."
             : view === "financeiro"
               ? `Retorno estimado do investimento no projeto — ${range.label}.`
               : `Acompanhe a evolução da conta — ${range.label}.`
@@ -141,6 +156,7 @@ export default async function RelatoriosPage({
               options={[
                 { key: "operacional", label: "Operacional" },
                 { key: "financeiro", label: "Financeiro" },
+                { key: "mensal", label: "ROI mensal" },
                 ...(affiliate ? [{ key: "afiliados", label: "Afiliados" }] : []),
               ]}
               active={view}
@@ -150,9 +166,14 @@ export default async function RelatoriosPage({
           {/* A série de afiliados é sempre mensal (competência da comissão),
               então um seletor de período aqui prometeria um recorte que o
               gráfico não faz. */}
-          {view !== "afiliados" && (
+          {view !== "afiliados" && view !== "mensal" && (
             <RangePicker active={de ? "custom" : period} de={de} ate={ate} visao={view} />
           )}
+          {view === "mensal" && <form className="flex items-end gap-2">
+            <input type="hidden" name="visao" value="mensal" />
+            <label className="text-sm">Competência<Input type="month" name="mes" defaultValue={month} required /></label>
+            <Button type="submit" variant="outline" size="sm">Ver mês</Button>
+          </form>}
         </div>
         {view === "operacional" && (
           <ButtonLink href={`/relatorios/export?${exportQs.toString()}`} variant="outline" size="sm">
@@ -160,9 +181,10 @@ export default async function RelatoriosPage({
             Exportar CSV
           </ButtonLink>
         )}
+        {view === "mensal" && monthlyReport && <ButtonLink href={`/relatorios/mensal/pdf?mes=${month}`} variant="outline" size="sm"><Download size={14} aria-hidden />Exportar PDF de 1 página</ButtonLink>}
       </div>
 
-      {view === "operacional" && report ? (
+      {view === "mensal" ? monthlyReport ? <MonthlyView report={monthlyReport} /> : <Card><CardTitle>Relatório de {month} em preparação</CardTitle><p className="text-sm text-neutral panel:text-white/55">A Mavellium está conferindo os dados e as premissas. O relatório ficará disponível após a revisão, com entrega até dia 5 do mês seguinte e apresentação em uma reunião curta.</p></Card> : view === "operacional" && report ? (
         <>
           <FadeIn>
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">

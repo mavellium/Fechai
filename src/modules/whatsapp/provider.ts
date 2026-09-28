@@ -26,6 +26,8 @@ export type IncomingMessage = {
   messageKeyId?: string;
   /** id da mídia quando ele difere do id da mensagem (Cloud API da Meta). */
   mediaId?: string;
+  /** Instante original do evento; preserva atribuição quando a Meta reentrega. */
+  occurredAt?: Date;
 };
 
 export type WhatsAppGroup = {
@@ -40,7 +42,9 @@ export interface WhatsAppProvider {
   readonly name: string;
   isConfigured(): boolean;
   createInstance(tenantId: string): Promise<CreateInstanceResult>;
-  getQrCode(externalId: string): Promise<{ status: WhatsAppStatus; qrCode?: string }>;
+  getQrCode(
+    externalId: string,
+  ): Promise<{ status: WhatsAppStatus; qrCode?: string }>;
   /**
    * Lê o estado da conexão SEM gerar QR. Existe separado de `getQrCode` porque
    * aquele chama `/instance/connect`, que CRIA um QR a cada chamada e gasta o
@@ -57,7 +61,11 @@ export interface WhatsAppProvider {
     externalId: string,
   ): Promise<{ status: WhatsAppStatus; exists: boolean; reachable: boolean }>;
   /** Envia e devolve o key.id da mensagem no WhatsApp (null se o provedor não o expuser). */
-  sendMessage(externalId: string, toPhone: string, text: string): Promise<string | null>;
+  sendMessage(
+    externalId: string,
+    toPhone: string,
+    text: string,
+  ): Promise<string | null>;
   /**
    * Envia áudio como MENSAGEM DE VOZ (PTT) — a bolha com onda e play, não um
    * arquivo anexado. É assim que a resposta em voz do agente chega parecida com
@@ -82,13 +90,15 @@ export interface WhatsAppProvider {
     messageKeyId: string,
   ): Promise<{ base64: string; mime: string }>;
   /**
-   * Adiciona um número a um grupo já existente do WhatsApp — usado pela ação
-   * "Transferir para humano" quando a conta cadastrou um grupo fixo de
-   * atendimento. Nunca lança por conta própria: o chamador decide como tratar
-   * a falha (registrar e seguir com o handoff normal, nunca travar o
-   * atendimento por causa de um grupo).
+   * Envia um aviso para um grupo interno já existente, sem alterar participantes.
+   * Opcional: a conexão oficial da Meta não oferece grupos. O chamador trata
+   * falhas sem impedir a transferência para humano.
    */
-  addParticipantToGroup(externalId: string, groupId: string, phone: string): Promise<void>;
+  sendGroupMessage?(
+    externalId: string,
+    groupId: string,
+    text: string,
+  ): Promise<string | null>;
   /**
    * Grupos de que o número conectado participa, para a tela escolher o grupo da
    * transferência em vez de pedir o ID colado. Opcional porque a Cloud API da

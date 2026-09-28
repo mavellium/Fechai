@@ -1,8 +1,36 @@
 <!-- BEGIN:nextjs-agent-rules -->
+
 # This is NOT the Next.js you know
 
-This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
 <!-- END:nextjs-agent-rules -->
+
+## Working in Disparos (/disparos, Excel/JSON, Meta templates)
+
+Before touching broadcasts, read `src/modules/broadcasts/README.md`. A página e
+todas as actions exigem produto + tenant ativo + `metaWhatsappEnabled`; esconder
+o menu não autoriza acesso. Disparos usam apenas Meta conectada e templates
+aprovados compatíveis. Importação cria **rascunho**, envio só após revisão e
+confirmação. A fila está no banco (`BroadcastCampaign`/`BroadcastRecipient`) e
+roda no worker existente, com claim condicional por destinatário. **Nunca
+reenviar automaticamente resultado `unknown`**: a Meta pode ter aceitado antes
+do timeout. Confira conexão/liberação antes de cada destinatário e respeite
+bloqueados/pedido para parar. O histórico usa `sentBy: "human"`, sem chamada de
+IA e sem consumir cota. Mudança de schema pede `db push` + `generate` nos dois
+processos (web e worker).
+
+**Entrega é separada de envio** (`deliveryStatus`): callbacks são assinados e
+idempotentes, e `BroadcastReceipt` guarda os que chegaram antes do commit.
+Não regrida `read`/`delivered` com eventos atrasados, nem use falha de entrega
+para reenviar. Desconexão **pausa**, não cancela pendentes. Retomar não restaura
+contatos processados. Datas/fusos usam `scheduling/time.ts`; a seleção da fila
+dá uma vaga por tenant e recua em falhas. Testes têm `isTest` no destinatário
+da campanha, nunca transformam a conversa real em sandbox. Resultados usam a
+última campanha antes da resposta, em sete dias; leia a regra no README antes
+de alterar a atribuição. Confirmação registra usuário/data/versão do consentimento.
 
 ## Working in /relatorios (relatórios + visão Financeira)
 
@@ -26,7 +54,7 @@ No Clinicorp: auth é **HTTP Basic** (não OAuth), ids são inteiros de 64 bits 
 
 Before touching action/tool logic, read `src/modules/agent-engine/README.md`. As "habilidades" do agente são o `ACTION_CATALOG` (`src/modules/agent-engine/actions.ts`); ligar/desligar grava em `TenantAction` (uma linha por agente + chave) e a **configuração de cada ação mora em `TenantAction.config`**, um Json — nunca uma coluna nova em `Agent`. Os três exemplos do padrão: `scheduling/config.ts` (horário de atendimento), `follow-up/config.ts` (esteiras) e `agent-engine/handoff.ts` (grupo do WhatsApp). Toda config tem `parse*` que **nunca lança** (a linha pode ser null, antiga ou editada à mão) e `describe*` para o resumo de uma linha no card fechado.
 
-**Transferir para humano tem três portas de entrada, não uma**: a tool `handoff_human` (o LLM decide), a reação com emoji e a mensagem só de emoji — as duas últimas no webhook, dependentes de `Agent.stopOnEmoji`, que **nasce ligado**. Quem marca `needsHuman` precisa fazer o mesmo nos três lugares, senão o comportamento muda conforme o gesto do cliente. Ligada a opção, o contato também entra num **grupo fixo do WhatsApp** (`addLeadToHandoffGroup`): a ação precisa estar `enabled` (use `getActiveHandoffConfig`, não `getHandoffConfig` — este é só para a tela preencher o formulário), conversa de teste fica de fora (`isTest`), e a função **nunca lança nem para o banco** — no webhook, exceção vira 500 e a Evolution reentrega em laço. Desligar a opção **não apaga o `groupId`** (esconder o campo, não desmontar); e `addToGroup` nunca fica ligado sem grupo, pelo mesmo motivo de `speakReplies` sem voz. O grupo é escolhido na lista do número conectado (`listWhatsAppGroups`, que **nunca lança** — falhou, a tela volta ao ID colado; na Meta não há grupo). O motivo ("quando mandar para este grupo", `groupReason`) chega ao agente pela **descrição da tool** `handoff_human` (`handoffToolDescription`), como gatilho a mais e não como proibição dos outros — e só com o grupo ligado.
+**Transferir para humano avisa a equipe, nunca adiciona o lead ao grupo.** A tool `handoff_human` e a reação do atendente no webhook (`Agent.stopOnEmoji`, ligado por padrão) marcam `needsHuman`. Ligada a opção `notifyGroup`, `notifyHandoffGroup` envia ao **grupo interno já configurado** três linhas: `Nome:`, `Número:` e `Resumo:`. Reusa `Conversation.summary` e acrescenta o motivo atual da prioridade; sem resumo, usa falas recentes, sem nova chamada de IA. **Nunca chamar inclusão de participantes nesse fluxo**: o lead não pode ver a conversa interna da clínica. A tool avisa apenas na transição para `needsHuman`, evitando avisos repetidos. A ação precisa estar `enabled` (use `getActiveHandoffConfig`, não `getHandoffConfig`, que é só para a tela), conversa/lead de teste fica de fora (`isTest`), consultas levam `tenantId`, e a função **nunca lança nem para o banco**. Desligar **não apaga grupo nem motivo**; `notifyGroup` nunca fica ligado sem `groupId`. `parseHandoffConfig` lê a chave antiga `addToGroup` como notificação para preservar configurações existentes — jamais como convite. O grupo é escolhido com `listWhatsAppGroups` (nunca lança); precisa permitir mensagens do número conectado, sem exigir administrador. Na Meta não há este envio. `groupReason` chega ao agente por `handoffToolDescription`, como gatilho adicional, só com o aviso ligado.
 
 **Follow-up é esteira, não mensagem única** (`src/modules/follow-up/config.ts`): duas sequências de etapas — `noReply` (sumiu; começa em 30 min) e `declined` (disse que não quer agendar agora; espaçada em dias) — mais uma janela de horas locais para envio. Quem troca a conversa de esteira é o agente, pela tool `follow_up` (`Conversation.followUpReason`: `declined` ou `stop`, que não recebe nada); quem só sumiu nunca precisa da tool. Não existe coluna de "esteira ativa": `followUpStep` conta as etapas enviadas e só vale enquanto `followUpSentAt >= lastInboundAt` — a resposta do contato zera sem ninguém escrever nada. Etapa vencida há mais de `FOLLOWUP_STALE_AFTER_MINUTES` não sai (worker parado, conta que acabou de ligar a ação). Etapa com `ai: true` é reescrita pela IA (`follow-up/compose.ts`) e **conta na cota** (`sentBy: "agent"`); sem cota ou IA fora do ar sai o texto fixo, que não conta. Esperas em minutos, com a unidade sendo só a forma de digitar. Configs antigas guardavam uma mensagem só (`delayMinutes` ou `delayHours` + `message`) e `parseFollowUpConfig` converte numa esteira `noReply` de uma etapa — **não remova esse fallback** sem migrar as linhas, senão todo follow-up já configurado vira em silêncio a esteira padrão de 10 mensagens.
 

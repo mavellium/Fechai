@@ -12,6 +12,7 @@
 
 # testing
 /coverage
+/tmp/roi/
 
 # next.js
 /.next/

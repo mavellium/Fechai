@@ -40,6 +40,9 @@ const GUARDS = [
   "requireSuperadmin",
   "requireSession",
   "requireProductAccess",
+  // Encapsula requireProductAccess + tenant ativo + liberação Meta.
+  // Comportamento executado em disparos-access.test.ts.
+  "requireBroadcastAccess",
 ];
 
 /**

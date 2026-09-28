@@ -9,6 +9,12 @@ Calcula as métricas do tenant para `/relatorios` e a home. Só leitura, sempre 
 
 ## Arquivos
 
+- `monthly-config.ts`, `monthly.ts`, `monthly-pdf.ts`, `events.ts`: ROI mensal
+  odontológico P-79, separado do Financeiro legado. Premissas mensais revisadas
+  pelo superadmin, comparecimento confirmado, receita apenas da chegada fora
+  do horário humano, economia estimada declarada, fechamento em snapshot e
+  PDF A4 de uma página. Contrato: [`docs/P-79-relatorio-mensal-roi.md`](../../../docs/P-79-relatorio-mensal-roi.md).
+
 - `service.ts`:
   - `computeTenantReport(tenantId)` — totais desde o início da conta (legado).
   - `computeHomeSummary(tenantId, days)` — resumo da home com janela e comparação com o período anterior.

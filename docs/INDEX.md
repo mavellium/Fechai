@@ -30,11 +30,13 @@ Ver [CHANGELOG.md](./CHANGELOG.md) para o último milestone concluído.
 - Módulo affiliates (programa de indicação, comissão progressiva, papéis da conta) → `src/modules/affiliates/README.md`
 - Papéis da conta (cliente · afiliado) e painel enxuto de quem só afilia → seção "Os dois papéis" em `src/modules/affiliates/README.md`
 - Módulo agent-engine (ações + persona; motor no M5) → `src/modules/agent-engine/README.md`
+- Prioridade e transferência para humano (aviso no grupo interno, nunca inclusão do lead) → [regras, formato e testes](../src/modules/agent-engine/README.md#transferir-para-humano-e-o-grupo-do-whatsapp-handoffts)
 - Duplicação, exportação, importação e réplica administrativa de agentes → seção "Duplicar, exportar, importar e replicar agentes" no README do agent-engine
 - Resumo de conversa gerado por IA (sob demanda, com cache) → seção "Resumo da conversa" em `src/modules/agent-engine/README.md`
 - Módulo ai (providers de LLM/embeddings, catálogo, modelo ativo) → `src/modules/ai/README.md`
 - Módulo knowledge-base (RAG) → `src/modules/knowledge-base/README.md`
 - Módulo whatsapp (provider Evolution) → `src/modules/whatsapp/README.md`
+- Disparos pela Meta (`/disparos`, Excel/JSON, testes, agenda, entrega e resultados) → [passo a passo e operação](../src/modules/broadcasts/README.md)
 - Módulo reports → `src/modules/reports/README.md`
 - Módulo admin → `src/modules/admin/README.md`
 - Laboratório do administrador com banco isolado → [ambiente-de-testes-admin.md](./ambiente-de-testes-admin.md)

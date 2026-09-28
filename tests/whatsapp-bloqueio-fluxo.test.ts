@@ -25,7 +25,7 @@ vi.mock("@/modules/agent-engine/orchestrator", () => ({
   resolveAgent: mocks.resolveAgent,
   runAgentTurn: mocks.runAgentTurn,
 }));
-vi.mock("@/modules/agent-engine/handoff", () => ({ addLeadToHandoffGroup: vi.fn() }));
+vi.mock("@/modules/agent-engine/handoff", () => ({ notifyHandoffGroup: vi.fn() }));
 vi.mock("@/modules/ai/transcribe", () => ({ transcribeAudio: vi.fn() }));
 vi.mock("@/modules/voice/reply", () => ({ speakReply: vi.fn() }));
 vi.mock("@/modules/voice/storage", () => ({ storeVoiceMessage: vi.fn() }));

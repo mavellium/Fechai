@@ -27,12 +27,12 @@ const LOAD_FAILED: GroupListResult = {
  * Config da ação "Transferir para humano".
  *
  * Fica embaixo do próprio toggle, como o intervalo do follow-up: a pergunta
- * "colocar no grupo de qual atendimento?" só faz sentido pra quem acabou de
+ * "avisar em qual grupo?" só faz sentido pra quem acabou de
  * ligar a transferência.
  */
 export function HandoffSettings({ agentId, config }: { agentId: string; config: HandoffConfig }) {
   const [state, formAction, pending] = useActionState(saveHandoffConfigAction, null);
-  const [addToGroup, setAddToGroup] = useState(config.addToGroup);
+  const [notifyGroup, setNotifyGroup] = useState(config.notifyGroup);
   const [groupId, setGroupId] = useState(config.groupId ?? "");
   const [groupName, setGroupName] = useState(config.groupName ?? "");
   const [groups, setGroups] = useState<GroupListResult | null>(null);
@@ -50,8 +50,8 @@ export function HandoffSettings({ agentId, config }: { agentId: string; config: 
   // A lista só é buscada com a opção ligada: a Evolution leva segundos numa
   // conta com muitos grupos, e quem não usa grupo não precisa esperar por ela.
   useEffect(() => {
-    if (addToGroup && !groups && !loadingGroups) loadGroups();
-  }, [addToGroup, groups, loadingGroups, loadGroups]);
+    if (notifyGroup && !groups && !loadingGroups) loadGroups();
+  }, [notifyGroup, groups, loadingGroups, loadGroups]);
 
   function chooseGroup(id: string) {
     setGroupId(id);
@@ -69,29 +69,29 @@ export function HandoffSettings({ agentId, config }: { agentId: string; config: 
 
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-sm font-medium text-white/85">Adicionar a um grupo do WhatsApp</p>
+          <p className="text-sm font-medium text-white/85">Avisar a equipe em um grupo do WhatsApp</p>
           <p id="handoff-group-desc" className="mt-0.5 text-sm text-white/60">
-            Ao transferir, o número do contato entra automaticamente no grupo abaixo — a equipe
-            já vê a conversa chegando lá, sem precisar salvar o contato à mão.
+            Ao transferir, a equipe recebe nome, número e resumo da conversa no grupo abaixo.
+            O contato nunca entra no grupo. A equipe pode falar com ele pelo número de atendimento.
           </p>
         </div>
         {/* O switch controla só o campo aparecer/desaparecer; quem trava o
             envio de "ligado sem grupo" é o servidor (mesma regra de
-            `parseHandoffConfig`: sem groupId, addToGroup nunca fica true). */}
+            `parseHandoffConfig`: sem groupId, notifyGroup nunca fica true). */}
         <Switch
-          checked={addToGroup}
-          onCheckedChange={setAddToGroup}
-          label={`Adicionar a um grupo do WhatsApp: ${addToGroup ? "ligado" : "desligado"}`}
+          checked={notifyGroup}
+          onCheckedChange={setNotifyGroup}
+          label={`Avisar a equipe em um grupo do WhatsApp: ${notifyGroup ? "ligado" : "desligado"}`}
           describedBy="handoff-group-desc"
         />
       </div>
-      <input type="hidden" name="addToGroup" value={addToGroup ? "on" : ""} />
+      <input type="hidden" name="notifyGroup" value={notifyGroup ? "on" : ""} />
 
       {/* Os campos ficam ESCONDIDOS, não desmontados, quando a opção está
           desligada: grupo e motivo continuam no envio e sobrevivem a um
           desligar/ligar — desligar é pausar, não descadastrar (mesma distinção
           de desabilitar × desconectar em /integracoes). */}
-      <div hidden={!addToGroup} className="space-y-5">
+      <div hidden={!notifyGroup} className="space-y-5">
         <GroupPicker
           fieldId={groupFieldId}
           labelId={groupLabelId}
@@ -100,16 +100,16 @@ export function HandoffSettings({ agentId, config }: { agentId: string; config: 
           groupId={groupId}
           savedGroupId={config.groupId}
           savedGroupName={config.groupName}
-          required={addToGroup}
+          required={notifyGroup}
           onChoose={chooseGroup}
           onReload={loadGroups}
         />
 
         <Field
-          label="Quando mandar para este grupo"
+          label="Quando avisar a equipe neste grupo"
           htmlFor={reasonFieldId}
           optional
-          hint="O agente transfere e adiciona o contato ao grupo sempre que isso acontecer. Em branco, ele decide sozinho quando transferir."
+          hint="O agente transfere e envia um aviso ao grupo sempre que isso acontecer. Em branco, ele decide sozinho quando transferir."
         >
           <Textarea
             {...fieldProps(reasonFieldId, { hint: true })}
@@ -227,7 +227,7 @@ function GroupPicker({
       <div className="space-y-3">
         <Alert tone="info">
           Nenhum grupo encontrado no WhatsApp conectado. Crie o grupo no celular, com este número
-          como administrador, e atualize a lista.
+          como participante com permissão para enviar mensagens, e atualize a lista.
         </Alert>
         {reload("Atualizar lista")}
       </div>
@@ -256,7 +256,7 @@ function GroupPicker({
       label="Grupo"
       htmlFor={fieldId}
       labelId={labelId}
-      hint="O número conectado precisa ser administrador do grupo — sem isso, o WhatsApp recusa adicionar o contato."
+      hint="O número conectado precisa participar do grupo e ter permissão para enviar mensagens. O contato nunca é adicionado."
     >
       <div className="flex flex-wrap items-center gap-2">
         <SelectMenu

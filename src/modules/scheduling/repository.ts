@@ -29,6 +29,7 @@ export type CreateAppointmentInput = {
   startsAt: Date;
   durationMinutes: number;
   source: "agent" | "manual";
+  serviceType?: string | null;
   timezone: string;
 };
 
@@ -199,6 +200,7 @@ export async function createAppointment(input: CreateAppointmentInput) {
       startsAt: input.startsAt,
       endsAt,
       source: input.source,
+      serviceType: input.serviceType ?? null,
       // Não deixe o worker enviar lembrete enquanto a tentativa ainda está
       // aguardando a resposta que pode recusá-la por conflito.
       reminderOverride: [],

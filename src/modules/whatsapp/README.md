@@ -30,12 +30,22 @@ createInstance(tenantId) -> { externalId, status, qrCode? }
 getQrCode(externalId) -> { status, qrCode? }        // GERA um QR (gasta QRCODE_LIMIT)
 getConnectionState(externalId) -> { status, exists, reachable }  // só LÊ, nunca gera
 sendMessage(externalId, toPhone, text)
+sendGroupMessage(externalId, groupId, text)  // opcional, Evolution; nunca altera participantes
 disconnect(externalId)
 ensureWebhook(externalId) -> boolean   // false = sem URL/segredo para apontar
 parseWebhook(payload) -> IncomingMessage | null
 ```
 
 ## Seleção por conta e credenciais da Meta
+
+Disparos em lote pela Meta vivem em `/disparos`, com importação Excel/JSON,
+templates aprovados e fila própria. Consulte
+[`modules/broadcasts/README.md`](../broadcasts/README.md) antes de alterar esse fluxo.
+O parser `meta-events.ts` percorre o lote inteiro, associa contatos por `wa_id`
+e separa mensagens de recibos. A rota autentica a assinatura e filtra cada evento
+pelo Phone Number ID. Recibos atualizam a entrega dos disparos sem reabrir envios;
+o inbox cobre retornos anteriores ao commit. Textos também persistem o ID de
+entrada para deduplicar reentregas; controle de rajada na Meta pede reentrega.
 
 `Tenant.metaWhatsappEnabled` nasce `false` e só o superadmin altera em
 `/admin/contas`. Sem essa liberação a alternativa Meta não aparece em
@@ -76,8 +86,8 @@ mostra um aviso se o token não tiver permissão para fazer essa inscrição.
 ### Diferenças funcionais da API oficial
 
 - Não existe QR nem sessão de aparelho. Conectar valida Phone Number ID + token.
-- A Cloud API oficial não gerencia participantes de grupos. A transferência
-  para humano continua marcando a conversa, mas o extra "adicionar ao grupo"
+- A Cloud API oficial não oferece o envio ao grupo interno. A transferência
+  para humano continua marcando a conversa, mas o extra "avisar a equipe no grupo"
   só funciona com Evolution.
 - Texto livre obedece à janela de atendimento aberta pelo cliente. Fora dela a
   Meta exige template aprovado; follow-ups e lembretes em texto livre podem ser
@@ -210,7 +220,6 @@ parece "instância não existe" — foi o que produzia `Evolution logout falhou
 | `/instance/logout/{id}` | **DELETE** |
 | `/message/sendText/{id}`, `/message/sendWhatsAppAudio/{id}` | POST |
 | `/chat/getBase64FromMediaMessage/{id}` | POST |
-| `/group/updateParticipant/{id}?groupJid=` | POST |
 | `/group/fetchAllGroups/{id}?getParticipants=false` | GET |
 | `/webhook/set/{id}` | POST |
 | `/instance/connectionState/{id}` | GET |

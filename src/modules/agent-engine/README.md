@@ -16,7 +16,7 @@ Cérebro do produto: recebe uma mensagem, monta o contexto (persona + RAG + hist
 - `variables.ts` — definições por agente e valores por conversa. Nome, número e endereço existem por padrão; as demais são opcionais e configuradas em Agentes › Variáveis.
 - `summary.ts` — `summarizeConversation(tenantId, conversationId)`: resumo em texto da conversa, sob demanda, com cache no banco. Ver seção abaixo.
 - `disqualify.ts` — motivos da triagem (`DISQUALIFY_REASONS`), rótulos e o custo do atendimento manual que converte triagem em dinheiro. Ver seção abaixo.
-- `handoff.ts` — config da ação "Transferir para humano" e `addLeadToHandoffGroup`: põe o contato num grupo do WhatsApp ao passar para atendimento. Ver seção abaixo.
+- `handoff.ts` — config da ação "Transferir para humano" e `notifyHandoffGroup`: avisa a equipe no grupo interno ao passar para atendimento, sem adicionar o contato. Ver seção abaixo.
 
 ## Contratos expostos
 
@@ -29,7 +29,7 @@ summarizeConversation(tenantId, conversationId) -> { ok: true, summary, summaryA
 composeSystemPrompt(answers): string; ACTION_CATALOG: ActionDef[]
 getHandoffConfig(agentId) -> HandoffConfig            // para a tela preencher o formulário
 saveHandoffConfig(tenantId, agentId, config) -> void
-addLeadToHandoffGroup(tenantId, agentId, phone, { isTest? }) -> void  // nunca lança
+notifyHandoffGroup(tenantId, agentId, conversationId, { isTest?, reason? }) -> void  // nunca lança
 listWhatsAppGroups(tenantId) -> { ok: true, groups } | { ok: false, reason, error }  // nunca lança
 handoffToolDescription(config?) -> string              // descrição de handoff_human com o motivo
 ```
@@ -237,108 +237,86 @@ o cliente queria. A action é `generateConversationSummary` em
 
 ### Transferir para humano e o grupo do WhatsApp (`handoff.ts`)
 
-Uma conversa vira "precisa de você" por **dois caminhos**, e os dois são a
-mesma coisa para quem está do outro lado:
+**O grupo é interno da clínica. O lead nunca é adicionado.** Ao entrar em
+prioridade, a equipe recebe um aviso no grupo já configurado e depois contata o
+lead pelo número de atendimento.
 
 | caminho | onde | o que marca |
 | --- | --- | --- |
 | tool `handoff_human` | `tools.ts` (o LLM decide) | `needsHuman` |
 | reação do atendente pelo número da empresa | webhook do WhatsApp | `needsHuman` + `agentPaused` |
 
-O segundo depende de `Agent.stopOnEmoji`, que **nasce ligado** (`@default(true)`
-no schema): reagir com emoji é o gesto mais barato para o atendente avisar
-"assumi esta conversa". O webhook distingue a origem por `isFromMe`: reação do
-cliente e mensagem que contém apenas emoji não pausam o agente.
+A reação depende de `Agent.stopOnEmoji`, ligado por padrão. Reação do cliente
+e mensagem só de emoji não pausam o agente. A tool usa `updateMany` condicional
+por conversa + tenant + `needsHuman: false`: repetir a tool não repete o aviso.
 
-**A config da ação vive em `TenantAction.config`** (chave `handoff_human`),
-mesmo padrão de `follow-up/config.ts` e `scheduling/config.ts` — por agente,
-sem coluna nova. Ela guarda o grupo e quando mandar para ele:
+A config vive em `TenantAction.config`, chave `handoff_human`, por agente:
 
 ```ts
 type HandoffConfig = {
-  addToGroup: boolean;
-  groupId: string | null;   // JID "...@g.us" — é o que vale
-  groupName: string | null; // só exibição (card fechado, grupo que sumiu da lista)
-  groupReason: string;      // "quando mandar para este grupo", nas palavras do dono
+  notifyGroup: boolean;
+  groupId: string | null;   // JID "...@g.us"
+  groupName: string | null; // só exibição
+  groupReason: string;     // quando avisar a equipe, nas palavras do dono
 }
 ```
 
-**O grupo é escolhido numa lista**, não colado: `listWhatsAppGroups(tenantId)`
-pergunta à Evolution (`GET /group/fetchAllGroups?getParticipants=false`) de
-quais grupos o número conectado participa. A tela busca **sob demanda**, só
-com a opção de grupo ligada — numa conta com muitos grupos a Evolution leva
-segundos. A lista é conveniência, não requisito, e a função **nunca lança**:
+**Compatibilidade:** `parseHandoffConfig` lê `addToGroup` das configs antigas
+como `notifyGroup`, preservando grupo, nome e motivo. Não autoriza convites.
+Se ambas as chaves existem, `notifyGroup` prevalece, inclusive `false`. Ao
+salvar, o formulário grava apenas a chave nova. Não requer mudança de schema.
 
-| resultado | a tela mostra |
-| --- | --- |
-| lista | `SelectMenu` com os grupos + "Atualizar lista" |
-| lista vazia | como criar o grupo (este número como admin) + "Atualizar lista" |
-| `disconnected` / `failed` | aviso + "Tentar de novo" + campo para colar o ID, como antes |
-| `unsupported` (Meta) | só o aviso: a Cloud API não tem grupos, colar o ID não adiantaria |
+`notifyHandoffGroup(tenantId, agentId, conversationId, options)` consulta a
+conversa e o lead da conta e envia exatamente três linhas:
 
-O grupo salvo que não aparece mais na lista (o número saiu dele) continua como
-opção marcada "não encontrado": sem isso o menu cairia em "Escolha um grupo" e
-o próximo salvar apagaria a escolha sem ninguém pedir. O número conectado
-precisa ser **administrador** do grupo, senão o WhatsApp recusa o convite — a
-lista não filtra por isso (exigiria buscar os participantes de todos os
-grupos), a dica do campo avisa.
+```text
+Nome: Luciane Aparecida Dos Santos
+Número: +55 14 99763-1563
+Resumo: [o que o lead quer e por que é prioridade]
+```
 
-**O motivo vira a descrição da tool.** `handoffToolDescription(cfg)` acrescenta
-"Use sempre que: <motivo>" à descrição de `handoff_human`, e é por ela que o
-agente fica sabendo quando transferir e mandar para o grupo — antes isso
-dependia de alguém repetir a regra na persona. "Sempre que", não "só quando":
-o motivo acrescenta um gatilho sem proibir os outros (quem pede para falar com
-uma pessoa continua sendo transferido). Vale só com o grupo ligado, porque o
-campo mora dentro dessa opção; desligada, o texto fica guardado e sem efeito.
-Em branco, a descrição é a de sempre. A reação do atendente (o outro caminho
-da tabela acima) não passa pelo LLM e adiciona ao grupo independentemente do
-motivo — ali quem decidiu foi uma pessoa.
+Reusa `Conversation.summary`, limitado a 600 caracteres em uma linha, e
+acrescenta o motivo atual da tool (até 300 caracteres) se ainda não está no
+resumo. Sem resumo salvo, usa as três últimas mensagens do contato em ordem
+cronológica; sem dados, informa a ausência. Não gera uma segunda chamada de
+IA nem grava o aviso como resposta ao lead.
 
-Ligado, `addLeadToHandoffGroup` adiciona o telefone do contato a um **grupo
-fixo** do WhatsApp — normalmente o grupo onde a equipe de atendimento já está.
-É um grupo por agente, não um grupo novo por atendimento: criar e limpar um
-grupo por lead exigiria cadastro de atendentes e uma política de descarte que
-ninguém pediu.
+**Envio:** `WhatsAppProvider.sendGroupMessage` →
+`POST /message/sendText/{externalId}` com `{ number: groupId, text }` na
+Evolution. O método só aceita JID de grupo. A operação de inclusão de
+participantes foi removida do contrato e dos adapters. Nunca chamar
+`/group/updateParticipant` no fluxo de prioridade.
 
-Regras que não são óbvias:
+Regras que precisam permanecer:
 
-- **`addToGroup` nunca fica ligado sem `groupId`.** `parseHandoffConfig` força
-  isso na leitura e o formulário recusa no envio (`superRefine` **antes** do
-  `transform` — depois, o ID inválido já teria virado `addToGroup: false` e a
-  tela diria "salvo" com a opção silenciosamente desligada). Um toggle ligado
-  que não faz nada faz a tela mentir, igual à regra de `speakReplies` sem voz.
-- **Desligar a opção não apaga o grupo nem o motivo.** Os campos ficam
-  escondidos, não desmontados, e continuam no envio — e o schema da action
-  grava o `groupId` mesmo com a opção desligada (antes o `transform` o zerava,
-  e o campo escondido não servia de nada). Desligar é pausar, não descadastrar
-  (mesma distinção de desabilitar × desconectar em `/integracoes`).
-- **A ação desligada não adiciona ninguém.** Quem age lê por
-  `getActiveHandoffConfig`, que checa `TenantAction.enabled`; `getHandoffConfig`
-  (sem a checagem) é só para a tela preencher o formulário, porque desligar a
-  ação não pode apagar o que foi configurado.
-- **Conversa de teste fica de fora** (`isTest`). O sandbox usa telefone
-  sintético, e ele no grupo real polui o grupo da equipe com um número que não
-  existe — mesma regra do worker de follow-up e do envio de resposta.
-- **Nunca lança, e o `try` cobre o banco também**, não só a chamada de rede.
-  No webhook, uma exceção escapando viraria 500 e a Evolution reentregaria a
-  mesma mensagem em laço. A transferência já aconteceu; o grupo é o extra.
-- **O ID colado à mão aceita as duas formas** que a pessoa consegue copiar:
-  `120363...@g.us` ou só os dígitos (`normalizeGroupId` completa o sufixo).
-  Um telefone de pessoa (`@s.whatsapp.net`) é recusado.
+- A ação tem que estar `enabled`: quem age lê `getActiveHandoffConfig`,
+  enquanto `getHandoffConfig` só preenche a tela, mesmo com a ação desligada.
+- Config e conversa são consultadas com `tenantId`. `isTest` na conversa ou
+  no lead impede o envio real, mesmo sem opção passada pelo chamador.
+- `notifyGroup` nunca fica ligado sem `groupId`. O formulário recusa o ID
+  inválido antes de normalizar, para não dizer "salvo" com a opção desligada.
+- Desligar preserva grupo e motivo. Campos ficam escondidos, não desmontados.
+- Banco, provider e rede ficam dentro do `try`: uma falha no aviso nunca
+  desfaz o handoff nem causa 500 com reentrega em laço no webhook.
+- A conexão precisa estar ativa e configurada. Na Meta este envio não existe:
+  a transferência principal continua, sem tentar mandar o aviso a uma pessoa.
 
-Envio: `WhatsAppProvider.addParticipantToGroup` →
-`POST /group/updateParticipant?groupJid=...` com `action: "add"` na Evolution.
-Regressões em `tests/handoff-grupo.test.ts` (banco e provider simulados).
+**Escolha do grupo:** `listWhatsAppGroups` nunca lança e busca sob demanda
+`GET /group/fetchAllGroups?getParticipants=false`. A tela usa `SelectMenu`;
+falha/desconexão oferecem tentar novamente ou colar o ID. Lista vazia orienta
+criar um grupo; Meta só mostra a limitação. O grupo salvo que sumiu continua
+como opção "não encontrado", evitando apagar a escolha sem pedido. O número
+conectado precisa participar e poder enviar mensagens, sem exigir admin.
+`normalizeGroupId` aceita JID completo ou dígitos, mas recusa JID de pessoa.
 
-Na conexão oficial da Meta este extra não existe: a Cloud API não expõe gestão
-de participantes de grupos. A transferência principal (`needsHuman`) continua
-normal e `addLeadToHandoffGroup` engole a limitação como qualquer falha do extra;
-para adicionar ao grupo é necessário usar Evolution.
+**Motivo na tool:** `handoffToolDescription` acrescenta "Use sempre que:
+<motivo>" como gatilho adicional, sem proibir os demais motivos de transferência.
+Só vale com aviso ligado; desligado, o motivo fica guardado e sem efeito.
+A descrição informa que o contato nunca é adicionado ao grupo.
 
-O número precisa estar **conectado** (`WhatsappInstance.status`): sem sessão
-ativa não há de onde convidar. O WhatsApp também recusa o convite direto quando
-a pessoa restringe quem pode adicioná-la a grupos — nesse caso a Evolution
-devolve erro, ele fica no log e a transferência segue normal.
+Regressões em `tests/handoff-grupo.test.ts`: config legada, formato, isolamento
+por tenant, testes sem efeito externo, falhas e simulação tool → Evolution.
+A simulação verifica uma única mensagem no grupo e participantes inalterados.
 
 ### Triagem de contatos (`disqualify.ts`, tool `disqualify_lead`)
 

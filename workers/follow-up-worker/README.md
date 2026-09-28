@@ -17,6 +17,19 @@ não espera o próximo ciclo do follow-up. As falhas de uma fila não param a ou
 
 ## Arquivos
 
+A página **Disparos** usa também este processo, em uma fila independente
+`whatsapp-broadcasts` a cada 10 segundos. O núcleo fica em
+[`src/modules/broadcasts/worker.ts`](../../src/modules/broadcasts/worker.ts).
+Importação, autorização, proteção contra duplicação e estados estão no
+[README de broadcasts](../../src/modules/broadcasts/README.md). Exige as tabelas
+novas aplicadas com `prisma db push`; não depende das ações follow-up/lembrete.
+Usa concorrência **global** 1 no BullMQ e uma campanha por tenant/ciclo, com
+recuo nas consultas que falham. Agenda e faixa diária são verificadas antes de
+cada contato. Desconexão pausa preservando pendentes. Um sinal independente a
+cada 15 segundos (`WorkerHeartbeat`) expira na tela após 60 segundos sem notícia;
+o serviço só anuncia saúde após consultar o Redis. Entrega/leitura vêm dos
+recibos assinados da Meta, reconciliados também nesta varredura.
+
 - `scan.ts` — follow-up em esteira (testável; ver seção abaixo):
   - `nextFollowUp(conv, cfg)` — regra pura: qual etapa vem agora e quando vence (null sem esteira, com consulta, `needsHuman` ou última msg do contato).
   - `stepsSentInRun(conv)` — quantas etapas desta esteira já saíram (`followUpStep`, só enquanto `followUpSentAt >= lastInboundAt`).

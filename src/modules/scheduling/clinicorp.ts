@@ -556,6 +556,56 @@ export async function cancelAppointmentInClinicorp(
 
 export type ClinicorpBusyBlock = { startsAt: Date; endsAt: Date };
 
+export type ClinicorpReportData = {
+  available: boolean;
+  error: string | null;
+  appointments: { id: string; statusType: string | null; canceled: boolean }[];
+  statusTypes: { type: string; description: string }[];
+};
+
+/** Leitura para comparecimento, sem alterar a agenda local ou enviar mensagens. */
+export async function readClinicorpReport(tenantId: string, from: string, to: string): Promise<ClinicorpReportData> {
+  const unavailable = (error: string): ClinicorpReportData => ({ available: false, error, appointments: [], statusTypes: [] });
+  try {
+    const integration = await getIntegration(tenantId);
+    if (!integration) return unavailable("Clinicorp desligado, sem conexão ou com credenciais ilegíveis; comparecimento usa somente confirmações locais.");
+    const [appointments, statuses] = await Promise.all([
+      call<unknown>(integration, "/appointment/list", { query: { from, to,
+        businessId: integration.businessId ?? undefined, includeCanceled: "X", includeDeleted: "X" } }),
+      call<unknown>(integration, "/appointment/status_list"),
+    ]);
+    if (!appointments.ok || !statuses.ok || !Array.isArray(appointments.data) || !Array.isArray(statuses.data)) {
+      return unavailable("Não foi possível conferir comparecimento no Clinicorp. Tente atualizar antes de fechar o relatório.");
+    }
+    const safeId = (value: unknown): string | null => typeof value === "string" && /^\d+$/.test(value) ? value
+      : typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? String(value) : null;
+    const mapping = new Map<string, string>();
+    const statusTypes: ClinicorpReportData["statusTypes"] = [];
+    for (const raw of statuses.data) {
+      if (!raw || typeof raw !== "object") return unavailable("Lista de status do Clinicorp incompleta.");
+      const row = raw as Record<string, unknown>;
+      const id = safeId(row.id);
+      if (id && typeof row.Type === "string") {
+        mapping.set(id, row.Type);
+        statusTypes.push({ type: row.Type, description: String(row.Description ?? row.Type) });
+      }
+    }
+    const rows: ClinicorpReportData["appointments"] = [];
+    for (const raw of appointments.data) {
+      if (!raw || typeof raw !== "object") return unavailable("Agenda do Clinicorp incompleta.");
+      const row = raw as Record<string, unknown>;
+      if (row.ItemType && row.ItemType !== "APPOINTMENT") continue;
+      const id = safeId(row.id);
+      if (!id) return unavailable("Clinicorp retornou um ID fora da precisão segura; não foi possível vincular o comparecimento.");
+      rows.push({ id, statusType: mapping.get(safeId(row.StatusId) ?? "") ?? null,
+        canceled: row.Canceled === "X" || row.Deleted === "X" });
+    }
+    return { available: true, error: null, appointments: rows, statusTypes };
+  } catch {
+    return unavailable("Clinicorp indisponível. O relatório permanece em rascunho para conferência.");
+  }
+}
+
 /**
  * O que já está ocupado na agenda da clínica num dia.
  *

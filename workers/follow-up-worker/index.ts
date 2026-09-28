@@ -2,6 +2,8 @@ import { Queue, Worker, type ConnectionOptions } from "bullmq";
 import { scanAndSendFollowUps } from "./scan";
 import { scanAndSendReminders } from "./reminders";
 import { scanWhatsappHealth } from "../../src/modules/whatsapp/health";
+import { scanBroadcasts } from "../../src/modules/broadcasts/worker";
+import { touchBroadcastWorker } from "../../src/modules/broadcasts/health";
 
 // Worker de mensagens no tempo. Follow-up/lembretes rodam na cadência comercial
 // configurada; a saúde do WhatsApp tem um job próprio, mais rápido:
@@ -21,14 +23,65 @@ const connection: ConnectionOptions = {
 const FOLLOWUP_QUEUE = "follow-up";
 const REMINDER_QUEUE = "appointment-reminders";
 const HEALTH_QUEUE = "whatsapp-health";
-const FOLLOWUP_EVERY_MS = Number(process.env.FOLLOWUP_SCAN_EVERY_MINUTES ?? 15) * 60_000;
-const REMINDER_EVERY_MS = Number(process.env.REMINDER_SCAN_EVERY_MINUTES ?? 1) * 60_000;
-const HEALTH_EVERY_MS = Number(process.env.WHATSAPP_HEALTH_SCAN_EVERY_MINUTES ?? 1) * 60_000;
+const FOLLOWUP_EVERY_MS =
+  Number(process.env.FOLLOWUP_SCAN_EVERY_MINUTES ?? 15) * 60_000;
+const REMINDER_EVERY_MS =
+  Number(process.env.REMINDER_SCAN_EVERY_MINUTES ?? 1) * 60_000;
+const HEALTH_EVERY_MS =
+  Number(process.env.WHATSAPP_HEALTH_SCAN_EVERY_MINUTES ?? 1) * 60_000;
 
 async function main() {
   const followUpQueue = new Queue(FOLLOWUP_QUEUE, { connection });
   const reminderQueue = new Queue(REMINDER_QUEUE, { connection });
   const healthQueue = new Queue(HEALTH_QUEUE, { connection });
+  const broadcastQueue = new Queue("whatsapp-broadcasts", { connection });
+  await broadcastQueue.setGlobalConcurrency(1);
+  await broadcastQueue.upsertJobScheduler(
+    "broadcast-scheduler",
+    { every: 10_000 },
+    { name: "broadcasts" },
+  );
+  const broadcastWorker = new Worker(
+    "whatsapp-broadcasts",
+    async () => {
+      try {
+        const result = await scanBroadcasts();
+        await touchBroadcastWorker(true);
+        return result;
+      } catch (error) {
+        await touchBroadcastWorker(
+          true,
+          "O serviço encontrou uma falha ao processar a fila.",
+        ).catch(() => {});
+        throw error;
+      }
+    },
+    { connection, concurrency: 1 },
+  );
+  // O sinal não depende da duração da varredura. Redis indisponível não anuncia saúde.
+  let checkingHeartbeat = false;
+  const heartbeat = async () => {
+    if (checkingHeartbeat) return;
+    checkingHeartbeat = true;
+    try {
+      if (
+        (await broadcastWorker.client).status !== "ready" ||
+        !broadcastWorker.isRunning()
+      )
+        return;
+      await broadcastQueue.getJobCounts("wait", "active");
+      await touchBroadcastWorker();
+    } catch {
+      /* expira na tela */
+    } finally {
+      checkingHeartbeat = false;
+    }
+  };
+  await heartbeat();
+  setInterval(heartbeat, 15_000).unref();
+  broadcastWorker.on("failed", (job, err) =>
+    console.error(`[disparos] job ${job?.id} falhou`, err),
+  );
 
   // Filas separadas: uma varredura de follow-up demorada não pode atrasar o
   // watchdog que precisa reparar o webhook em até um minuto.

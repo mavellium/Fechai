@@ -39,9 +39,10 @@ const NAV_CONFIG: NavItem = { href: "/configuracoes", label: "Configurações", 
  * um menu curto. Configurações fica sempre por último — é de lá que a pessoa
  * liga o outro papel quando quiser.
  */
-function navFor(roles: { usesProduct: boolean; isAffiliate: boolean }): NavItem[] {
+function navFor(roles: { usesProduct: boolean; isAffiliate: boolean }, metaEnabled: boolean): NavItem[] {
   const items: NavItem[] = [];
   if (roles.usesProduct) items.push(...NAV_PRODUTO);
+  if (roles.usesProduct && metaEnabled) items.push({ href: "/disparos", label: "Disparos", icon: "Send" });
   if (roles.isAffiliate) items.push(NAV_AFILIADO);
   items.push(NAV_RELATORIOS, NAV_CONFIG);
   return items;
@@ -65,7 +66,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const tenantId = session.user.tenantId;
   const tenant = await prisma.tenant.findUnique({
     where: { id: tenantId },
-    select: { status: true, name: true, planKey: true, onboardingCompleted: true },
+    select: { status: true, name: true, planKey: true, onboardingCompleted: true, metaWhatsappEnabled: true },
   });
 
   // Conta suspensa: bloqueia o app e orienta a contatar o suporte.
@@ -113,7 +114,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   // IA, que essa conta não gasta.
   const usage = affiliateOnly ? null : await getUsageSummary(tenantId);
 
-  const navItems = navFor(roles);
+  const navItems = navFor(roles, tenant?.metaWhatsappEnabled ?? false);
 
   return (
     <PanelShell

@@ -1,9 +1,15 @@
+import { parseMetaMessages } from "./meta-events";
 import type {
   CreateInstanceResult,
   IncomingMessage,
   WhatsAppProvider,
   WhatsAppStatus,
 } from "./provider";
+import {
+  supportedTemplate,
+  type BroadcastTemplate,
+  type MetaTemplateRecord,
+} from "@/modules/broadcasts/template";
 
 /**
  * Credenciais de uma conta na WhatsApp Cloud API oficial.
@@ -20,11 +26,18 @@ export type MetaCloudCredentials = {
 const DEFAULT_GRAPH_VERSION = "v26.0";
 
 type MetaErrorBody = {
-  error?: { message?: string; type?: string; code?: number; error_subcode?: number };
+  error?: {
+    message?: string;
+    type?: string;
+    code?: number;
+    error_subcode?: number;
+  };
 };
 
 function graphVersion(): string {
-  const configured = (process.env.META_GRAPH_API_VERSION ?? DEFAULT_GRAPH_VERSION).trim();
+  const configured = (
+    process.env.META_GRAPH_API_VERSION ?? DEFAULT_GRAPH_VERSION
+  ).trim();
   return /^v\d+\.\d+$/.test(configured) ? configured : DEFAULT_GRAPH_VERSION;
 }
 
@@ -42,7 +55,9 @@ async function metaError(label: string, res: Response): Promise<Error> {
   } catch {
     // Corpo não JSON: a amostra limitada acima é mais útil que esconder tudo.
   }
-  return new Error(`${label} falhou (${res.status})${detail ? `: ${detail}` : ""}`);
+  return new Error(
+    `${label} falhou (${res.status})${detail ? `: ${detail}` : ""}`,
+  );
 }
 
 /** Adapter da API oficial da Meta (WhatsApp Business Platform / Cloud API). */
@@ -52,7 +67,107 @@ export class MetaCloudProvider implements WhatsAppProvider {
   constructor(private readonly credentials: MetaCloudCredentials) {}
 
   isConfigured(): boolean {
-    return Boolean(this.credentials.phoneNumberId && this.credentials.accessToken);
+    return Boolean(
+      this.credentials.phoneNumberId && this.credentials.accessToken,
+    );
+  }
+
+  /** Pagina usando cursor, nunca seguindo uma URL externa com nosso token. */
+  async listBroadcastTemplates(): Promise<BroadcastTemplate[]> {
+    const waba = this.credentials.businessAccountId;
+    if (!waba)
+      throw new Error(
+        "Configure o ID da conta WhatsApp Business em Integrações.",
+      );
+    const templates: BroadcastTemplate[] = [];
+    let after: string | undefined;
+    for (let page = 0; page < 20; page++) {
+      const query = new URLSearchParams({
+        fields: "id,name,language,status,parameter_format,components",
+        limit: "100",
+      });
+      if (after) query.set("after", after);
+      const response = await fetch(
+        `${graphUrl(`${waba}/message_templates`)}?${query}`,
+        {
+          headers: this.headers(false),
+          cache: "no-store",
+          signal: AbortSignal.timeout(15_000),
+        },
+      );
+      if (!response.ok)
+        throw new Error(
+          "Não foi possível consultar os templates na Meta. Confira as permissões do token em Integrações.",
+        );
+      const data = (await response.json()) as {
+        data?: MetaTemplateRecord[];
+        paging?: { next?: string; cursors?: { after?: string } };
+      };
+      for (const raw of data.data ?? []) {
+        const template = supportedTemplate(raw);
+        if (template) templates.push(template);
+      }
+      if (!data.paging?.next) return templates;
+      after = data.paging.cursors?.after;
+      if (!after) break;
+    }
+    throw new Error(
+      "A lista de templates é grande demais ou está incompleta. Revise os templates na Meta.",
+    );
+  }
+
+  async sendBroadcastTemplate(
+    toPhone: string,
+    template: BroadcastTemplate,
+    parameters: string[],
+  ): Promise<string> {
+    if (parameters.length !== template.parameterCount)
+      throw new Error("Variáveis incompatíveis com o template.");
+    const response = await fetch(
+      graphUrl(`${this.credentials.phoneNumberId}/messages`),
+      {
+        method: "POST",
+        headers: this.headers(),
+        signal: AbortSignal.timeout(20_000),
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          recipient_type: "individual",
+          to: toPhone,
+          type: "template",
+          template: {
+            name: template.name,
+            language: { code: template.language },
+            ...(parameters.length
+              ? {
+                  components: [
+                    {
+                      type: "body",
+                      parameters: parameters.map((text) => ({
+                        type: "text",
+                        text,
+                      })),
+                    },
+                  ],
+                }
+              : {}),
+          },
+        }),
+      },
+    );
+    if (!response.ok) {
+      if (response.status >= 500)
+        throw new Error("A Meta não confirmou o resultado do envio.");
+      const data = (await response.json().catch(() => ({}))) as MetaErrorBody;
+      // Não persistir corpo bruto: pode conter telefone, credencial ou conteúdo.
+      throw new MetaBroadcastRejected(
+        `A Meta recusou o envio (${response.status}${data.error?.code ? `, código ${data.error.code}` : ""}).`,
+      );
+    }
+    const data = (await response.json()) as { messages?: { id?: string }[] };
+    const id = data.messages?.[0]?.id;
+    if (!id)
+      throw new Error("A Meta não confirmou o identificador da mensagem.");
+    return id;
   }
 
   private headers(json = true): HeadersInit {
@@ -72,7 +187,9 @@ export class MetaCloudProvider implements WhatsAppProvider {
   }
 
   /** A Cloud API não usa QR; esta chamada apenas revalida as credenciais. */
-  async getQrCode(externalId: string): Promise<{ status: WhatsAppStatus; qrCode?: string }> {
+  async getQrCode(
+    externalId: string,
+  ): Promise<{ status: WhatsAppStatus; qrCode?: string }> {
     const state = await this.getConnectionState(externalId);
     return { status: state.status };
   }
@@ -82,9 +199,12 @@ export class MetaCloudProvider implements WhatsAppProvider {
   ): Promise<{ status: WhatsAppStatus; exists: boolean; reachable: boolean }> {
     try {
       const fields = "id,display_phone_number,verified_name,quality_rating";
-      const res = await fetch(`${graphUrl(externalId)}?fields=${encodeURIComponent(fields)}`, {
-        headers: this.headers(false),
-      });
+      const res = await fetch(
+        `${graphUrl(externalId)}?fields=${encodeURIComponent(fields)}`,
+        {
+          headers: this.headers(false),
+        },
+      );
       if (res.ok) return { status: "connected", exists: true, reachable: true };
       // A Meta respondeu: rede está de pé, mas o id/token não dá acesso ao
       // número. Para o produto isto é desconectado (e não indisponibilidade).
@@ -103,23 +223,31 @@ export class MetaCloudProvider implements WhatsAppProvider {
     verifiedName: string | null;
   }> {
     const fields = "id,display_phone_number,verified_name";
-    const res = await fetch(`${graphUrl(externalId)}?fields=${encodeURIComponent(fields)}`, {
-      headers: this.headers(false),
-    });
+    const res = await fetch(
+      `${graphUrl(externalId)}?fields=${encodeURIComponent(fields)}`,
+      {
+        headers: this.headers(false),
+      },
+    );
     if (!res.ok) throw await metaError("Meta Cloud API", res);
     const data = (await res.json()) as {
       id?: string;
       display_phone_number?: string;
       verified_name?: string;
     };
-    if (data.id !== externalId) throw new Error("A Meta devolveu um Phone Number ID diferente.");
+    if (data.id !== externalId)
+      throw new Error("A Meta devolveu um Phone Number ID diferente.");
     return {
       displayPhone: data.display_phone_number ?? null,
       verifiedName: data.verified_name ?? null,
     };
   }
 
-  async sendMessage(externalId: string, toPhone: string, text: string): Promise<string | null> {
+  async sendMessage(
+    externalId: string,
+    toPhone: string,
+    text: string,
+  ): Promise<string | null> {
     const res = await fetch(graphUrl(`${externalId}/messages`), {
       method: "POST",
       headers: this.headers(),
@@ -149,7 +277,11 @@ export class MetaCloudProvider implements WhatsAppProvider {
     const form = new FormData();
     form.append("messaging_product", "whatsapp");
     form.append("type", audio.mime);
-    form.append("file", new Blob([bytes], { type: audio.mime }), "resposta.ogg");
+    form.append(
+      "file",
+      new Blob([bytes], { type: audio.mime }),
+      "resposta.ogg",
+    );
 
     const upload = await fetch(graphUrl(`${externalId}/media`), {
       method: "POST",
@@ -158,7 +290,8 @@ export class MetaCloudProvider implements WhatsAppProvider {
     });
     if (!upload.ok) throw await metaError("Meta uploadAudio", upload);
     const uploaded = (await upload.json()) as { id?: string };
-    if (!uploaded.id) throw new Error("A Meta não devolveu o id do áudio enviado.");
+    if (!uploaded.id)
+      throw new Error("A Meta não devolveu o id do áudio enviado.");
 
     const res = await fetch(graphUrl(`${externalId}/messages`), {
       method: "POST",
@@ -204,10 +337,16 @@ export class MetaCloudProvider implements WhatsAppProvider {
     mediaId: string,
   ): Promise<{ base64: string; mime: string }> {
     void externalId;
-    const metadata = await fetch(graphUrl(mediaId), { headers: this.headers(false) });
+    const metadata = await fetch(graphUrl(mediaId), {
+      headers: this.headers(false),
+    });
     if (!metadata.ok) throw await metaError("Meta getMedia", metadata);
-    const info = (await metadata.json()) as { url?: string; mime_type?: string };
-    if (!info.url) throw new Error("A Meta não devolveu a URL temporária da mídia.");
+    const info = (await metadata.json()) as {
+      url?: string;
+      mime_type?: string;
+    };
+    if (!info.url)
+      throw new Error("A Meta não devolveu a URL temporária da mídia.");
 
     // A URL temporária continua exigindo o mesmo bearer token.
     const media = await fetch(info.url, { headers: this.headers(false) });
@@ -216,73 +355,17 @@ export class MetaCloudProvider implements WhatsAppProvider {
     if (bytes.length === 0) throw new Error("A Meta devolveu uma mídia vazia.");
     return {
       base64: bytes.toString("base64"),
-      mime: info.mime_type ?? media.headers.get("content-type") ?? "application/octet-stream",
+      mime:
+        info.mime_type ??
+        media.headers.get("content-type") ??
+        "application/octet-stream",
     };
-  }
-
-  async addParticipantToGroup(
-    externalId: string,
-    groupId: string,
-    phone: string,
-  ): Promise<void> {
-    void externalId;
-    void groupId;
-    void phone;
-    // A Cloud API oficial atende conversas individuais; ela não expõe a gestão
-    // de participantes de grupos que a Evolution/Baileys oferece.
-    throw new Error("A API oficial da Meta não permite adicionar participantes a grupos.");
   }
 
   parseWebhook(payload: unknown): IncomingMessage | null {
-    const p = payload as {
-      object?: string;
-      entry?: Array<{
-        changes?: Array<{
-          field?: string;
-          value?: {
-            metadata?: { phone_number_id?: string };
-            contacts?: Array<{ wa_id?: string; profile?: { name?: string } }>;
-            messages?: Array<{
-              id?: string;
-              from?: string;
-              type?: string;
-              text?: { body?: string };
-              audio?: { id?: string; mime_type?: string; voice?: boolean };
-              reaction?: { message_id?: string; emoji?: string };
-            }>;
-          };
-        }>;
-      }>;
-    };
-
-    if (p?.object !== "whatsapp_business_account") return null;
-    const change = p.entry?.flatMap((entry) => entry.changes ?? []).find((c) => {
-      return c.field === "messages" && Boolean(c.value?.messages?.[0]);
-    });
-    const value = change?.value;
-    const message = value?.messages?.[0];
-    const phoneNumberId = value?.metadata?.phone_number_id ?? "";
-    const fromPhone = message?.from ?? value?.contacts?.[0]?.wa_id ?? "";
-    if (!message || !phoneNumberId || !fromPhone) return null;
-
-    const isAudio = message.type === "audio" && Boolean(message.audio?.id);
-    const isReaction = message.type === "reaction";
-    const text = isReaction ? (message.reaction?.emoji ?? "") : (message.text?.body ?? "");
-    if (!text && !isAudio) return null;
-
-    return {
-      instanceExternalId: phoneNumberId,
-      fromPhone,
-      fromName: value?.contacts?.[0]?.profile?.name,
-      text,
-      isGroup: false,
-      hasAudio: isAudio,
-      mediaId: message.audio?.id,
-      messageKeyId: message.id,
-      isReaction,
-      // A Meta não ecoa mensagens de saída como `messages`; entrega status em
-      // outro bloco. Toda mensagem parseável aqui veio do contato.
-      isFromMe: false,
-    };
+    return parseMetaMessages(payload)[0] ?? null;
   }
 }
+
+/** Resposta negativa explícita; timeout/rede são resultado desconhecido. */
+export class MetaBroadcastRejected extends Error {}

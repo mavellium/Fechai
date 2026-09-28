@@ -45,6 +45,10 @@ export type AuditGroup = keyof typeof AUDIT_GROUPS;
  * aparecer como evento desconhecido.
  */
 export const AUDIT_EVENTS = {
+  "report.monthly_saved": { label: "Revisou as premissas do ROI mensal", kind: "update", group: "admin" },
+  "report.monthly_finalized": { label: "Fechou o relatório mensal", kind: "update", group: "admin" },
+  "report.monthly_reopened": { label: "Reabriu o relatório mensal", kind: "update", group: "admin" },
+  "report.monthly_delivered": { label: "Registrou envio ou reunião do relatório", kind: "update", group: "admin" },
   // ── acesso ────────────────────────────────────────────────────────────
   "auth.login": { label: "Entrou na conta", kind: "auth", group: "auth" },
   "auth.login_failed": { label: "Falha ao entrar", kind: "auth", group: "auth" },

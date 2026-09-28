@@ -12,7 +12,7 @@ vi.mock("@/modules/scheduling/google", () => ({ pushEventToGoogle: mirrors.googl
 vi.mock("@/modules/scheduling/clinicorp", () => ({ pushAppointmentToClinicorp: mirrors.clinicorpPush, cancelAppointmentInClinicorp: mirrors.clinicorpCancel, hasClinicorpConflict: mirrors.clinicorpConflict, listClinicorpBusyBlocks: mirrors.clinicorpBusy }));
 vi.mock("@/modules/agent-engine/handoff", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/modules/agent-engine/handoff")>()),
-  addLeadToHandoffGroup: vi.fn(),
+  notifyHandoffGroup: vi.fn(),
 }));
 
 import { getToolSchemas, runToolHandler, type ToolContext } from "@/modules/agent-engine/tools";

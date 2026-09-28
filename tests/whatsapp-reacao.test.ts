@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
   conversationUpdate: vi.fn(),
   getOrCreateConversation: vi.fn(),
   resolveAgent: vi.fn(),
-  addLeadToHandoffGroup: vi.fn(),
+  notifyHandoffGroup: vi.fn(),
 }));
 
 vi.mock("@/lib/prisma", () => ({
@@ -25,6 +25,7 @@ vi.mock("@/lib/prisma", () => ({
 vi.mock("@/lib/rate-limit", () => ({
   rateLimit: vi.fn(async () => ({ allowed: true })),
 }));
+vi.mock("@/modules/reports/events", () => ({ recordReportEvent: vi.fn(async () => {}) }));
 vi.mock("@/modules/whatsapp", () => ({
   getWhatsAppProvider: () => ({ parseWebhook: () => mocks.incoming }),
 }));
@@ -40,7 +41,7 @@ vi.mock("@/modules/agent-engine/orchestrator", () => ({
   resolveAgent: mocks.resolveAgent,
 }));
 vi.mock("@/modules/agent-engine/handoff", () => ({
-  addLeadToHandoffGroup: mocks.addLeadToHandoffGroup,
+  notifyHandoffGroup: mocks.notifyHandoffGroup,
 }));
 vi.mock("@/modules/ai/transcribe", () => ({ transcribeAudio: vi.fn() }));
 vi.mock("@/modules/voice/reply", () => ({ speakReply: vi.fn() }));
@@ -81,7 +82,7 @@ beforeEach(() => {
     conversation: { id: "conversa-1" },
   });
   mocks.conversationUpdate.mockResolvedValue({});
-  mocks.addLeadToHandoffGroup.mockResolvedValue(undefined);
+  mocks.notifyHandoffGroup.mockResolvedValue(undefined);
 });
 
 describe("reação no webhook do WhatsApp", () => {
@@ -93,11 +94,11 @@ describe("reação no webhook do WhatsApp", () => {
       where: { id: "conversa-1" },
       data: { agentPaused: true, needsHuman: true },
     });
-    expect(mocks.addLeadToHandoffGroup).toHaveBeenCalledWith(
+    expect(mocks.notifyHandoffGroup).toHaveBeenCalledWith(
       "tenant-1",
       "agente-1",
-      "5511999999999",
-      { isTest: false },
+      "conversa-1",
+      { isTest: false, reason: "Atendente assumiu a conversa por reação no WhatsApp." },
     );
   });
 
@@ -109,7 +110,7 @@ describe("reação no webhook do WhatsApp", () => {
     expect(response.status).toBe(200);
     expect(mocks.getOrCreateConversation).not.toHaveBeenCalled();
     expect(mocks.conversationUpdate).not.toHaveBeenCalled();
-    expect(mocks.addLeadToHandoffGroup).not.toHaveBeenCalled();
+    expect(mocks.notifyHandoffGroup).not.toHaveBeenCalled();
   });
 
   it("a opção desligada ignora a reação do atendente", async () => {

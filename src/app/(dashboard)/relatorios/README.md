@@ -4,10 +4,25 @@ Guia para qualquer agente/pessoa dar prosseguimento nesta seção. Cobre **o que
 
 ## Visão geral
 
-`/relatorios` tem **duas visões**, trocadas por um toggle no topo (querystring `?visao=`):
+### ROI mensal odontológico (P-79)
+
+A visão `?visao=mensal&mes=YYYY-MM` apresenta relatórios revisados pela Mavellium.
+O admin prepara em `/admin/relatorios`, acessível pelo menu **ROI mensal** e
+pelo painel de edição da conta. O PDF A4 tem uma página e as cinco partes
+solicitadas. Leia [`docs/P-79-relatorio-mensal-roi.md`](../../../../docs/P-79-relatorio-mensal-roi.md)
+antes de alterar a nova visão: **não usa a regra do Financeiro legado**.
+Receita só vem de avaliações realizadas cuja primeira chegada foi fora do
+expediente humano; economia usa minutos humanos declarados por conversa.
+Premissas mensais, falta de dado explícita, fechamento em snapshot e entrega
+manual registrada. A leitura do Clinicorp confirma presença pelo ID do espelho
+e pelos status `Type` conferidos pela Mavellium, sem alterar a agenda local.
+Eventos anteriores à implantação não são inventados. P-86 e a fila P-87 ficam fora.
+
+`/relatorios` tem **três visões do produto**, trocadas por um toggle no topo (querystring `?visao=`), além da visão de afiliados para participantes do programa:
 
 - **Operacional** (padrão): KPIs com delta vs. período anterior, gráficos (fluxo, resultados, atendimento IA×humano, leads fechados IA×humano, donut por agente, leads por status, funil de conversão, resolução autônoma, recuperação por follow-up, horários de pico, tempo até a primeira resposta, comparecimento/no-show) e exportação CSV.
 - **Financeiro**: retorno financeiro **estimado** do investimento no projeto — KPIs (Retorno, Investido, ROI, Ponto de equilíbrio), gráfico de retorno acumulado × investido, retorno por agente, retorno mês a mês e custo por lead fechado. O valor por lead é definido manualmente pelo dono da conta; sem ele, os gráficos que dependem desse valor mostram um estado vazio com a chamada para definir, nunca uma série de zeros. No fim da visão fica **"O que o agente filtrou"** (triagem): contatos que o agente encerrou por não serem clientes em potencial, e o tempo/dinheiro que isso poupou.
+- **ROI mensal** (`mensal`): competência mensal fechada pela Mavellium, com receita somente de avaliações realizadas de contatos que chegaram fora do horário humano, economia estimada, premissas por procedimento e PDF de uma página. Contrato em `docs/P-79-relatorio-mensal-roi.md`.
 
 Tudo começa na `page.tsx`, que resolve a janela (`?periodo=`/`?de=&ate=`), computa os dados no servidor e entrega a props serializáveis aos componentes client.
 
