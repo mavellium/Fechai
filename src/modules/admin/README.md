@@ -61,6 +61,11 @@ Também preenche mensalidade ausente pelo preço atual da conta, respeita o
 mês do cadastro na primeira revisão e permite importar indicadores de um ou
 mais agentes. Horários cadastrados são sugestões para conferir com a equipe;
 o importador não altera o agente nem a agenda e mantém as correções manuais.
+O botão **Fazer com I.A** abre ajuda contextual, com a cadeia configurada em
+Admin → IA. Explica os campos e propõe preenchimentos a partir dos agregados
+e da revisão atual. A pessoa aplica sugestões validadas e salva a revisão;
+a IA não publica nem confirma presença. O servidor exige SUPERADMIN e valida
+agentes do tenant também nesse caminho. Detalhes e limites no contrato P-79.
 
 ## O que NÃO faz
 

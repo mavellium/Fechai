@@ -2,6 +2,22 @@
 
 Uma linha por milestone concluído (mais recente no topo).
 
+## ROI mensal: assistente Fazer com I.A — 2026-09-28
+
+- Botão **Fazer com I.A** na revisão administrativa abre conversa em
+  `SidePanel`, usando os componentes e o provedor configurado no sistema.
+- Explica campos, pendências e a fórmula; sugere preenchimentos com valores
+  informados pelo administrador e dados agregados da revisão não salva.
+- Sugestões validadas aparecem com origem/motivo antes de aplicar. Atualiza
+  apenas campos listados, preserva os demais e exige salvar a revisão depois.
+- Não altera fórmula, publicação, seleção de agentes ou confirmação de
+  comparecimento. Expediente sugerido precisa ser conferido como humano.
+- Usa a cadeia/credenciais de Admin → IA, fallback, consumo de tokens e
+  cancelamento em 60 segundos. Não envia conversas de pacientes nem gera
+  mensagens que consumam a cota do tenant.
+- Guarda SUPERADMIN, escopo de tenant/agentes, limite de perguntas e proteção
+  contra aplicação de sugestão depois que o formulário mudou.
+
 ## ROI mensal: dados da conta e importação por agente — 2026-09-28
 
 - Corrigida a competência inicial de contas novas: nunca abre mês anterior

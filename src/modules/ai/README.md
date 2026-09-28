@@ -24,6 +24,15 @@ isAiError(e): e is AiError
 ```
 
 Consumidores: `agent-engine/orchestrator` (turno do agente), `knowledge-base` (via ponte em `knowledge-base/embeddings.ts`), `app/(admin)/admin/ia`, `lib/health`.
+O assistente de ROI (`modules/reports/monthly-ai-service.ts`) também usa
+`getUsableChain()` + `resolveSecret()` + `createProvider()`, respeitando
+provedores personalizados e fallback. Registra tokens por provedor, sem
+alterar a cota de mensagens do tenant nem colocar credencial em quarentena
+por uma falha da ajuda administrativa. Prompts e validação ficam no módulo
+de relatórios. `LLMProvider.complete(messages, tools, { signal })` aceita
+cancelamento opcional; Gemini e adapters compatíveis propagam o sinal à
+requisição. Sem terceiro argumento, os consumidores existentes mantêm seu
+comportamento.
 
 ## Como adicionar um provedor
 

@@ -28,6 +28,11 @@ controle de publicação.
   O escopo em `assumptions.agentIds` vale para o mês e o comparativo; seleção
   ausente/vazia significa toda a conta. A grade só classifica horários depois
   de conferida como expediente humano.
+- `monthly-ai.ts`: contrato de pergunta/resposta do assistente, lista de
+  campos permitidos, limites e mesclagem de sugestões na revisão não salva.
+- `monthly-ai-service.ts`: contexto com agregados/premissas e chamada da
+  cadeia de IA configurada, com fallback, registro de tokens e cancelamento
+  em 60 segundos. Não lê conversas/pacientes nem altera o relatório.
 
 - `service.ts`:
   - `computeTenantReport(tenantId)` — totais desde o início da conta (legado).

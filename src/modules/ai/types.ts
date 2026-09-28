@@ -37,7 +37,7 @@ export interface LLMProvider {
   readonly model: string;
   /** Há credencial configurada neste ambiente? */
   isConfigured(): boolean;
-  complete(messages: LlmMessage[], tools: LlmToolSchema[]): Promise<LlmResult>;
+  complete(messages: LlmMessage[], tools: LlmToolSchema[], options?: { signal?: AbortSignal }): Promise<LlmResult>;
 }
 
 export type ProviderKey = "gemini" | "openai" | "grok" | "groq" | "custom";

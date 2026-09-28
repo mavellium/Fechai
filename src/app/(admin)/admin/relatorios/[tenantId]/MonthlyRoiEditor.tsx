@@ -1,6 +1,6 @@
 "use client";
 import { startTransition, useActionState, useRef, useState, useTransition } from "react";
-import { Check, ChevronDown, Download, Pencil, Plus, Trash2 } from "lucide-react";
+import { Check, ChevronDown, Download, Pencil, Plus, Sparkles, Trash2 } from "lucide-react";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { CurrencyInput } from "@/components/ui/currency-input";
@@ -18,6 +18,8 @@ import type { MonthlyReport } from "@/modules/reports/monthly";
 import { monthlyOverridesSchema } from "@/modules/reports/monthly-overrides";
 import { MonthlyMetricFields } from "./MonthlyMetricFields";
 import { MonthlyAgentImport } from "./MonthlyAgentImport";
+import { MonthlyRoiAiAssistant } from "./MonthlyRoiAiAssistant";
+import { monthlyAiDraftSchema, applyMonthlyAiChanges, type MonthlyAiDraft, type MonthlyAiChange } from "@/modules/reports/monthly-ai";
 import { monthlyScheduleSuggestion, type MonthlyImportSources } from "@/modules/reports/monthly-import";
 import { saveMonthlyRoi, finalizeMonthlyRoi, reopenMonthlyRoi, recordMonthlyDelivery, previewMonthlyRoiImport } from "./actions";
 
@@ -41,7 +43,10 @@ function readTime(text: string) {
 }
 
 export function MonthlyRoiEditor({ tenantId, report: r, sources }: { tenantId: string; report: MonthlyReport; sources: MonthlyImportSources }) {
-  const c = r.assumptions;
+  const [defaults, setDefaults] = useState<MonthlyAiDraft>({ assumptions: r.assumptions, metricOverrides: r.metricOverrides ?? { current: {}, previous: {} }, adjustments: r.adjustments, nextMonth: r.nextMonth, decisionMaker: r.decisionMaker });
+  const c = defaults.assumptions;
+  const [aiOpen, setAiOpen] = useState(false);
+  const [formVersion, setFormVersion] = useState(0);
   const [agentIds, setAgentIds] = useState(c.agentIds ?? []);
   const suggested = monthlyScheduleSuggestion(sources.agents, agentIds);
   const formRef = useRef<HTMLFormElement>(null);
@@ -80,6 +85,28 @@ export function MonthlyRoiEditor({ tenantId, report: r, sources }: { tenantId: s
     countUntypedAsEvaluations: untyped, completedStatusTypes: statuses,
     procedures: procedures.map((p) => ({ name: String(form.get(`procedure-${p.id}`) ?? ""), ticketCents: readNumber(form.get(`ticket-${p.id}`), 100, true), conversionBps: readNumber(form.get(`conversion-${p.id}`), 100) })),
   });
+  const getAiDraft = (): MonthlyAiDraft => {
+    if (!formRef.current) throw new Error("Abra a edição do relatório primeiro.");
+    const form = new FormData(formRef.current);
+    const assumptions = readAssumptions(form);
+    assumptions.procedures = assumptions.procedures.filter((p) => p.name.trim() || p.ticketCents !== null || p.conversionBps !== null);
+    return monthlyAiDraftSchema.parse({ assumptions, metricOverrides,
+      adjustments: String(form.get("adjustments") ?? ""), nextMonth: String(form.get("nextMonth") ?? ""), decisionMaker: String(form.get("decisionMaker") ?? "") });
+  };
+  const applyAi = (basis: MonthlyAiDraft, changes: MonthlyAiChange[]) => {
+    const current = getAiDraft();
+    if (JSON.stringify(current) !== JSON.stringify(basis)) throw new Error("A revisão mudou desde esta resposta. Envie uma nova pergunta para usar os dados atuais.");
+    const next = applyMonthlyAiChanges(current, changes);
+    setDefaults(next); setImportedInvestment(null); setMetricOverrides(next.metricOverrides);
+    setTimezone(next.assumptions.timezone);
+    if (changes.some((change) => change.field === "assumptions.humanHours")) {
+      setHoursConfirmed(false); setHoursOrigin("sugestão da IA");
+      setHours(Array.from({ length: 7 }, (_, day) => next.assumptions.humanHours?.[day].map((h) => ({ start: minuteLabel(h.start), end: minuteLabel(h.end) })) ?? []));
+    }
+    setProcedures(next.assumptions.procedures.map((p) => ({ ...p, id: nextId.current++ })));
+    setImportVersion((v) => v + 1); setFormVersion((v) => v + 1); setOpen(true);
+    setImportInfo("Campos preenchidos com a ajuda da IA. Confira os valores e os horários antes de salvar a revisão.");
+  };
   const importData = () => start(async () => {
     if (!formRef.current) return;
     try {
@@ -101,7 +128,7 @@ export function MonthlyRoiEditor({ tenantId, report: r, sources }: { tenantId: s
     <CardTitle action={<Badge tone={locked ? "success" : "neutral"}>{locked ? "Fechado" : "Rascunho"}</Badge>}>Preparação e entrega</CardTitle>
     <div className="flex flex-wrap items-start justify-between gap-4">
       <div className="max-w-xl text-sm text-neutral panel:text-white/60"><p>{locked ? `Relatório disponível para a clínica${r.decisionMaker ? ` · decisor: ${r.decisionMaker}` : ""}.` : "Os indicadores e as premissas desta competência já estão carregados. Confira os dados e registre os ajustes antes de fechar."}</p><p className="mt-1">Prazo de entrega: {new Intl.DateTimeFormat("pt-BR", { timeZone: c.timezone }).format(new Date(r.dueAt))}.</p></div>
-      {!locked && <Button variant="outline" disabled={pending} aria-expanded={open} aria-controls="roi-edit-form" onClick={() => setOpen(!open)}><Pencil size={15} aria-hidden />{open ? "Recolher edição" : "Editar dados e revisão"}<ChevronDown size={15} aria-hidden className={open ? "rotate-180" : ""} /></Button>}
+      {!locked && <div className="flex flex-wrap gap-2"><Button variant="outline" disabled={pending} onClick={() => { setOpen(true); setAiOpen(true); }}><Sparkles size={15} aria-hidden />Fazer com I.A</Button><Button variant="outline" disabled={pending} aria-expanded={open} aria-controls="roi-edit-form" onClick={() => setOpen(!open)}><Pencil size={15} aria-hidden />{open ? "Recolher edição" : "Editar dados e revisão"}<ChevronDown size={15} aria-hidden className={open ? "rotate-180" : ""} /></Button></div>}
     </div>
     {!locked && <UnsavedForm ref={formRef} id="roi-edit-form" hidden={!open} result={state} label="Revisão do relatório mensal" className="mt-6 space-y-6 border-t border-ink/10 pt-6 panel:border-white/10" onSubmit={(event) => {
       event.preventDefault();
@@ -114,7 +141,7 @@ export function MonthlyRoiEditor({ tenantId, report: r, sources }: { tenantId: s
     }}>
       {r.assumptionsFromMonth && <Alert>Premissas trazidas de {r.assumptionsFromMonth.split("-").reverse().join("/")}. Confira os valores e salve a revisão deste mês.</Alert>}
       <input type="hidden" name="revision" value={r.revision ?? ""} />
-      <fieldset disabled={pending} className="min-w-0 space-y-8">
+      <fieldset key={formVersion} disabled={pending} className="min-w-0 space-y-8">
         <MonthlyAgentImport sources={sources} agentIds={agentIds} onChange={setAgentIds} onImport={importData} pending={pending} />
         {importInfo && <Alert>{importInfo}</Alert>}
         <MonthlyMetricFields key={importVersion} report={loaded} value={metricOverrides} onChange={setMetricOverrides} />
@@ -148,8 +175,8 @@ export function MonthlyRoiEditor({ tenantId, report: r, sources }: { tenantId: s
           <Button type="button" size="sm" variant="outline" disabled={procedures.length >= 12} onClick={() => setProcedures([...procedures, { id: nextId.current++, name: "", ticketCents: null, conversionBps: null }])}><Plus size={14} aria-hidden />Adicionar procedimento</Button>
         </section>
         <section className="space-y-4 border-t border-ink/10 pt-6 panel:border-white/10"><CardTitle as="h3">Revisão para o decisor</CardTitle>
-          <Field label="Nome do decisor" htmlFor="roi-decisionMaker"><Input {...fieldProps("roi-decisionMaker")} name="decisionMaker" maxLength={100} defaultValue={r.decisionMaker} placeholder="Quem recebe e acompanha o resultado" /></Field>
-          <div className="grid gap-5 lg:grid-cols-2"><Field label="O que ajustamos no agente" htmlFor="roi-adjustments" hint="Até 400 caracteres. Cite os ajustes feitos neste mês."><Textarea {...fieldProps("roi-adjustments", { hint: true })} name="adjustments" maxLength={400} defaultValue={r.adjustments} rows={4} /></Field><Field label="Próximo mês" htmlFor="roi-nextMonth" hint="Até 400 caracteres. Descreva as próximas ações."><Textarea {...fieldProps("roi-nextMonth", { hint: true })} name="nextMonth" maxLength={400} defaultValue={r.nextMonth} rows={4} /></Field></div>
+          <Field label="Nome do decisor" htmlFor="roi-decisionMaker"><Input {...fieldProps("roi-decisionMaker")} name="decisionMaker" maxLength={100} defaultValue={defaults.decisionMaker} placeholder="Quem recebe e acompanha o resultado" /></Field>
+          <div className="grid gap-5 lg:grid-cols-2"><Field label="O que ajustamos no agente" htmlFor="roi-adjustments" hint="Até 400 caracteres. Cite os ajustes feitos neste mês."><Textarea {...fieldProps("roi-adjustments", { hint: true })} name="adjustments" maxLength={400} defaultValue={defaults.adjustments} rows={4} /></Field><Field label="Próximo mês" htmlFor="roi-nextMonth" hint="Até 400 caracteres. Descreva as próximas ações."><Textarea {...fieldProps("roi-nextMonth", { hint: true })} name="nextMonth" maxLength={400} defaultValue={defaults.nextMonth} rows={4} /></Field></div>
         </section>
         <details className="rounded-control border border-ink/10 p-4 panel:border-white/10"><summary className="cursor-pointer text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-iris">Critérios de classificação e Clinicorp</summary><div className="mt-5 space-y-5">
           <div className="grid gap-5 lg:grid-cols-2"><Field label="Variável que identifica o procedimento" htmlFor="roi-procedureVariable" hint="Use o nome configurado em Agentes → Variáveis."><Input {...fieldProps("roi-procedureVariable", { hint: true })} name="procedureVariable" maxLength={60} defaultValue={c.procedureVariable} /></Field><Field label="Tipos de atendimento considerados avaliações" htmlFor="roi-evaluationTypes" hint="Um nome por linha, conforme o agendamento do agente."><Textarea {...fieldProps("roi-evaluationTypes", { hint: true })} name="evaluationTypes" defaultValue={c.evaluationTypes.join("\n")} /></Field></div>
@@ -169,5 +196,6 @@ export function MonthlyRoiEditor({ tenantId, report: r, sources }: { tenantId: s
         </>}
       </div>{r.partial && !locked && <p className="text-xs text-neutral panel:text-white/55">O fechamento fica disponível após o fim do mês.</p>}<FormFeedback error={actionFeedback?.error} info={actionFeedback?.info} /><p className="text-xs text-neutral panel:text-white/55">A Mavellium envia o PDF e apresenta os resultados. Registre o envio e a reunião após acontecerem.</p>
     </div>
+    {!locked && <MonthlyRoiAiAssistant open={aiOpen} onClose={() => setAiOpen(false)} tenantId={tenantId} month={r.month} getDraft={getAiDraft} onApply={applyAi} />}
   </Card>;
 }

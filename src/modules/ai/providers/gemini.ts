@@ -43,7 +43,7 @@ export class GeminiProvider implements LLMProvider {
     return Boolean(this.apiKey());
   }
 
-  async complete(messages: LlmMessage[], tools: LlmToolSchema[]): Promise<LlmResult> {
+  async complete(messages: LlmMessage[], tools: LlmToolSchema[], options?: { signal?: AbortSignal }): Promise<LlmResult> {
     const apiKey = this.apiKey();
     if (!apiKey) {
       // Mesma degradação graciosa do resto do app: sem chave, não quebra o fluxo.
@@ -74,6 +74,7 @@ export class GeminiProvider implements LLMProvider {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
       body: JSON.stringify(body),
+      signal: options?.signal,
     });
 
     if (!res.ok) throw await this.toAiError(res);

@@ -129,6 +129,45 @@ Ticket, conversão, custo e carga do atendente continuam pendentes quando não
 cadastrados. Tipos da agenda não são automaticamente tratados como avaliações;
 marcações antigas sem tipo e comparecimento seguem a conferência já descrita.
 
+### Fazer com I.A
+
+Na revisão em rascunho, **Fazer com I.A** abre uma conversa lateral com o
+assistente. A pessoa pode perguntar o que cada campo significa, pedir ajuda
+com as pendências, informar valores levantados com a clínica e pedir uma
+redação para o próximo mês. A revisão atual, incluindo edições ainda não
+salvas e a seleção de agentes, é usada como contexto.
+
+O assistente resolve a cadeia e as credenciais de **Admin → IA**, incluindo
+provedores personalizados e fallback. A resposta identifica o modelo usado.
+Sem provedor disponível, mostra erro de configuração; não usa demonstração.
+O consumo de tokens entra no uso da plataforma, sem criar mensagens de
+atendimento ou consumir a cota de mensagens do cliente.
+
+Só são enviados agregados, premissas e textos da revisão e os horários
+estruturados dos agentes selecionados. Não são enviados históricos de
+pacientes, telefones, variáveis individuais, prompts dos agentes ou segredos.
+O histórico da ajuda fica na tela, limitado a 12 mensagens, sem tabela nova.
+
+Respostas estruturadas passam por validação de campos, unidades, limites e
+listas. As sugestões mostram valor e motivo; **Preencher no relatório**
+aplica apenas os campos listados. Tickets/conversões são mesclados por nome
+do procedimento. As listas de indicadores/picos de um mês são substituídas
+quando explicitamente sugeridas; a prévia mostra os dados antes de aplicar.
+Os demais campos e correções manuais são preservados. **Salvar revisão**
+continua sendo necessário para persistir e recalcular o relatório.
+
+A IA não edita receita/economia/ROI diretamente, agentes selecionados,
+classificação de marcações sem tipo, status Clinicorp ou publicação. Uma
+sugestão de expediente retira a confirmação humana e precisa ser conferida.
+Não pode aplicar sugestão se o formulário mudou depois da resposta. O servidor
+exige SUPERADMIN, valida tenant/agentes, recusa revisão fechada, limita dez
+perguntas por administrador/minuto e cancela a chamada após 60 segundos.
+O prompt exige perguntar por números ausentes, sem inventar ticket, conversão,
+custos, horas ou comparecimento; valores sugeridos continuam para revisão.
+
+Arquivos: `MonthlyRoiAiAssistant.tsx`, `ai-actions.ts`,
+`modules/reports/monthly-ai.ts` e `monthly-ai-service.ts`.
+
 ## Regra do ROI
 
 Por procedimento:

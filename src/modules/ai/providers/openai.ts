@@ -65,7 +65,7 @@ export class OpenAICompatProvider implements LLMProvider {
     return this.client;
   }
 
-  async complete(messages: LlmMessage[], tools: LlmToolSchema[]): Promise<LlmResult> {
+  async complete(messages: LlmMessage[], tools: LlmToolSchema[], options?: { signal?: AbortSignal }): Promise<LlmResult> {
     if (!this.isConfigured()) {
       return {
         content: `Recebi sua mensagem! (IA em modo de demonstração — configure ${this.config.envKey} para respostas reais.)`,
@@ -89,7 +89,7 @@ export class OpenAICompatProvider implements LLMProvider {
           model: this.model,
           messages: messages.map(toOpenAIMessage),
           tools: openaiTools.length ? openaiTools : undefined,
-        })
+        }, options?.signal ? { signal: options.signal } : undefined)
         .withResponse();
 
       const msg = res.choices[0]?.message;

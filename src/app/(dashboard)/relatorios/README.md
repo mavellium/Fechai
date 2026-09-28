@@ -193,6 +193,7 @@ O toggle é `FilterTabs` (links, querystring) — preserva `periodo/de/ate` e se
 - O comparativo usa o snapshot fechado do mês anterior quando existir. Uma correção do comparativo é local à revisão atual. Reabrir uma revisão preserva os indicadores que estavam no snapshot; relatórios já enviados continuam preservados.
 - `updatedAt` identifica a revisão carregada pelo formulário e protege contra sobrescrita concorrente. Correções entram na auditoria e no snapshot de fechamento; o painel e o PDF avisam quando existem ajustes manuais.
 - PDF: imagens locais em `public/brand`, tinta preta/cinza, uma página A4. Nunca depende de uma chamada externa para buscar logos ao exportar.
+- **Fazer com I.A** na revisão administrativa em rascunho abre ajuda em `SidePanel`. Usa a cadeia e as credenciais de Admin → IA, explica campos e propõe preencher dados informados. `monthly-ai.ts` valida campos/unidades e mescla sugestões; `monthly-ai-service.ts` envia somente agregados e a revisão atual, sem conversas de pacientes. `ai-actions.ts` exige SUPERADMIN, valida agentes do tenant e limita perguntas. As sugestões são aplicadas por botão, preservam os outros campos e precisam de **Salvar revisão**. Não alteram fórmula/publicação/presença; expediente sugerido perde a confirmação. Mudanças posteriores no formulário invalidam a sugestão. Contrato detalhado na P-79.
 
 - Dev server: `npm run dev` (porta 3001).
 - Typecheck: `npx tsc --noEmit`.
