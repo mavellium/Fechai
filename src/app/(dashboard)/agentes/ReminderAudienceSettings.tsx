@@ -35,8 +35,9 @@ export function ReminderAudienceSettings({
   const [notice, setNotice] = useState<string | null>(null);
   const [newType, setNewType] = useState("");
   const autoLoadAttempted = useRef(false);
-  // Selecionados primeiro: carregar nomes com outra caixa não perde a seleção.
-  const options = parseReminderTypes([...types, ...loadedTypes, ...availableTypes]);
+  // Todas as origens aparecem juntas e em ordem alfabética, inclusive no celular.
+  const options = parseReminderTypes([...types, ...loadedTypes, ...availableTypes])
+    .sort((a, b) => a.localeCompare(b, "pt-BR", { sensitivity: "base" }));
 
   const loadFromClinicorp = useCallback(async () => {
     if (!loadTypes) return;

@@ -639,6 +639,8 @@ lista aceita seleção múltipla e permite adicionar nomes. Ao escolher esse
 público, `ReminderAudienceSettings` carrega automaticamente as categorias do
 Clinicorp com `loadClinicorpReminderTypesAction`, sem o teto de 12 durações;
 "Atualizar tipos" permite repetir a leitura se ela falhar ou o catálogo mudar.
+As opções aparecem em ordem alfabética, para Avaliação não ficar escondida
+depois das durações na lista curta do celular.
 Carregar tipos não seleciona pacientes nem altera a duração de atendimentos;
 a escolha passa a valer ao salvar a configuração.
 `ReminderAudienceSettings.tsx` mantém a seleção ao recarregar as opções.
