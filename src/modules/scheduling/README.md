@@ -635,8 +635,10 @@ Regressões: `tests/clinicorp.test.ts` ("agenda do Clinicorp na /agenda") e
 **Público dos lembretes:** `ScheduleConfig.reminderAudience` é `all` (legado)
 ou `selected_types`, com nomes em `reminderTypes`. Em Agentes › Agendar horário,
 "Somente os tipos escolhidos" permite, por exemplo, **só Avaliação**. A
-lista aceita seleção múltipla, permite adicionar nomes e carrega categorias
-do Clinicorp com `loadClinicorpReminderTypesAction`, sem o teto de 12 durações.
+lista aceita seleção múltipla e permite adicionar nomes. Ao escolher esse
+público, `ReminderAudienceSettings` carrega automaticamente as categorias do
+Clinicorp com `loadClinicorpReminderTypesAction`, sem o teto de 12 durações;
+"Atualizar tipos" permite repetir a leitura se ela falhar ou o catálogo mudar.
 Carregar tipos não seleciona pacientes nem altera a duração de atendimentos;
 a escolha passa a valer ao salvar a configuração.
 `ReminderAudienceSettings.tsx` mantém a seleção ao recarregar as opções.

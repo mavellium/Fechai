@@ -2,10 +2,10 @@
 
 Atualize este arquivo ao alterar o módulo.
 
-### 2026-09-29 — Documentação inicial e público dinâmico
+### 2026-09-29 — Público dinâmico e categorias automáticas
 
-Arquivos: config.ts, clinicorp.ts, tools.ts; actions/ScheduleSettings/ReminderAudienceSettings; workers de lembrete; testes.
+Arquivos: config.ts, clinicorp.ts, tools.ts; actions, ScheduleSettings, ReminderAudienceSettings, workers, testes e README.
 
-Razão: envio externo incluía outros tipos; economizar leitura de código.
+Razão: envio externo incluía outros tipos; lista inicial omitia Avaliação.
 
-Impacto: seleção múltipla, categorias sem teto de 12, exclusão de tipo desconhecido, overrides respeitam público. Sem schema novo.
+Impacto: categorias carregam ao restringir público; atualização manual; tipo desconhecido excluído; overrides respeitam público. Sem schema novo.

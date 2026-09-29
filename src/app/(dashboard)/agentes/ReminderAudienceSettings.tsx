@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Download, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
@@ -34,10 +34,11 @@ export function ReminderAudienceSettings({
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [newType, setNewType] = useState("");
+  const autoLoadAttempted = useRef(false);
   // Selecionados primeiro: carregar nomes com outra caixa não perde a seleção.
-  const options = parseReminderTypes([...types, ...availableTypes, ...loadedTypes]);
+  const options = parseReminderTypes([...types, ...loadedTypes, ...availableTypes]);
 
-  async function loadFromClinicorp() {
+  const loadFromClinicorp = useCallback(async () => {
     if (!loadTypes) return;
     setLoading(true);
     setNotice(null);
@@ -51,7 +52,13 @@ export function ReminderAudienceSettings({
     } finally {
       setLoading(false);
     }
-  }
+  }, [loadTypes]);
+
+  useEffect(() => {
+    if (audience !== "selected_types" || !loadTypes || autoLoadAttempted.current) return;
+    autoLoadAttempted.current = true;
+    void loadFromClinicorp();
+  }, [audience, loadTypes, loadFromClinicorp]);
 
   function addType() {
     const next = parseReminderTypes([...types, newType]);
@@ -77,6 +84,13 @@ export function ReminderAudienceSettings({
       </Field>
       {audience === "selected_types" && (
         <div className="space-y-3">
+          {loadTypes && (
+            <Button type="button" variant="outline" size="sm" onClick={loadFromClinicorp}
+              loading={loading} loadingLabel="Carregando tipos do Clinicorp" disabled={disabled}>
+              <Download size={14} aria-hidden /> Atualizar tipos do Clinicorp
+            </Button>
+          )}
+          {notice && <p role="status" className="text-sm text-white/60">{notice}</p>}
           <Field label="Tipos que recebem lembrete" htmlFor={`${idPrefix}-types`} labelId={`${idPrefix}-types-label`}>
             <SelectMenu
               multiple
@@ -84,19 +98,12 @@ export function ReminderAudienceSettings({
               labelledBy={`${idPrefix}-types-label`}
               value={types}
               onChange={onTypesChange}
-              disabled={disabled || options.length === 0}
+              disabled={disabled || loading || options.length === 0}
               placeholder="Escolha um ou mais tipos"
               options={options.map((type) => ({ value: type, label: type }))}
             />
           </Field>
           {types.length > 0 && <p className="text-sm text-white/85">Selecionados: {types.join(", ")}</p>}
-          {loadTypes && (
-            <Button type="button" variant="outline" size="sm" onClick={loadFromClinicorp}
-              loading={loading} loadingLabel="Carregando tipos do Clinicorp" disabled={disabled}>
-              <Download size={14} aria-hidden /> Carregar tipos do Clinicorp
-            </Button>
-          )}
-          {notice && <p role="status" className="text-sm text-white/60">{notice}</p>}
           <Field label="Adicionar outro tipo" htmlFor={`${idPrefix}-new-type`} hint="Use o mesmo nome cadastrado na agenda ou na categoria do Clinicorp.">
             <div className="flex flex-wrap items-center gap-2">
               <Input id={`${idPrefix}-new-type`} value={newType} maxLength={60} placeholder="Ex.: Avaliação"
