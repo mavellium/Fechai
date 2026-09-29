@@ -2,7 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { recordReportEvent } from "@/modules/reports/events";
 import { AvailabilityUnavailableError } from "@/modules/scheduling/availability-error";
 import type { LlmToolSchema } from "@/modules/ai";
-import { isWithinBusinessHours, parseScheduleConfig, resolveDuration, type ScheduleConfig } from "@/modules/scheduling/config";
+import { isWithinBusinessHours, parseScheduleConfig, resolveDuration, resolveScheduleServiceType, type ScheduleConfig } from "@/modules/scheduling/config";
 import {
   createAppointment,
   findOwnAppointment,
@@ -266,7 +266,7 @@ const TOOLS: Record<ActionKey, ToolDef> = {
           time: { type: "string", description: "Hora de início no formato HH:MM (24h)" },
           patientName: { type: "string", description: "Nome da pessoa que será atendida. Se o contato marcar para outra pessoa, use o nome dessa pessoa, não o nome do contato. Pergunte se ainda não souber." },
           notes: { type: "string", description: "Registre sempre o procedimento, a queixa ou o motivo informado pelo paciente na conversa (ex.: avaliação para implante), além das observações clínicas ou logísticas combinadas. Não omita um procedimento já informado, mesmo quando o tipo de atendimento for apenas avaliação. Não use para guardar o nome do paciente." },
-          tipoAtendimento: { type: "string", description: "Nome EXATO do tipo de atendimento, copiado da lista de tipos com duração própria do contexto. Define o tamanho do bloco. Omita quando o negócio não tiver tipos ou quando o contato não disse qual quer." },
+          tipoAtendimento: { type: "string", description: "Nome EXATO do tipo de consulta combinado com o contato, copiado dos tipos com duração própria ou dos tipos que recebem lembrete no contexto. Registra o tipo e, quando há duração própria, define o tamanho do bloco. Omita quando o negócio não tiver tipos ou quando o contato não disse qual quer." },
           additionalAppointment: { type: "boolean", description: "True somente se o contato pediu explicitamente OUTRA consulta separada, mantendo a anterior. Nunca use para reagendamento." },
         },
         required: ["date", "time", "patientName"],
@@ -305,6 +305,7 @@ const TOOLS: Record<ActionKey, ToolDef> = {
       // checagem de expediente e de conflito: uma limpeza de 30 min cabe às
       // 17:30 num expediente que fecha às 18:00, uma avaliação de 60 não.
       const duration = resolveDuration(cfg, str(args.tipoAtendimento));
+      const serviceType = resolveScheduleServiceType(cfg, str(args.tipoAtendimento));
 
       if (!isWithinBusinessHours(startsAt, { ...cfg, durationMinutes: duration.minutes })) {
         return `Fora dos períodos de atendimento deste dia ou durante uma pausa, considerando um bloco de ${duration.minutes} min. Consulte list_available_slots e proponha outro horário respeitando os intervalos.`;
@@ -344,7 +345,7 @@ const TOOLS: Record<ActionKey, ToolDef> = {
         startsAt,
         durationMinutes: duration.minutes,
         source: "agent",
-        serviceType: duration.label ?? null,
+        serviceType,
         timezone: cfg.timezone,
       });
 
@@ -352,8 +353,8 @@ const TOOLS: Record<ActionKey, ToolDef> = {
       // O nome pedido pode não existir na lista: o horário foi marcado com a
       // duração padrão, e o LLM precisa saber disso para não confirmar ao
       // contato um tipo de atendimento que a agenda não registrou.
-      const kind = duration.label
-        ? ` (${duration.label}, ${duration.minutes} min)`
+      const kind = serviceType
+        ? ` (${serviceType}, ${duration.minutes} min)`
         : cfg.durations.length && str(args.tipoAtendimento)
           ? `. Atenção: "${str(args.tipoAtendimento)}" não está na lista de tipos, então reservei o bloco padrão de ${duration.minutes} min — confirme com o contato qual tipo ele quer antes de prometer outro`
           : "";

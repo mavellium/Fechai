@@ -6,6 +6,7 @@ import {
 } from "../../src/modules/whatsapp/meta-config";
 import {
   parseScheduleConfig,
+  isReminderTypeAllowed,
   renderReminder,
   type ReminderRule,
   type ScheduleConfig,
@@ -197,6 +198,9 @@ export async function scanAndSendReminders(now: Date = new Date()) {
   for (const appt of appointments) {
     const cfg = configByTenant.get(appt.tenantId);
     if (!cfg) continue;
+
+    // O público da conta vale também para lembretes próprios da consulta.
+    if (!isReminderTypeAllowed(cfg, appt.serviceType)) continue;
 
     const rules = remindersFor(appt, cfg);
     if (rules.length === 0) continue;

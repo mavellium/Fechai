@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-const mocks = vi.hoisted(() => ({ save: vi.fn(), owned: vi.fn() }));
+const mocks = vi.hoisted(() => ({ save: vi.fn(), owned: vi.fn(), saved: vi.fn() }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/lib/session", () => ({ requireTenant: vi.fn(async () => ({ tenantId: "conta-logada" })) }));
-vi.mock("@/lib/prisma", () => ({ prisma: {} }));
+vi.mock("@/lib/prisma", () => ({ prisma: { tenantAction: { findUnique: mocks.saved } } }));
 vi.mock("@/lib/rate-limit", () => ({ payloadTooLarge: vi.fn(() => null) }));
 vi.mock("@/modules/agent-engine/agents", () => ({ getAgentOwned: mocks.owned }));
 vi.mock("@/modules/scheduling/repository", () => ({ saveScheduleConfig: mocks.save }));
@@ -18,7 +18,7 @@ function form(week: unknown = emptyWeek()) {
   for (const [key, value] of Object.entries({ agentId: "agente", tenantId: "conta-forjada", weeklyAvailability: JSON.stringify(week), startTime: "09:00", endTime: "18:00", durationMinutes: "30", timezone: "America/Sao_Paulo", minNoticeHours: "2", allowCancellation: "true", allowRescheduling: "true", recognizeExisting: "true", reminderEnabled: "false", breaks: "[]", durations: "[]", reminders: "[]" })) data.set(key, value);
   return data;
 }
-beforeEach(() => { vi.clearAllMocks(); mocks.owned.mockResolvedValue({ id: "agente" }); mocks.save.mockResolvedValue(undefined); });
+beforeEach(() => { vi.clearAllMocks(); mocks.owned.mockResolvedValue({ id: "agente" }); mocks.saved.mockResolvedValue(null); mocks.save.mockResolvedValue(undefined); });
 
 describe("salvamento da grade semanal", () => {
   it("salva a grade normalizada somente na conta autenticada, sem precisar dos checkboxes antigos", async () => {
@@ -46,6 +46,45 @@ describe("salvamento da grade semanal", () => {
     expect(mocks.save.mock.calls[0][2]).not.toHaveProperty("weeklyAvailability");
     mocks.save.mockClear(); mocks.owned.mockResolvedValue(null);
     expect(await saveScheduleConfigAction(null, form())).toMatchObject({ ok: false });
+    expect(mocks.save).not.toHaveBeenCalled();
+  });
+});
+
+describe("salvamento do público dos lembretes", () => {
+  function restricted(enabled = "true") {
+    const data = form();
+    data.set("reminderEnabled", enabled);
+    data.set("reminders", JSON.stringify([{ minutesBefore: 1440, template: "É amanhã." }]));
+    data.set("reminderAudience", "selected_types");
+    data.set("reminderTypes", JSON.stringify(["Avaliação"]));
+    return data;
+  }
+  it("salva a seleção somente na conta autenticada", async () => {
+    expect(await saveScheduleConfigAction(null, restricted())).toMatchObject({ ok: true });
+    expect(mocks.save).toHaveBeenCalledWith("conta-logada", "agente", expect.objectContaining({ reminderAudience: "selected_types", reminderTypes: ["Avaliação"] }));
+  });
+  it("salva vários tipos sem depender das variações de duração", async () => {
+    const data = restricted();
+    data.set("reminderTypes", JSON.stringify(["Avaliação", "Ortodontia", "Retorno"]));
+    expect(await saveScheduleConfigAction(null, data)).toMatchObject({ ok: true });
+    expect(mocks.save.mock.calls[0][2]).toMatchObject({ reminderTypes: ["Avaliação", "Ortodontia", "Retorno"], durations: [] });
+  });
+  it("formulário antigo preserva a restrição que já existe", async () => {
+    mocks.saved.mockResolvedValue({ config: { reminderAudience: "selected_types", reminderTypes: ["Avaliação"] } });
+    expect(await saveScheduleConfigAction(null, form())).toMatchObject({ ok: true });
+    expect(mocks.save.mock.calls[0][2]).toMatchObject({ reminderAudience: "selected_types", reminderTypes: ["Avaliação"] });
+  });
+  it("recusa público restrito vazio quando ligado, mas permite pausar", async () => {
+    const data = restricted();
+    data.set("reminderTypes", "[]");
+    expect(await saveScheduleConfigAction(null, data)).toMatchObject({ ok: false, error: expect.stringContaining("pelo menos um tipo") });
+    expect(mocks.save).not.toHaveBeenCalled();
+    data.set("reminderEnabled", "false");
+    expect(await saveScheduleConfigAction(null, data)).toMatchObject({ ok: true });
+  });
+  it.each(["{", "null", '"Avaliação"'])("recusa lista malformada em vez de liberar todos: %s", async (raw) => {
+    const data = restricted(); data.set("reminderTypes", raw);
+    expect(await saveScheduleConfigAction(null, data)).toMatchObject({ ok: false });
     expect(mocks.save).not.toHaveBeenCalled();
   });
 });

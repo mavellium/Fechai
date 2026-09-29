@@ -699,6 +699,9 @@ export type ClinicorpAgendaItem = {
   phone: string | null;
   professional: string | null;
   notes: string | null;
+  /** Metadados explícitos, quando presentes na resposta de /appointment/list. */
+  categoryId?: string | null;
+  category?: string | null;
 };
 
 /** Rótulo da tela para consulta sem nome — nunca vai numa mensagem ao paciente. */
@@ -903,6 +906,10 @@ async function fetchAgenda(
         phone: text(r.MobilePhone),
         professional: r.Dentist_PersonId != null ? names.get(String(r.Dentist_PersonId)) ?? null : null,
         notes: text(r.Notes)?.slice(0, 300) ?? null,
+        categoryId: typeof r.CategoryId === "string" && /^\d+$/.test(r.CategoryId) ? r.CategoryId
+          : typeof r.CategoryId === "number" && Number.isSafeInteger(r.CategoryId) && r.CategoryId > 0
+            ? String(r.CategoryId) : null,
+        category: text(r.CategoryDescription),
       });
     }
     items.sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime());

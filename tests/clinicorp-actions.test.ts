@@ -23,7 +23,7 @@ vi.mock("@/modules/scheduling/repository", () => ({ createAppointment: mocks.cre
 import { saveClinicorpSettingsAction } from "@/app/(dashboard)/integracoes/actions";
 import { createManualAppointment } from "@/app/(dashboard)/agenda/actions";
 import { AvailabilityUnavailableError } from "@/modules/scheduling/availability-error";
-import { loadClinicorpDurationNamesAction } from "@/app/(dashboard)/agentes/actions";
+import { loadClinicorpDurationNamesAction, loadClinicorpReminderTypesAction } from "@/app/(dashboard)/agentes/actions";
 
 function form(values: Record<string, string>) {
   const data = new FormData();
@@ -105,6 +105,20 @@ describe("agendamento manual com Clinicorp", () => {
 });
 
 describe("trazer tipos de atendimento do Clinicorp", () => {
+  it("traz todas as categorias para lembretes, inclusive após a 12ª, usando a conta autenticada", async () => {
+    const rows = Array.from({ length: 15 }, (_, index) => ({ id: String(index + 1), name: index === 14 ? "Avaliação" : `Tipo ${index + 1}` }));
+    mocks.categories.mockResolvedValue({ ok: true, data: rows });
+    expect(await loadClinicorpReminderTypesAction()).toEqual({ ok: true, names: rows.map((row) => row.name) });
+    expect(mocks.categories).toHaveBeenCalledWith("tenant-logado");
+    const durations = await loadClinicorpDurationNamesAction();
+    expect(durations).toMatchObject({ ok: true });
+    if (durations.ok) expect(durations.names).toHaveLength(12);
+  });
+  it("não carrega categorias para lembretes com integração desligada", async () => {
+    mocks.features.mockResolvedValue({ clinicorpEnabled: false });
+    expect(await loadClinicorpReminderTypesAction()).toMatchObject({ ok: false });
+    expect(mocks.categories).not.toHaveBeenCalled();
+  });
   it("devolve os nomes das categorias — sem duração, que o Clinicorp não informa", async () => {
     mocks.categories.mockResolvedValue({ ok: true, data: [
       { id: "1", name: "Avaliação" },

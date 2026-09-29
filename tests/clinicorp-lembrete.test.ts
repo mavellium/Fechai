@@ -17,7 +17,7 @@ const db = vi.hoisted(() => ({
   lead: { findFirst: vi.fn() },
   message: { create: vi.fn() },
 }));
-const clinicorp = vi.hoisted(() => ({ listClinicorpAgenda: vi.fn() }));
+const clinicorp = vi.hoisted(() => ({ listClinicorpAgenda: vi.fn(), listClinicorpCategories: vi.fn() }));
 const meta = vi.hoisted(() => ({ getBroadcastConnection: vi.fn(), sendBroadcastTemplate: vi.fn() }));
 const evolution = vi.hoisted(() => ({ isConfigured: vi.fn(() => true), sendMessage: vi.fn() }));
 const blocklist = vi.hoisted(() => ({ isPhoneBlocked: vi.fn() }));
@@ -74,12 +74,60 @@ beforeEach(() => {
   db.lead.findFirst.mockResolvedValue(null);
   db.message.create.mockResolvedValue({});
   clinicorp.listClinicorpAgenda.mockResolvedValue({ status: "ok", items: [consulta()], skipped: 0 });
+  clinicorp.listClinicorpCategories.mockResolvedValue({ ok: true, data: [{ id: "1", name: "Avaliação" }, { id: "2", name: "Ortodontia" }] });
   meta.getBroadcastConnection.mockResolvedValue({ provider: { sendBroadcastTemplate: meta.sendBroadcastTemplate } });
   meta.sendBroadcastTemplate.mockResolvedValue("wamid-1");
   evolution.sendMessage.mockResolvedValue("key-1");
   blocklist.isPhoneBlocked.mockResolvedValue(false);
   conversations.getOrCreateConversation.mockResolvedValue({ lead: {}, conversation: { id: "conversa-nova" } });
   provider("meta");
+});
+
+describe("somente avaliações do Clinicorp", () => {
+  beforeEach(() => {
+    config.reminderAudience = "selected_types";
+    config.reminderTypes = ["Avaliação"];
+  });
+  it("envia só à avaliação identificada por id, sem usar notas ou o nome do paciente", async () => {
+    clinicorp.listClinicorpAgenda.mockResolvedValue({ status: "ok", items: [
+      consulta({ id: "10", categoryId: "1" }),
+      consulta({ id: "11", categoryId: "2", notes: "Avaliação" }),
+      consulta({ id: "12", category: "Reavaliação" }),
+      consulta({ id: "13", notes: "Avaliação" }),
+      consulta({ id: "14", category: "Cirurgia" }),
+    ] });
+    const result = await scanAndSendClinicorpReminders(AGORA);
+    expect(result).toMatchObject({ sent: 1, typeSkipped: 4, unknownTypeSkipped: 1 });
+    expect(meta.sendBroadcastTemplate).toHaveBeenCalledTimes(1);
+    expect(upserts()).toHaveLength(1);
+    expect(upserts()[0].create.clinicorpAppointmentId).toBe("10");
+  });
+  it("aceita descrição explícita normalizada, sem consultar categorias à toa", async () => {
+    clinicorp.listClinicorpAgenda.mockResolvedValue({ status: "ok", items: [consulta({ category: " AVALIACAO " })] });
+    expect(await scanAndSendClinicorpReminders(AGORA)).toMatchObject({ sent: 1 });
+    expect(clinicorp.listClinicorpCategories).not.toHaveBeenCalled();
+  });
+  it.each([{ ok: false, error: "Indisponível" }, { ok: true, data: [] }])("sem resolver o id não usa descrição como fallback: %j", async (categories) => {
+    clinicorp.listClinicorpCategories.mockResolvedValue(categories);
+    clinicorp.listClinicorpAgenda.mockResolvedValue({ status: "ok", items: [consulta({ categoryId: "1", category: "Avaliação" })] });
+    expect(await scanAndSendClinicorpReminders(AGORA)).toMatchObject({ sent: 0, unknownTypeSkipped: 1 });
+    expect(meta.sendBroadcastTemplate).not.toHaveBeenCalled();
+    expect(db.clinicorpReminder.upsert).not.toHaveBeenCalled();
+  });
+  it("também filtra no Evolution mesmo para quem já conversou", async () => {
+    provider("evolution");
+    db.lead.findFirst.mockResolvedValue({ conversation: { id: "conv", lastInboundAt: AGORA, followUpReason: null } });
+    clinicorp.listClinicorpAgenda.mockResolvedValue({ status: "ok", items: [consulta({ category: "Ortodontia" })] });
+    await scanAndSendClinicorpReminders(AGORA);
+    expect(evolution.sendMessage).not.toHaveBeenCalled();
+    expect(db.lead.findFirst).not.toHaveBeenCalled();
+  });
+  it("não reenvia avaliação já lembrada", async () => {
+    clinicorp.listClinicorpAgenda.mockResolvedValue({ status: "ok", items: [consulta({ categoryId: "1" })] });
+    db.clinicorpReminder.findMany.mockResolvedValue([{ clinicorpAppointmentId: consulta().id, startsAt: consulta().startsAt, remindersSent: [UM_DIA] }]);
+    await scanAndSendClinicorpReminders(AGORA);
+    expect(meta.sendBroadcastTemplate).not.toHaveBeenCalled();
+  });
 });
 
 describe("template da Meta na config", () => {

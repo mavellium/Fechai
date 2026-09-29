@@ -149,7 +149,7 @@ async function main() {
     async () => {
       const r = await scanAndSendClinicorpReminders();
       console.log(
-        `[lembrete clinicorp] contas=${r.tenants} consultas=${r.scanned} sent=${r.sent} primeiro_contato_pulado=${r.firstContactSkipped}`,
+        `[lembrete clinicorp] contas=${r.tenants} consultas=${r.scanned} sent=${r.sent} primeiro_contato_pulado=${r.firstContactSkipped} tipo_excluido=${r.typeSkipped} tipo_desconhecido=${r.unknownTypeSkipped}`,
       );
       return r;
     },

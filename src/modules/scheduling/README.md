@@ -632,6 +632,30 @@ Regressões: `tests/clinicorp.test.ts` ("agenda do Clinicorp na /agenda") e
 
 ### Lembretes das consultas do Clinicorp
 
+**Público dos lembretes:** `ScheduleConfig.reminderAudience` é `all` (legado)
+ou `selected_types`, com nomes em `reminderTypes`. Em Agentes › Agendar horário,
+"Somente os tipos escolhidos" permite, por exemplo, **só Avaliação**. A
+lista aceita seleção múltipla, permite adicionar nomes e carrega categorias
+do Clinicorp com `loadClinicorpReminderTypesAction`, sem o teto de 12 durações.
+Carregar tipos não seleciona pacientes nem altera a duração de atendimentos;
+a escolha passa a valer ao salvar a configuração.
+`ReminderAudienceSettings.tsx` mantém a seleção ao recarregar as opções.
+A comparação é exata, ignorando caixa e acento: Reavaliação não é Avaliação.
+A escolha vale também para lembretes próprios de uma consulta, antes do envio.
+No fechai, o tipo vem de `Appointment.serviceType`; tipos escolhidos para
+lembretes podem ser registrados pelo agente mesmo sem duração própria.
+No Clinicorp, usamos somente os metadados explícitos da consulta:
+`CategoryId` resolvido por `/appointment/list_categories`, ou
+`CategoryDescription` quando não há id. Sem tipo ou com id não resolvido,
+a consulta fica **fora do envio**, sem consumir o disparo. Nunca classificar
+por nome do paciente, `Notes`, procedimentos ou histórico da conversa.
+
+O exemplo público de `/appointment/list` não garante metadados de categoria.
+Antes de reativar lembretes restritos em produção, conferir se a resposta real
+da clínica identifica os tipos. Os contadores `tipo_excluido` e
+`tipo_desconhecido` no worker permitem acompanhar sem imprimir dados pessoais.
+Formulário antigo preserva a seleção salva; público malformado nunca vira todos.
+
 As consultas marcadas direto no Clinicorp recebem **os mesmos lembretes da
 conta** (lista do agente principal, `reminderEnabled`), pelas mesmas regras de
 tempo (`dueReminders`). Quem envia é

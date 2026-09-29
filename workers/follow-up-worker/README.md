@@ -129,6 +129,11 @@ worker: é a pedido de quem aprova, na action (`resume.ts`).
 
 ## Lembretes do Clinicorp (`clinicorp-reminders.ts`)
 
+O público escolhido na conta (`reminderAudience` / `reminderTypes`) vale para
+as duas filas de lembretes e também para overrides locais. No Clinicorp,
+categoria explícita por id/descrição; desconhecida fica de fora. Não inferir
+tipo pelas notas. `tipo_excluido` e `tipo_desconhecido` são contadores agregados.
+
 Fila própria (`clinicorp-reminders`), a cada `CLINICORP_REMINDER_SCAN_EVERY_MINUTES`
 (padrão 5): cada volta relê a agenda do Clinicorp de cada conta, e a cada
 minuto seriam 1.440 chamadas por dia por clínica. Mesmas regras de tempo de

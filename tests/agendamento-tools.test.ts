@@ -244,6 +244,23 @@ describe("retorno de contato com consulta", () => {
 });
 
 describe("nome da pessoa atendida", () => {
+  it("registra avaliação selecionada para lembretes mesmo sem duração própria", async () => {
+    const selected = { ...cfg, durations: [], durationMinutes: 15, reminderAudience: "selected_types", reminderTypes: ["Avaliação"] };
+    db.tenantAction.findUnique.mockResolvedValue({ config: selected });
+    db.appointment.findMany.mockResolvedValue([]);
+    db.appointment.findFirst.mockResolvedValue(null);
+    db.appointment.create.mockResolvedValue({ id: "nova-consulta" });
+    db.appointment.update.mockResolvedValue({});
+    db.lead.findUnique.mockResolvedValue({ name: "Paciente", phone: "5511999999999", isTest: false });
+    db.lead.update.mockResolvedValue({});
+    const result = await runToolHandler("schedule_meeting", ctx, {
+      date: "2026-09-17", time: "14:00", patientName: "Maria Souza", tipoAtendimento: "avaliacao",
+    });
+    expect(result).toContain("Avaliação, 15 min");
+    expect(db.appointment.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({
+      serviceType: "Avaliação", endsAt: new Date("2026-09-17T17:15:00Z"),
+    }) }));
+  });
   it("expõe e exige patientName na ferramenta", () => {
     const schema = getToolSchemas(["schedule_meeting"], cfg).find((tool) => tool.name === "schedule_meeting")!;
     expect(schema.parameters.required).toContain("patientName");

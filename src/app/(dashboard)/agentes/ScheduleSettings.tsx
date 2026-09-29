@@ -10,6 +10,7 @@ import {
 } from "@/modules/scheduling/config";
 import { ReminderList, fromDrafts, toDrafts, type ReminderDraft } from "./ReminderList";
 import { MetaReminderTemplatePicker } from "./MetaReminderTemplatePicker";
+import { ReminderAudienceSettings } from "./ReminderAudienceSettings";
 import type { MetaReminderTemplate } from "@/modules/scheduling/meta-reminder";
 import { TIMEZONES } from "@/modules/scheduling/time";
 import { FormFeedback } from "@/components/ui/alert";
@@ -20,7 +21,7 @@ import { Input } from "@/components/ui/input";
 import { SelectMenu } from "@/components/ui/select-menu";
 import { Switch } from "@/components/ui/switch";
 import { Download } from "lucide-react";
-import { loadClinicorpDurationNamesAction, saveScheduleConfigAction } from "./actions";
+import { loadClinicorpDurationNamesAction, loadClinicorpReminderTypesAction, saveScheduleConfigAction } from "./actions";
 import { trackFormSubmission, UnsavedForm } from "@/components/ui/unsaved-changes";
 
 import { WeeklyAvailabilityGrid } from "./WeeklyAvailabilityGrid";
@@ -83,6 +84,8 @@ export function ScheduleSettings({
   // lembrete antes da pessoa escrever o texto. Aqui o switch só mostra a
   // lista; quem grava é o botão do rodapé.
   const [reminderEnabled, setReminderEnabled] = useState(config.reminderEnabled);
+  const [reminderAudience, setReminderAudience] = useState(config.reminderAudience);
+  const [reminderTypes, setReminderTypes] = useState(config.reminderTypes);
   const [reminders, setReminders] = useState<ReminderDraft[]>(() => toDrafts(config.reminders));
   const [metaTemplate, setMetaTemplate] = useState<MetaReminderTemplate | null>(config.metaReminderTemplate ?? null);
   const [blockedDates, setBlockedDates] = useState(() => config.blockedDates);
@@ -356,6 +359,12 @@ export function ScheduleSettings({
             apagar os textos que a pessoa escreveu (mesma regra do grupo do
             handoff). A lista continua no envio, então religar reencontra tudo. */}
         <div className={reminderEnabled ? "" : "hidden"}>
+          <ReminderAudienceSettings
+            idPrefix={`reminder-${agentId}`} audience={reminderAudience} types={reminderTypes}
+            availableTypes={durations.map((type) => type.label)}
+            onAudienceChange={setReminderAudience} onTypesChange={setReminderTypes}
+            loadTypes={clinicorpConnected ? loadClinicorpReminderTypesAction : undefined} disabled={pending}
+          />
           <ReminderList
             value={reminders}
             onChange={setReminders}
@@ -383,11 +392,13 @@ export function ScheduleSettings({
 
       </fieldset>
       <input type="hidden" name="reminderEnabled" value={String(reminderEnabled)} />
+      <input type="hidden" name="reminderAudience" value={reminderAudience} />
+      <input type="hidden" name="reminderTypes" value={JSON.stringify(reminderTypes)} />
       <input type="hidden" name="reminders" value={JSON.stringify(fromDrafts(reminders))} />
       <input type="hidden" name="metaReminderTemplate" value={metaTemplate ? JSON.stringify(metaTemplate) : ""} />
 
-      <FormFeedback error={state?.error} info={state?.info} />
 
+      <FormFeedback error={state?.error} info={state?.info} />
       <Button type="submit" variant="outline" loading={pending} loadingLabel="Salvando agendamento">
         Salvar configurações de agendamento
       </Button>

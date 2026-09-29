@@ -66,6 +66,10 @@ export type ScheduleConfig = {
    * acabou de ligar o agendamento não escolheu mandar mensagem sozinho.
    */
   reminderEnabled: boolean;
+  /** Público do lembrete; ausente em configs antigas equivale a todos. */
+  reminderAudience: "all" | "selected_types";
+  /** Nomes exatos dos tipos permitidos, independentes da duração. */
+  reminderTypes: string[];
   /**
    * Os lembretes, um por disparo. Uma clínica costuma querer mais de um
    * ("1 semana antes" para dar tempo de remarcar, "2 horas antes" para quem
@@ -216,6 +220,8 @@ export const DEFAULT_SCHEDULE_CONFIG: ScheduleConfig = {
   minNoticeHours: 2,
   blockedDates: [],
   reminderEnabled: false,
+  reminderAudience: "all",
+  reminderTypes: [],
   reminders: [{ minutesBefore: DEFAULT_REMINDER_MINUTES, template: DEFAULT_REMINDER_TEMPLATE }],
 };
 
@@ -243,6 +249,38 @@ function minutesOf(time: string): number {
  */
 export function normalizeDurationLabel(label: string): string {
   return label.normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLowerCase();
+}
+
+/** Comparação exata: Avaliação não autoriza Reavaliação nem texto de notas. */
+export function isReminderTypeAllowed(
+  cfg: Pick<ScheduleConfig, "reminderAudience" | "reminderTypes">,
+  serviceType: string | null | undefined,
+): boolean {
+  if (cfg.reminderAudience === "all") return true;
+  if (typeof serviceType !== "string" || !serviceType.trim()) return false;
+  const wanted = normalizeDurationLabel(serviceType);
+  return cfg.reminderTypes.some((type) => normalizeDurationLabel(type) === wanted);
+}
+
+export function parseReminderTypes(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  return raw.flatMap((value) => {
+    if (typeof value !== "string" || !value.trim() || value.trim().length > 60) return [];
+    const label = value.trim();
+    const key = normalizeDurationLabel(label);
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [label];
+  });
+}
+
+/** Tipo conhecido mesmo sem duração própria; usado para registrar o público. */
+export function resolveScheduleServiceType(cfg: ScheduleConfig, requested?: string | null): string | null {
+  if (!requested?.trim()) return null;
+  const wanted = normalizeDurationLabel(requested);
+  return [...cfg.durations.map((type) => type.label), ...cfg.reminderTypes]
+    .find((type) => normalizeDurationLabel(type) === wanted) ?? null;
 }
 
 /**
@@ -386,6 +424,11 @@ export function parseScheduleConfig(raw: unknown): ScheduleConfig {
     // mensagem para a base de pacientes de uma conta é decisão do dono, não
     // efeito colateral de uma atualização do produto.
     reminderEnabled: c.reminderEnabled === true,
+    // Só ausência preserva o formato antigo. Restrição malformada nunca pode
+    // virar "todos", porque mandaria mensagem para pacientes não escolhidos.
+    reminderAudience: c.reminderAudience === undefined || c.reminderAudience === "all"
+      ? "all" : "selected_types",
+    reminderTypes: parseReminderTypes(c.reminderTypes),
     reminders: parseReminders(c),
     ...(metaReminderTemplate ? { metaReminderTemplate } : {}),
   };
@@ -594,6 +637,9 @@ export function scheduleSystemContext(cfg: ScheduleConfig, now = new Date()): st
           `- Tipos de atendimento com duração própria: ${describeDurations(cfg)}.`,
           "- Se o contato disser o que precisa, passe o nome EXATO do tipo em tipoAtendimento ao chamar schedule_meeting. Se não der para saber, pergunte antes de marcar; em último caso marque sem o tipo e o horário fica com a duração padrão.",
         ]
+      : []),
+    ...(cfg.reminderAudience === "selected_types" && cfg.reminderTypes.length
+      ? [`- Tipos que recebem lembrete: ${cfg.reminderTypes.join(", ")}. Ao agendar um desses tipos, passe o nome EXATO em tipoAtendimento. Não deduza o tipo pelo procedimento: registre somente o tipo de consulta combinado com o contato. Um tipo sem duração própria usa a duração padrão.`]
       : []),
     ...(cfg.weeklyAvailability !== undefined ? ["- Só atenda dentro dos períodos de cada dia. Os intervalos entre períodos são pausas: não ofereça consultas que os atravessem."] : cfg.breaks.map((b) => `- Pausa${b.label ? ` (${b.label})` : ""}: ${b.startTime}–${b.endTime}. Não ofereça nem marque horários que atravessem esse intervalo.`)),
     // Só os dias que ainda vão acontecer, e no máximo alguns: feriado do ano

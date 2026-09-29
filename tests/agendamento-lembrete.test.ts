@@ -404,7 +404,7 @@ describe("Varredura (scanAndSendReminders)", () => {
     db.whatsappBlockedNumber.findUnique.mockResolvedValue(null);
   });
 
-  function acaoConfigurada(over: { enabled?: boolean; reminderEnabled?: boolean; reminders?: unknown } = {}) {
+  function acaoConfigurada(over: { enabled?: boolean; reminderEnabled?: boolean; reminders?: unknown; reminderAudience?: string; reminderTypes?: string[] } = {}) {
     // `AGENTE` é o principal da conta — o que atende o WhatsApp.
     db.agent.findMany.mockResolvedValue([{ id: AGENTE, tenantId: CONTA }]);
     db.tenantAction.findMany.mockResolvedValue(
@@ -414,6 +414,8 @@ describe("Varredura (scanAndSendReminders)", () => {
             agentId: AGENTE,
             config: {
               reminderEnabled: over.reminderEnabled ?? true,
+              reminderAudience: over.reminderAudience ?? "all",
+              reminderTypes: over.reminderTypes ?? [],
               reminders: over.reminders ?? [
                 { minutesBefore: UMA_SEMANA, template: "Falta uma semana, {{nome}}." },
                 { minutesBefore: UM_DIA, template: "É amanhã, {{nome}}, às {{hora}}." },
@@ -447,6 +449,24 @@ describe("Varredura (scanAndSendReminders)", () => {
     remindersSent: over.remindersSent ?? [],
     reminderOverride: over.reminderOverride ?? null,
     lead: { phone: "5511999990000", name: "Maria", isTest: false },
+  });
+
+  it.each(["Ortodontia", "Reavaliação", null])("lembrete próprio não contorna o público da conta: %s", async (serviceType) => {
+    acaoConfigurada({ reminderAudience: "selected_types", reminderTypes: ["Avaliação"] });
+    consultas([{ ...consultaAmanha({ reminderOverride: [{ minutesBefore: UM_DIA, template: "Confirme." }] }), serviceType }]);
+    expect(await scanAndSendReminders(AGORA)).toMatchObject({ sent: 0 });
+    expect(provider.sendMessage).not.toHaveBeenCalled();
+    expect(db.appointment.update).not.toHaveBeenCalled();
+  });
+  it("envia avaliação local e exclui as outras consultas da mesma conta", async () => {
+    acaoConfigurada({ reminderAudience: "selected_types", reminderTypes: ["Avaliação"] });
+    consultas([
+      { ...consultaAmanha(), serviceType: "avaliacao" },
+      { ...consultaAmanha(), id: "outra", serviceType: "Cirurgia" },
+      { ...consultaAmanha(), id: "sem-tipo", serviceType: null },
+    ]);
+    expect(await scanAndSendReminders(AGORA)).toMatchObject({ sent: 1 });
+    expect(provider.sendMessage).toHaveBeenCalledTimes(1);
   });
 
   it("manda o disparo MAIS PRÓXIMO da consulta e fecha os outros vencidos", async () => {

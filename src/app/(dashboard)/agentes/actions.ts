@@ -914,6 +914,8 @@ const scheduleConfigSchema = z.object({
       .nullable(),
   })).max(MAX_DURATIONS, `Cadastre no máximo ${MAX_DURATIONS} variações de duração.`),
   reminderEnabled: z.enum(["true", "false"]).transform((v) => v === "true"),
+  reminderAudience: z.enum(["all", "selected_types"]),
+  reminderTypes: z.array(z.string().trim().min(1).max(60, "O nome do tipo deve ter até 60 caracteres.")),
   // Sem `.max()` de quantidade: quantos lembretes o paciente aguenta é decisão
   // de quem conhece a própria base. A tela avisa a partir de
   // `REMINDER_COUNT_WARNING` (e interrompe com um popup ao passar disso), mas
@@ -951,6 +953,9 @@ const scheduleConfigSchema = z.object({
   // lembrete sozinho) pelo mesmo motivo de `notifyGroup` sem `groupId`: a tela
   // diria "salvo" com a opção silenciosamente desligada.
   if (!data.reminderEnabled) return;
+  if (data.reminderAudience === "selected_types" && data.reminderTypes.length === 0) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["reminderTypes"], message: "Escolha pelo menos um tipo de consulta para receber lembretes." });
+  }
   const error = validateReminders(data.reminders);
   if (error) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["reminders"], message: error });
@@ -1008,12 +1013,34 @@ export async function saveScheduleConfigAction(
   } catch {
     return { ok: false, error: "Datas bloqueadas inválidas. Confira os dias." };
   }
+  // Formulário aberto antes da atualização não pode ampliar um público já
+  // restrito. Preservamos a regra salva quando os dois campos novos não vêm.
+  let reminderAudience: unknown;
+  let reminderTypes: unknown;
+  if (!formData.has("reminderAudience") && !formData.has("reminderTypes")) {
+    const saved = await prisma.tenantAction.findUnique({
+      where: { agentId_key: { agentId: agent.id, key: "schedule_meeting" } },
+      select: { config: true },
+    });
+    const current = parseScheduleConfig(saved?.config);
+    reminderAudience = current.reminderAudience;
+    reminderTypes = current.reminderTypes;
+  } else {
+    reminderAudience = formData.get("reminderAudience");
+    try {
+      reminderTypes = JSON.parse(String(formData.get("reminderTypes") ?? "null"));
+    } catch {
+      return { ok: false, error: "Tipos de consulta inválidos. Confira quem recebe os lembretes." };
+    }
+  }
   const parsed = scheduleConfigSchema.safeParse({
     ...Object.fromEntries(formData),
     breaks,
     durations,
     reminders,
     blockedDates,
+    reminderAudience,
+    reminderTypes,
   });
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Dados inválidos" };
@@ -1151,6 +1178,20 @@ export async function loadReminderTemplatesAction(): Promise<
 export async function loadClinicorpDurationNamesAction(): Promise<
   { ok: true; names: string[] } | { ok: false; error: string }
 > {
+  const result = await loadClinicorpAppointmentTypeNames();
+  return result.ok ? { ok: true, names: result.names.slice(0, MAX_DURATIONS) } : result;
+}
+
+/** Público de lembretes não tem o limite das variações de duração. */
+export async function loadClinicorpReminderTypesAction(): Promise<
+  { ok: true; names: string[] } | { ok: false; error: string }
+> {
+  return loadClinicorpAppointmentTypeNames();
+}
+
+async function loadClinicorpAppointmentTypeNames(): Promise<
+  { ok: true; names: string[] } | { ok: false; error: string }
+> {
   const { tenantId } = await requireTenant();
 
   // Habilitado E conectado: a credencial continua salva com o calendário
@@ -1174,7 +1215,7 @@ export async function loadClinicorpDurationNamesAction(): Promise<
     names.push(category.name.slice(0, 60));
   }
   if (!names.length) return { ok: false, error: "Nenhuma categoria de agendamento cadastrada no Clinicorp." };
-  return { ok: true, names: names.slice(0, MAX_DURATIONS) };
+  return { ok: true, names };
 }
 
 // --------------------------------------------------- configuração do follow-up

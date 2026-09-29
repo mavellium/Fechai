@@ -313,6 +313,21 @@ describe("agenda do Clinicorp na /agenda", () => {
       url.pathname.endsWith("/list_all_professionals") ? json(professionals) : json(rows));
   const list = () => listClinicorpAgenda("tenant-1", "2026-09-01", "2026-09-30", tz);
 
+  it("preserva categoria explícita e não extrai o tipo das notas", async () => {
+    agenda([
+      { id: 1, AtomicDate: 20260929, fromTime: "08:00", CategoryId: "123456789123456789", CategoryDescription: " Avaliação " },
+      { id: 2, AtomicDate: 20260929, fromTime: "09:00", CategoryId: 12 },
+      { id: 3, AtomicDate: 20260929, fromTime: "10:00", Notes: "Avaliação", CategoryId: Number.MAX_SAFE_INTEGER + 1 },
+    ]);
+    const result = await list();
+    if (result.status !== "ok") throw new Error(result.status);
+    expect(result.items).toEqual([
+      expect.objectContaining({ categoryId: "123456789123456789", category: "Avaliação" }),
+      expect.objectContaining({ categoryId: "12", category: null }),
+      expect.objectContaining({ categoryId: null, category: null }),
+    ]);
+  });
+
   it("lê o mês inteiro da clínica escolhida, sem gravar nada", async () => {
     agenda([]);
     expect(await list()).toEqual({ status: "ok", items: [], skipped: 0, fetchedAt: expect.any(Number) });

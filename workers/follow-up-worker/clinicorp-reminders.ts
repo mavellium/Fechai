@@ -2,9 +2,10 @@ import { prisma } from "../../src/lib/prisma";
 import {
   CLINICORP_UNNAMED_PATIENT,
   listClinicorpAgenda,
+  listClinicorpCategories,
   type ClinicorpAgendaItem,
 } from "../../src/modules/scheduling/clinicorp";
-import { renderReminder, type ScheduleConfig } from "../../src/modules/scheduling/config";
+import { isReminderTypeAllowed, renderReminder, type ScheduleConfig } from "../../src/modules/scheduling/config";
 import { metaReminderParameters } from "../../src/modules/scheduling/meta-reminder";
 import { dateInZone, dayKeyInZone, timeInZone } from "../../src/modules/scheduling/time";
 import { getBroadcastConnection } from "../../src/modules/broadcasts/connection";
@@ -80,7 +81,7 @@ async function channelFor(tenantId: string, cfg: ScheduleConfig): Promise<Channe
 }
 
 export async function scanAndSendClinicorpReminders(now: Date = new Date()) {
-  const result = { tenants: 0, scanned: 0, sent: 0, firstContactSkipped: 0 };
+  const result = { tenants: 0, scanned: 0, sent: 0, firstContactSkipped: 0, typeSkipped: 0, unknownTypeSkipped: 0 };
   const configs = await loadAccountScheduleConfigs();
 
   await prisma.clinicorpReminder.deleteMany({
@@ -97,6 +98,8 @@ export async function scanAndSendClinicorpReminders(now: Date = new Date()) {
       result.scanned += counts.scanned;
       result.sent += counts.sent;
       result.firstContactSkipped += counts.firstContactSkipped;
+      result.typeSkipped += counts.typeSkipped;
+      result.unknownTypeSkipped += counts.unknownTypeSkipped;
     } catch (err) {
       // Uma conta com problema não pode calar os lembretes das outras.
       console.error("[lembrete clinicorp] conta falhou", tenantId, err);
@@ -106,7 +109,7 @@ export async function scanAndSendClinicorpReminders(now: Date = new Date()) {
 }
 
 async function remindTenant(tenantId: string, cfg: ScheduleConfig, channel: Channel, now: Date) {
-  const counts = { scanned: 0, sent: 0, firstContactSkipped: 0 };
+  const counts = { scanned: 0, sent: 0, firstContactSkipped: 0, typeSkipped: 0, unknownTypeSkipped: 0 };
 
   // Do dia de hoje até o último dia em que algum lembrete pode vencer agora —
   // mesmo teto de `scanAndSendReminders`, com um dia a mais para o horário fixo.
@@ -124,6 +127,16 @@ async function remindTenant(tenantId: string, cfg: ScheduleConfig, channel: Chan
   counts.scanned = upcoming.length;
   if (upcoming.length === 0) return counts;
 
+  // Categoria pelo id da consulta, nunca por notas ou pelo histórico do paciente.
+  // A lista pública do Clinicorp pode não trazer tipo: nesse caso não enviamos.
+  const categoryNames = new Map<string, string>();
+  if (cfg.reminderAudience === "selected_types" && upcoming.some((item) => item.categoryId)) {
+    const categories = await listClinicorpCategories(tenantId);
+    if (categories.ok) {
+      for (const category of categories.data) categoryNames.set(category.id, category.name);
+    }
+  }
+
   const ids = upcoming.map((item) => item.id);
   const [mirrored, rows] = await Promise.all([
     prisma.appointment.findMany({
@@ -137,6 +150,12 @@ async function remindTenant(tenantId: string, cfg: ScheduleConfig, channel: Chan
 
   for (const item of upcoming) {
     if (ours.has(item.id)) continue;
+    const category = item.categoryId ? categoryNames.get(item.categoryId) : item.category;
+    if (!isReminderTypeAllowed(cfg, category)) {
+      counts.typeSkipped++;
+      if (!category?.trim()) counts.unknownTypeSkipped++;
+      continue;
+    }
 
     // Remarcada no Clinicorp (mesmo id, outro horário): os disparos da data
     // antiga não valem para a nova.
