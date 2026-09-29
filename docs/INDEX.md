@@ -37,8 +37,11 @@ Ver [CHANGELOG.md](./CHANGELOG.md) para o último milestone concluído.
 - Módulo knowledge-base (RAG) → `src/modules/knowledge-base/README.md`
 - Módulo whatsapp (provider Evolution) → `src/modules/whatsapp/README.md`
 - Disparos pela Meta (`/disparos`, Excel/JSON, testes, agenda, entrega e resultados) → [passo a passo e operação](../src/modules/broadcasts/README.md)
+- Módulo scheduling (agenda, Google Agenda, Clinicorp, lembretes de consulta) → `src/modules/scheduling/README.md`
+- Agenda com o Clinicorp (consultas de lá na `/agenda`, ao vivo, troca de mês rápida, lembretes para esses pacientes) → [ADR-005](./decisions/ADR-005-agenda-clinicorp.md) + seções do README de scheduling
 - Módulo reports → `src/modules/reports/README.md`
 - ROI mensal (P-79): revisão administrativa, correções manuais, fórmulas, publicação no tenant e PDF → [contrato e operação](./P-79-relatorio-mensal-roi.md); [mapa da área de relatórios](../src/app/(dashboard)/relatorios/README.md)
+- Perguntas sem resposta (P-87): regra "nunca inventar", fila `/perguntas`, aprovação na base, retomada do contato, avisos, máscara LGPD e métricas → [contrato e operação](./P-87-perguntas-sem-resposta.md); [módulo](../src/modules/knowledge-gaps/README.md); decisões em [ADR-004](./decisions/ADR-004-fila-perguntas-sem-resposta.md)
 - Módulo admin → `src/modules/admin/README.md`
 - Laboratório do administrador com banco isolado → [ambiente-de-testes-admin.md](./ambiente-de-testes-admin.md)
 - Módulo feedback → `src/modules/feedback/README.md`

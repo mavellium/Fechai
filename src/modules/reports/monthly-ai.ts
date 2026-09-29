@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { formatBRL } from "@/lib/format";
 import { monthlyAssumptionsSchema, normalizeLabel } from "./monthly-config";
-import { monthlyMetricOverrideSchema, monthlyOverridesSchema } from "./monthly-overrides";
+import { monthlyMetricOverrideSchema, monthlyOverridesSchema, timeOverrideSchema } from "./monthly-overrides";
 
 export const monthlyAiDraftSchema = z.object({
   assumptions: monthlyAssumptionsSchema,
@@ -29,6 +29,7 @@ const fields: Record<string, z.ZodType> = {
   "assumptions.attendantMonthlyCents": monthlyAssumptionsSchema.shape.attendantMonthlyCents,
   "assumptions.attendantMonthlyHours": monthlyAssumptionsSchema.shape.attendantMonthlyHours,
   "assumptions.minutesPerConversation": monthlyAssumptionsSchema.shape.minutesPerConversation,
+  "assumptions.secondsPerMessage": monthlyAssumptionsSchema.shape.secondsPerMessage,
   "assumptions.procedureVariable": monthlyAssumptionsSchema.shape.procedureVariable,
   "assumptions.evaluationTypes": monthlyAssumptionsSchema.shape.evaluationTypes,
   "assumptions.procedures": procedurePatch,
@@ -39,6 +40,8 @@ for (const period of ["current", "previous"]) {
   for (const [key, schema] of Object.entries(monthlyMetricOverrideSchema.shape)) {
     if (["conversations", "scheduled", "attended"].includes(key)) {
       for (const part of ["inside", "outside", "unclassified"]) fields[`${period}.${key}.${part}`] = z.number().int().min(0).max(10_000_000);
+    } else if (key === "time") {
+      for (const [part, partSchema] of Object.entries(timeOverrideSchema.shape)) fields[`${period}.time.${part}`] = partSchema;
     } else fields[`${period}.${key}`] = schema;
   }
 }
@@ -97,6 +100,9 @@ const names: Record<string, string> = {
   assumedHours: "Horas assumidas", conversations: "Conversas atendidas", scheduled: "Avaliações agendadas",
   attended: "Avaliações realizadas", attendanceUnknown: "Presenças pendentes", untypedAppointments: "Agendamentos sem tipo",
   inside: "dentro do horário", outside: "fora do horário", unclassified: "sem classificação",
+  secondsPerMessage: "Tempo por mensagem", time: "Tempo devolvido", textMessages: "Mensagens de texto respondidas",
+  audios: "Áudios ouvidos", audioMinutes: "Minutos de áudio", unmeasuredAudios: "Áudios sem duração medida",
+  longAudios: "Áudios acima de 2 min", longestAudioSeconds: "Maior áudio",
 };
 export function describeMonthlyAiChange(change: MonthlyAiChange): { label: string; value: string } {
   const parts = change.field.split(".");
@@ -109,7 +115,7 @@ export function describeMonthlyAiChange(change: MonthlyAiChange): { label: strin
   else if (key === "evaluationTypes" && Array.isArray(change.value)) value = change.value.join(", ");
   else if (key === "procedures" && Array.isArray(change.value)) value = change.value.map((p: { name: string; qualified: number; attendedOutside: number }) => `${p.name}: ${p.qualified} qualificados, ${p.attendedOutside} realizadas fora`).join("\n");
   else if (key === "peaks" && Array.isArray(change.value)) value = change.value.map((p: { hour: number; messages: number }) => `${p.hour}h: ${p.messages} mensagens`).join(", ");
-  else if (typeof change.value === "number") value = `${change.value.toLocaleString("pt-BR")}${key === "attendantMonthlyHours" || key === "assumedHours" ? " h" : key === "minutesPerConversation" ? " min" : key === "firstResponseSeconds" ? " s" : ""}`;
+  else if (typeof change.value === "number") value = `${change.value.toLocaleString("pt-BR")}${key === "attendantMonthlyHours" || key === "assumedHours" ? " h" : key === "minutesPerConversation" || key === "audioMinutes" ? " min" : ["firstResponseSeconds", "secondsPerMessage", "longestAudioSeconds"].includes(key) ? " s" : ""}`;
   return { label, value };
 }
 function time(minute: number) { return `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`; }

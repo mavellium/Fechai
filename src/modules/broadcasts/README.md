@@ -92,6 +92,15 @@ mudam silenciosamente o conteúdo revisado. Referência do formato:
 [Meta — template messages](https://whatsapp.github.io/WhatsApp-Nodejs-SDK/api-reference/messages/template/).
 Usamos HTTP direto, não o SDK arquivado.
 
+**Não é só dos Disparos.** O lembrete de consulta para quem nunca conversou
+com o número (pacientes do Clinicorp) usa as mesmas peças:
+`getBroadcastConnection`, `listBroadcastTemplates`/`supportedTemplate` para
+escolher, `sameBroadcastTemplate` para conferir ao salvar, `sendBroadcastTemplate`
+para enviar e `renderBroadcast` para o texto que entra na conversa. Mudar o
+formato aceito ou o envio muda também esses lembretes — ver
+`src/modules/scheduling/meta-reminder.ts` e
+`workers/follow-up-worker/clinicorp-reminders.ts`.
+
 ## Fila, pausa e proteção contra duplicação
 
 `BroadcastCampaign`: `draft → queued → completed`, com `queued ↔ paused` e

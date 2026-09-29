@@ -138,8 +138,10 @@ export function HandoffSettings({ agentId, config }: { agentId: string; config: 
  * número desconectado, a pessoa ainda salva colando o ID. A exceção é a
  * conexão da Meta: lá não existe grupo, e oferecer o campo seria prometer algo
  * que o envio não cumpre.
+ *
+ * Exportado para os avisos de /perguntas, que escolhem o grupo do mesmo jeito.
  */
-function GroupPicker({
+export function GroupPicker({
   fieldId,
   labelId,
   groups,

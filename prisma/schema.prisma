@@ -136,7 +136,102 @@ model Tenant {
   broadcastReceipts BroadcastReceipt[]
   monthlyRoiReports MonthlyRoiReport[]
   reportEvents      ReportEvent[]
+  knowledgeGaps     KnowledgeGap[]
+  knowledgeGapSettings KnowledgeGapSettings?
   reportTrackingStartedAt DateTime @default(now())
+}
+
+/// Pergunta que o agente não soube responder (P-87), agrupada por semelhança.
+/// Uma linha é um ASSUNTO; quem perguntou mora em `KnowledgeGapOccurrence`.
+/// Aprovar a resposta cria um documento na base do agente (`documentId`), e é
+/// isso que faz o agente passar a responder sozinho. Ver
+/// `src/modules/knowledge-gaps/README.md`.
+model KnowledgeGap {
+  id              String    @id @default(cuid())
+  tenantId        String
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// A base é por agente, então o grupo também. `SetNull`: apagar o agente não
+  /// apaga a pergunta — a aprovação cai no agente principal.
+  agentId         String?
+  agent           Agent?    @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  /// Como o agente registrou a primeira ocorrência: curta e sem dado pessoal.
+  question        String
+  /// Chave de agrupamento quando não há embeddings (minúsculas, sem acento).
+  normalized      String
+  /// Vetor da pergunta, para agrupar paráfrases. Gravado via SQL cru, como
+  /// `KnowledgeChunk.embedding`. Null = embeddings indisponíveis.
+  embedding       Unsupported("vector(1536)")?
+  status          String    @default("open") // open | answered | dismissed
+  /// Quantas conversas diferentes perguntaram — a "contagem de repetições".
+  askedCount      Int       @default(1)
+  firstAskedAt    DateTime  @default(now())
+  lastAskedAt     DateTime  @default(now())
+  draftAnswer     String?
+  answer          String?
+  /// PRIMEIRA aprovação. Editar a resposta depois não mexe aqui: é a base do
+  /// "tempo médio para a equipe responder" do relatório mensal.
+  answeredAt      DateTime?
+  answerUpdatedAt DateTime?
+  answeredById    String?
+  answeredByLabel String?
+  answeredByRole  String? // clinic | mavellium
+  /// Documento criado na base pela aprovação. Sem FK de propósito: o dono pode
+  /// apagá-lo em /agentes, e aprovar de novo recria.
+  documentId      String?
+  dismissedAt     DateTime?
+  /// Aviso imediato já enviado (ou dispensado). Claim do worker.
+  notifiedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  occurrences KnowledgeGapOccurrence[]
+
+  @@index([tenantId, status, lastAskedAt])
+  @@index([tenantId, answeredAt])
+  @@index([status, notifiedAt])
+}
+
+/// Uma conversa que fez a pergunta. Única por grupo + conversa: o mesmo contato
+/// perguntando duas vezes não conta como duas pessoas.
+model KnowledgeGapOccurrence {
+  id             String       @id @default(cuid())
+  tenantId       String
+  gapId          String
+  gap            KnowledgeGap @relation(fields: [gapId], references: [id], onDelete: Cascade)
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  /// Mensagem do contato que levou ao registro — ponta do trecho exibido.
+  messageId      String?
+  question       String
+  askedAt        DateTime     @default(now())
+  /// Retomar o contato com a resposta aprovada. Nunca reenviado sozinho:
+  /// sending | sent | failed | skipped.
+  resumeStatus   String?
+  resumeNote     String?
+  resumedAt      DateTime?
+
+  @@unique([gapId, conversationId])
+  @@index([tenantId])
+  @@index([conversationId])
+}
+
+/// Regra e avisos da fila, por conta. Sem linha = padrões de
+/// `knowledge-gaps/settings.ts`. `responders` só o superadmin altera.
+model KnowledgeGapSettings {
+  tenantId       String   @id
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  onUnanswered   String   @default("keep") // keep | handoff
+  notifyEmail    Boolean  @default(true)
+  notifyWhatsapp Boolean  @default(false)
+  groupId        String?
+  groupName      String?
+  immediate      Boolean  @default(true)
+  dailyDigest    Boolean  @default(true)
+  digestHour     Int      @default(8)
+  timezone       String   @default("America/Sao_Paulo")
+  responders     String   @default("clinic") // clinic | mavellium | both
+  lastDigestAt   DateTime?
+  updatedAt      DateTime @updatedAt
 }
 
 /// Premissas e texto revisados pela Mavellium, por competência. O fechamento
@@ -150,6 +245,9 @@ model MonthlyRoiReport {
   adjustments  String @default("")
   nextMonth    String @default("")
   decisionMaker String @default("")
+  /// Caso real do mês, escrito pela Mavellium só com o perfil genérico
+  /// ("paciente de 74 anos"). Nome, telefone e e-mail são recusados ao salvar.
+  featuredCase String @default("")
   status       String @default("draft") // draft | ready
   snapshot     Json?
   preparedBy   String?
@@ -422,6 +520,7 @@ model Agent {
   updatedAt       DateTime  @updatedAt
 
   knowledgeDocs KnowledgeDocument[]
+  knowledgeGaps KnowledgeGap[]
   actions       TenantAction[]
   conversations Conversation[]
   appointments  Appointment[]
@@ -602,6 +701,7 @@ model Conversation {
 
   appointments Appointment[]
   reportEvents ReportEvent[]
+  knowledgeGapOccurrences KnowledgeGapOccurrence[]
 
   @@index([tenantId])
   @@index([agentId])
@@ -639,6 +739,12 @@ model Message {
   /// para a pessoa reouvir no painel o que de fato chegou no WhatsApp do
   /// cliente. Guardar só o áudio deixaria o histórico cego para tudo isso.
   audioUrl          String?
+  /// Duração, em segundos inteiros, do áudio que chegou pelo webhook do
+  /// WhatsApp (do contato ou do atendente pelo celular). A Evolution informa no
+  /// payload; a Meta não, e a duração é lida do próprio arquivo OGG. É a base do
+  /// "tempo de áudio economizado" do ROI mensal. Null = não medido: texto,
+  /// formato que não sabemos ler, ou áudio anterior a esta coluna — nunca zero.
+  audioSeconds      Int?
   createdAt         DateTime     @default(now())
 
   @@index([conversationId])

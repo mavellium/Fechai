@@ -11,6 +11,7 @@ relógio, não por uma resposta do contato:
 | **follow-up** | silêncio do lead sem consulta atual/futura | tenants com a ação `follow_up` ativa |
 | **lembretes** | consultas chegando | tenants com `schedule_meeting` ativa **e** lembrete configurado |
 | **lembretes do Clinicorp** | consultas marcadas direto no Clinicorp | os mesmos, com Clinicorp ligado e canal permitido (ver abaixo) |
+| **perguntas sem resposta** | pergunta nova na fila / hora do resumo | a equipe da conta (e-mail, grupo) e a Mavellium — ver [`src/modules/knowledge-gaps/README.md`](../../src/modules/knowledge-gaps/README.md) |
 
 Cada varredura tem sua própria fila: follow-up roda a cada 15 minutos e
 lembretes a cada minuto por padrão. Assim um lembrete configurado para 23h
@@ -45,6 +46,8 @@ recibos assinados da Meta, reconciliados também nesta varredura.
   - `scanAndSendClinicorpReminders(now?)` — relê a agenda de cada conta, decide o canal e marca `ClinicorpReminder`.
   - `clinicorpWhatsappPhone(raw)` — telefone digitado na recepção → formato do WhatsApp.
 - `index.ts` — cria as filas, agenda os jobs repetíveis (`upsertJobScheduler`) e roda os workers.
+  A fila `knowledge-gaps` (a cada `KNOWLEDGE_GAP_SCAN_EVERY_MINUTES`, padrão 2)
+  chama `scanKnowledgeGaps` de `src/modules/knowledge-gaps/notify.ts`.
 
 ## Lembretes de consulta (`reminders.ts`)
 
@@ -100,6 +103,29 @@ Regras que não são óbvias:
   pendentes são fechados sem enviar mensagem atrasada.
 
 Regressões: `tests/agendamento-lembrete.test.ts`.
+
+## Perguntas sem resposta (`knowledge-gaps`)
+
+A fila `knowledge-gaps` roda `scanKnowledgeGaps`
+([`src/modules/knowledge-gaps/notify.ts`](../../src/modules/knowledge-gaps/notify.ts))
+a cada `KNOWLEDGE_GAP_SCAN_EVERY_MINUTES` (padrão 2). Três partes, cada uma
+com o próprio `catch`:
+
+- **Aviso na hora** — perguntas abertas com `notifiedAt` null, reivindicadas
+  uma a uma (`updateMany ... notifiedAt: null`) e enviadas num aviso só por
+  conta. É reivindicada mesmo quando não sai (aviso desligado, clínica não
+  responde a fila, sem canal, ou vista com mais de 6h): senão voltaria a cada
+  volta.
+- **Resumo diário** — só na hora local `digestHour` da conta; claim por
+  `KnowledgeGapSettings.lastDigestAt` antes do início do dia local. Worker
+  parado nessa hora pula o dia.
+- **Resumo da Mavellium** — às 8h de Brasília para `KNOWLEDGE_GAPS_ADMIN_EMAIL`,
+  claim em `WorkerHeartbeat` (`knowledge-gaps:admin-digest`).
+
+Canais da clínica: e-mail dos usuários `OWNER` que usam o produto e/ou o grupo
+interno do WhatsApp escolhido em `/perguntas`. Nenhum aviso leva nome ou
+telefone de paciente. A retomada do contato com a resposta **não** passa pelo
+worker: é a pedido de quem aprova, na action (`resume.ts`).
 
 ## Lembretes do Clinicorp (`clinicorp-reminders.ts`)
 

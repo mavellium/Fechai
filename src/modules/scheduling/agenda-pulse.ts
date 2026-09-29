@@ -24,6 +24,22 @@ export function monthDays(year: number, month: number): { from: string; to: stri
 }
 
 /**
+ * Deixa o mês anterior e o seguinte no cache do Clinicorp (`listClinicorpAgenda`
+ * sem `fresh`: o que já está lá não é relido). Roda em `after()`, depois da
+ * resposta: o clique em ‹ › acha a agenda de lá pronta. Nunca lança.
+ */
+export async function warmNeighborMonths(tenantId: string, year: number, month: number, timeZone: string): Promise<void> {
+  const neighbors = [
+    month === 1 ? { y: year - 1, m: 12 } : { y: year, m: month - 1 },
+    month === 12 ? { y: year + 1, m: 1 } : { y: year, m: month + 1 },
+  ];
+  await Promise.all(neighbors.map(({ y, m }) => {
+    const { from, to } = monthDays(y, m);
+    return listClinicorpAgenda(tenantId, from, to, timeZone);
+  }));
+}
+
+/**
  * Impressão digital do que a agenda desenha: compromissos do fechai (quantos e
  * a última alteração — status, horário e exclusão mudam um dos dois) e as
  * consultas do Clinicorp. A ordem das consultas não entra: duas no mesmo

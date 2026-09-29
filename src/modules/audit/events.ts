@@ -155,6 +155,12 @@ export const AUDIT_EVENTS = {
     group: "conhecimento",
     revertible: true,
   },
+  // Fila de perguntas sem resposta (P-87). Aprovar grava um documento na base.
+  "knowledge.gap_answered": { label: "Aprovou a resposta de uma pergunta sem resposta", kind: "update", group: "conhecimento" },
+  "knowledge.gap_dismissed": { label: "Descartou uma pergunta sem resposta", kind: "update", group: "conhecimento" },
+  "knowledge.gap_reopened": { label: "Devolveu uma pergunta à fila", kind: "update", group: "conhecimento" },
+  "knowledge.gap_resumed": { label: "Retomou contatos com a resposta aprovada", kind: "update", group: "conhecimento" },
+  "knowledge.gap_settings_updated": { label: "Alterou a regra e os avisos das perguntas sem resposta", kind: "update", group: "conhecimento" },
 
   // ── contatos / agenda ─────────────────────────────────────────────────
   "lead.created": { label: "Cadastrou um contato", kind: "create", group: "contatos" },
@@ -245,6 +251,7 @@ export const AUDIT_EVENTS = {
     group: "admin",
   },
   "admin.account_created": { label: "Criou uma conta pelo painel", kind: "create", group: "admin" },
+  "admin.gap_responders_changed": { label: "Definiu quem responde a fila de perguntas", kind: "update", group: "admin" },
   "admin.tenant_export_requested": { label: "Solicitou download dos dados da conta", kind: "access", group: "admin" },
   "admin.tenant_deleted": {
     label: "Excluiu a conta definitivamente",

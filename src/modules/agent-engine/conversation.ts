@@ -93,6 +93,8 @@ export async function appendMessage(
   externalId?: string,
   /** URL do áudio na CDN, quando a mensagem foi entregue como voz. Ver schema. */
   audioUrl?: string | null,
+  /** Duração do áudio recebido pelo webhook, em segundos. Ver schema. */
+  audioSeconds?: number | null,
 ) {
   const message = await prisma.message.create({
     data: {
@@ -102,6 +104,7 @@ export async function appendMessage(
       sentBy,
       whatsappMessageId: externalId,
       audioUrl: audioUrl ?? null,
+      audioSeconds: audioSeconds ?? null,
     },
   });
   if (role === "user") {

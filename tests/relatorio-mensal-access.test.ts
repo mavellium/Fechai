@@ -6,7 +6,9 @@ const db = vi.hoisted(() => ({
   conversation: { findMany: vi.fn(), findFirst: vi.fn() },
   appointment: { findMany: vi.fn() },
   reportEvent: { findMany: vi.fn(), upsert: vi.fn() },
-  message: { groupBy: vi.fn() }, $transaction: vi.fn(),
+  message: { groupBy: vi.fn(), findMany: vi.fn() }, $transaction: vi.fn(),
+  knowledgeGap: { findMany: vi.fn() },
+  lead: { findMany: vi.fn() },
 }));
 const guards = vi.hoisted(() => ({ superadmin: vi.fn(), product: vi.fn(), tenant: vi.fn() }));
 const integration = vi.hoisted(() => vi.fn());
@@ -28,6 +30,8 @@ beforeEach(() => {
   vi.resetAllMocks(); vi.useFakeTimers(); vi.setSystemTime(new Date("2026-10-06T12:00:00Z"));
   guards.superadmin.mockResolvedValue({ user: { id: "admin" } });
   guards.product.mockResolvedValue({}); guards.tenant.mockResolvedValue({ tenantId: "own" });
+  db.knowledgeGap.findMany.mockResolvedValue([]);
+  db.message.findMany.mockResolvedValue([]); db.lead.findMany.mockResolvedValue([]);
   db.tenant.findUnique.mockResolvedValue({ id: "own", status: "active" });
   db.tenant.findUniqueOrThrow.mockResolvedValue({ name: "Clinic", createdAt: new Date("2026-08-01T03:00:00Z"), reportTrackingStartedAt: new Date("2026-09-01T03:00:00Z") });
   db.agent.findMany.mockResolvedValue([{ id: "a", name: "Agente A" }]);
@@ -115,6 +119,8 @@ describe("autorização e isolamento do relatório mensal", () => {
     expect(db.appointment.findMany.mock.calls[0][0].where).toMatchObject({ tenantId: "own", lead: { isTest: false } });
     expect(db.reportEvent.findMany.mock.calls[0][0].where).toMatchObject({ tenantId: "own", conversation: { isTest: false, lead: { isTest: false } } });
     expect(db.message.groupBy.mock.calls[0][0].where).toMatchObject({ conversation: { tenantId: "own", isTest: false } });
+    // Áudios não ouvidos: só das conversas já filtradas acima.
+    expect(db.message.findMany.mock.calls[0][0].where).toMatchObject({ role: "user", content: "[Áudio]", conversationId: { in: ["outside"] } });
   });
   it("evento sandbox ou de outra conta não é registrado", async () => {
     db.conversation.findFirst.mockResolvedValue(null);
@@ -203,5 +209,30 @@ describe("fechamento e entrega", () => {
     db.monthlyRoiReport.findUnique.mockResolvedValue({ id: "r", status: "ready", sentAt: null });
     expect((await recordMonthlyDelivery("own", "2026-09", "meeting")).ok).toBe(false);
     expect(db.monthlyRoiReport.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("caso do mês", () => {
+  const form = (featuredCase: string) => {
+    const data = new FormData(); data.set("assumptions", JSON.stringify(roiConfig())); data.set("featuredCase", featuredCase);
+    return data;
+  };
+  beforeEach(() => { db.monthlyRoiReport.findUnique.mockResolvedValue(null); db.lead.findMany.mockResolvedValue([{ name: "Maria Aparecida" }]); });
+  it("recusa o nome de um contato do mês e não grava", async () => {
+    const result = await saveMonthlyRoi("own", "2026-09", null, form("A Maria, de 74 anos, mandou dois áudios longos."));
+    expect(result.ok).toBe(false); expect(result.error).toContain("maria");
+    expect(db.monthlyRoiReport.create).not.toHaveBeenCalled();
+    // Só contatos reais desta conta com mensagem no mês.
+    expect(db.lead.findMany.mock.calls[0][0].where).toMatchObject({ tenantId: "own", isTest: false,
+      conversation: { messages: { some: { createdAt: { gte: new Date("2026-09-01T03:00:00Z"), lt: new Date("2026-10-01T03:00:00Z") } } } } });
+  });
+  it("grava o perfil genérico junto da revisão", async () => {
+    const text = "Uma paciente de 74 anos enviou 2 áudios de quase 5 minutos; o agente ouviu tudo e deixou o retorno combinado.";
+    expect((await saveMonthlyRoi("own", "2026-09", null, form(text))).ok).toBe(true);
+    expect(db.monthlyRoiReport.create.mock.calls[0][0].data.featuredCase).toBe(text);
+  });
+  it("sem caso não consulta contatos", async () => {
+    expect((await saveMonthlyRoi("own", "2026-09", null, form(""))).ok).toBe(true);
+    expect(db.lead.findMany).not.toHaveBeenCalled();
   });
 });

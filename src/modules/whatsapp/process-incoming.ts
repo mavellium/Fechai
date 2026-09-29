@@ -13,6 +13,7 @@ import {
 import { transcribeAudio } from "@/modules/ai/transcribe";
 import { speakReply } from "@/modules/voice/reply";
 import { storeVoiceMessage } from "@/modules/voice/storage";
+import { audioDurationSeconds, UNTRANSCRIBED_AUDIO } from "@/modules/voice/received-audio";
 import { isPhoneBlocked } from "./blocklist";
 import type { IncomingMessage, WhatsAppProvider } from "./provider";
 import { shouldPauseAgentForReaction } from "./reactions";
@@ -29,10 +30,12 @@ async function receiveAudio(input: {
   tenantId: string;
   conversationId: string;
   transcribe: boolean;
-}): Promise<{ audioUrl: string | null; transcript: string | null }> {
+}): Promise<{ audioUrl: string | null; transcript: string | null; seconds: number | null }> {
   const { incoming, provider, tenantId, conversationId } = input;
+  // A Evolution já informa a duração; a Meta não, e ela sai do arquivo baixado.
+  let seconds = incoming.audioSeconds ?? null;
   const mediaKey = incoming.mediaId ?? incoming.messageKeyId;
-  if (!mediaKey) return { audioUrl: null, transcript: null };
+  if (!mediaKey) return { audioUrl: null, transcript: null, seconds };
 
   let audioUrl: string | null = null;
   try {
@@ -42,6 +45,7 @@ async function receiveAudio(input: {
     );
     const audio = Buffer.from(base64, "base64");
     if (audio.length === 0) throw new Error("áudio vazio");
+    seconds ??= audioDurationSeconds(audio);
     audioUrl = await storeVoiceMessage({
       tenantId,
       conversationId,
@@ -51,10 +55,10 @@ async function receiveAudio(input: {
     const transcript = input.transcribe
       ? await transcribeAudio(base64, mime)
       : null;
-    return { audioUrl, transcript };
+    return { audioUrl, transcript, seconds };
   } catch (err) {
     console.error("[whatsapp webhook] falha ao processar áudio", err);
-    return { audioUrl, transcript: null };
+    return { audioUrl, transcript: null, seconds };
   }
 }
 
@@ -184,10 +188,11 @@ export async function processIncomingWhatsapp(
     await appendMessage(
       conversation.id,
       "assistant",
-      received?.transcript ?? (incoming.hasAudio ? "[Áudio]" : incoming.text),
+      received?.transcript ?? (incoming.hasAudio ? UNTRANSCRIBED_AUDIO : incoming.text),
       "human",
       incoming.messageKeyId,
       received?.audioUrl,
+      received?.seconds,
     );
     await prisma.conversation.update({
       where: { id: conversation.id },
@@ -220,7 +225,7 @@ export async function processIncomingWhatsapp(
       })
     : null;
   const userMessage =
-    received?.transcript ?? (incoming.hasAudio ? "[Áudio]" : incoming.text);
+    received?.transcript ?? (incoming.hasAudio ? UNTRANSCRIBED_AUDIO : incoming.text);
   if (incoming.hasAudio && (!agent?.listenAudio || !received?.transcript)) {
     await appendMessage(
       conversation.id,
@@ -229,6 +234,7 @@ export async function processIncomingWhatsapp(
       undefined,
       incoming.messageKeyId,
       received?.audioUrl,
+      received?.seconds,
     );
     return ok({
       ok: true,
@@ -245,6 +251,7 @@ export async function processIncomingWhatsapp(
       userMessage,
       incomingWasAudio: incoming.hasAudio,
       incomingAudioUrl: received?.audioUrl,
+      incomingAudioSeconds: received?.seconds,
       incomingMessageKeyId: incoming.messageKeyId,
     });
     if (status !== "ok" || !reply) return ok({ ok: true, silent: status });

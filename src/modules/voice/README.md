@@ -16,6 +16,7 @@ painel, e depois cada resposta em áudio é sintetizada com esse modelo.
 | `../../app/(dashboard)/agentes/VoicePromptForm.tsx` | Instruções do dono para a redação de respostas automáticas em áudio. |
 | `../../app/(dashboard)/agentes/SpeechBlocklistForm.tsx` | A lista "o que ele não fala" (`Agent.speechBlocklist`) no passo Comportamento. |
 | `storage.ts` | `storeVoiceMessage()` — guarda áudios enviados e recebidos na CDN para dar play no histórico. |
+| `received-audio.ts` | `audioDurationSeconds()` (duração do OGG, nunca lança) e `UNTRANSCRIBED_AUDIO` (`[Áudio]`) — base do tempo de áudio no ROI mensal. |
 | `../../app/(dashboard)/agentes/VoiceRecorder.tsx` | Gravação da voz do dono (`MediaRecorder`) + upload de arquivo. |
 | `../../app/(dashboard)/agentes/actions.ts` | `saveAgentVoice`, `deleteAgentVoice` e o toggle em `setAgentBehavior`. |
 | `../../app/(dashboard)/conversas/VoiceMessageRecorder.tsx` | Gravar e mandar a SUA voz numa conversa. |
@@ -241,6 +242,13 @@ desligada ou a transcrição falhar. Nesse caso, o conteúdo é `[Áudio]` e nã
 resposta automática. Áudio enviado pelo próprio WhatsApp entra como resposta
 humana; o eco de um áudio enviado pelo painel ou pelo agente é deduplicado pelo
 id da mensagem.
+
+A **duração** de todo áudio que chega pelo webhook vai para `Message.audioSeconds`:
+a Evolution informa no payload (`seconds`), a Meta não, e ela é lida do arquivo
+OGG já baixado (`received-audio.ts`). Medir nunca derruba o webhook — formato
+que não sabemos ler fica `null` ("não medido", nunca zero). O ROI mensal usa
+essa duração e o marcador `[Áudio]` para saber o que a IA de fato ouviu.
+Áudio gerado pelo agente ou gravado no painel não é medido.
 
 `Message.content` continua sendo o TEXTO mesmo quando há `audioUrl` — é ele que
 vai para o contexto do LLM, o resumo e a busca. `audioUrl` é só a forma de

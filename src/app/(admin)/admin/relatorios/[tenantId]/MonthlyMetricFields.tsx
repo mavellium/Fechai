@@ -36,11 +36,12 @@ export function MonthlyMetricFields({ report: r, value, onChange }: {
   const set = (next: MonthlyMetricOverrides) => onChange({ ...value, [period]: next });
   const rows = overrides.procedures ?? auto.procedures;
   const peaks = overrides.peaks ?? auto.peaks;
-  const input = (path: string, label: string, nullable = false) => {
+  // count: inteiro obrigatório · decimal: fração obrigatória · nullable: vazio = não medido
+  const input = (path: string, label: string, kind: "count" | "decimal" | "nullable" = "count") => {
     const custom = fieldValue(overrides, path);
     const id = `metric-${period}-${path}`;
     return <Field key={path} htmlFor={id} label={label} hint={custom !== undefined ? "Ajustado manualmente" : "Dado carregado"}>
-      <div className="flex items-center gap-1"><Input {...fieldProps(id, { hint: true })} name={id} inputMode={nullable ? "decimal" : "numeric"} value={drafts[id] ?? display(custom !== undefined ? custom : fieldValue(auto, path))} placeholder="Não medido" onChange={(e) => { setDrafts({ ...drafts, [id]: e.target.value }); set(updateField(overrides, path, e.target.value.trim() === "" ? nullable ? null : NaN : Number(e.target.value.replace(",", ".")))); }} />
+      <div className="flex items-center gap-1"><Input {...fieldProps(id, { hint: true })} name={id} inputMode={kind === "count" ? "numeric" : "decimal"} value={drafts[id] ?? display(custom !== undefined ? custom : fieldValue(auto, path))} placeholder="Não medido" onChange={(e) => { setDrafts({ ...drafts, [id]: e.target.value }); set(updateField(overrides, path, e.target.value.trim() === "" ? kind === "nullable" ? null : NaN : Number(e.target.value.replace(",", ".")))); }} />
         {custom !== undefined && <Button type="button" size="icon" variant="ghost" aria-label={`Restaurar dado automático: ${label}`} onClick={() => { const next = { ...drafts }; delete next[id]; setDrafts(next); set(updateField(overrides, path, undefined)); }}><RotateCcw size={14} aria-hidden /></Button>}
       </div>
     </Field>;
@@ -50,10 +51,19 @@ export function MonthlyMetricFields({ report: r, value, onChange }: {
     <SegmentedControl value={period} onSelect={setPeriod} label="Mês dos indicadores" options={[{ value: "current", label: r.month.split("-").reverse().join("/") }, { value: "previous", label: `Anterior · ${r.previousMonth.split("-").reverse().join("/")}` }]} />
     <input type="hidden" name="metricOverrides" value={JSON.stringify(value)} />
     <div className="grid items-end gap-5 sm:grid-cols-2 xl:grid-cols-4">
-      {input("newContacts", "Novos contatos atendidos")}{input("firstResponseSeconds", "Primeira resposta média (s)", true)}
+      {input("newContacts", "Novos contatos atendidos")}{input("firstResponseSeconds", "Primeira resposta média (s)", "nullable")}
       {input("qualified", "Leads qualificados")}{input("handoffs", "Transbordos para humano")}{input("unanswered", "Perguntas sem resposta")}
-      {input("aiOnlyConversations", "Conversas sem resposta humana")}{input("assumedHours", "Horas assumidas pelo agente (h)", true)}
+      {input("aiOnlyConversations", "Conversas sem resposta humana")}{input("assumedHours", "Horas devolvidas à equipe (h)", "nullable")}
     </div>
+    {auto.time && <div className="space-y-3 border-t border-ink/10 pt-4 panel:border-white/10">
+      <h4 className="text-sm font-medium">Tempo devolvido à equipe</h4>
+      <p className="text-sm text-neutral panel:text-white/55">Mensagens e minutos de áudio entram na economia quando o tempo por mensagem está preenchido. Horas devolvidas, se ajustadas acima, substituem esse cálculo.</p>
+      <div className="grid items-end gap-5 sm:grid-cols-2 xl:grid-cols-3">
+        {input("time.textMessages", "Mensagens de texto respondidas pelo agente")}{input("time.audios", "Áudios ouvidos e respondidos")}
+        {input("time.audioMinutes", "Minutos de áudio ouvidos", "decimal")}{input("time.unmeasuredAudios", "Áudios sem duração medida")}
+        {input("time.longAudios", "Áudios acima de 2 min")}{input("time.longestAudioSeconds", "Maior áudio (s)", "nullable")}
+      </div>
+    </div>}
     {([ ["conversations", "Conversas atendidas"], ["scheduled", "Avaliações agendadas pelo agente"], ["attended", "Avaliações realizadas"] ] as const).map(([key, label]) => <div key={key} className="space-y-3 border-t border-ink/10 pt-4 panel:border-white/10"><h4 className="text-sm font-medium">{label}</h4><div className="grid gap-5 sm:grid-cols-3">
       {input(`${key}.inside`, `${label} · dentro do horário`)}{input(`${key}.outside`, `${label} · fora do horário`)}{input(`${key}.unclassified`, `${label} · sem classificação`)}
     </div></div>)}

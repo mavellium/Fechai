@@ -663,7 +663,8 @@ export const CLINICORP_UNNAMED_PATIENT = "Paciente sem nome";
 
 export type ClinicorpAgenda =
   | { status: "off" }
-  | { status: "ok"; items: ClinicorpAgendaItem[]; skipped: number }
+  /** `fetchedAt`: quando a leitura saiu do Clinicorp — do cache, pode ser de minutos atrás. */
+  | { status: "ok"; items: ClinicorpAgendaItem[]; skipped: number; fetchedAt: number }
   | { status: "error"; error: string };
 
 /**
@@ -693,10 +694,11 @@ function agendaDay(row: Record<string, unknown>, timeZone: string): string | nul
  * inclusive), para a `/agenda` mostrar também o que a recepção marcou lá.
  *
  * **Só leitura, nada é importado**: a linha não vira `Appointment`, então não
- * recebe lembrete, não conta em relatório e não há regra de quem vence numa
+ * conta em relatório, não tem ações na tela e não há regra de quem vence numa
  * divergência — o Clinicorp continua dono do que foi marcado nele. Quem
  * deduplica o que o próprio fechai espelhou é a tela, por
- * `clinicorpAppointmentId`.
+ * `clinicorpAppointmentId`. Os lembretes dessas consultas têm caminho próprio:
+ * `workers/follow-up-worker/clinicorp-reminders.ts`.
  *
  * Mostra a clínica inteira, mesmo com `dentistId`: a pessoa quer ver a agenda
  * que tem lá, não só a fatia que bloqueia horário do agente. Compromissos e
@@ -705,11 +707,13 @@ function agendaDay(row: Record<string, unknown>, timeZone: string): string | nul
  * Nunca lança e não grava `lastError`: ler a agenda para desenhar a tela não é
  * envio, e um erro aqui não pode apagar nem mascarar o aviso de um envio.
  *
- * **Cache curto** (`AGENDA_CACHE_MS`): clicar num dia é uma navegação que
- * refaz a página, e esperar o Clinicorp a cada clique travava a tela. A
- * conexão (flag, credencial, clínica) é conferida sempre — desligar para na
- * hora —, só a resposta de lá é reaproveitada. `fresh` pula o cache e o
- * reabastece: é o que o pulso ao vivo (`readAgendaPulse`) usa a cada 15s.
+ * **Cache no servidor, servido enquanto é revalidado** (`AGENDA_CACHE_MS`):
+ * trocar de dia ou de mês é uma navegação que refaz a página, e esperar o
+ * Clinicorp a cada clique travava a tela. A conexão (flag, credencial, clínica)
+ * é conferida sempre — desligar para na hora —, só a resposta de lá é
+ * reaproveitada. Quem garante que ela não fica velha é o pulso ao vivo
+ * (`readAgendaPulse`, com `fresh`): relê o mês aberto a cada 15s, e na hora
+ * quando a página chega com `fetchedAt` antigo.
  */
 export async function listClinicorpAgenda(
   tenantId: string,
@@ -753,8 +757,13 @@ export async function listClinicorpAgenda(
   }
 }
 
-/** Quanto a leitura do mês vale para os cliques seguintes. O pulso a renova a cada 15s. */
-const AGENDA_CACHE_MS = 30_000;
+/**
+ * Quanto uma leitura do mês é servida sem ir ao Clinicorp. Longo de propósito:
+ * a página nunca espera por ela se houver algo em cache, e o pulso da tela
+ * relê o mês aberto (ver `listClinicorpAgenda`). Curto, cada volta a um mês
+ * visto há pouco esperava o Clinicorp de novo.
+ */
+const AGENDA_CACHE_MS = 30 * 60_000;
 const AGENDA_ERROR_CACHE_MS = 10_000;
 /** Nome de profissional quase nunca muda: não vale uma chamada a cada releitura. */
 const PROFESSIONALS_CACHE_MS = 10 * 60_000;
@@ -854,7 +863,7 @@ async function fetchAgenda(
       });
     }
     items.sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime());
-    return { status: "ok", items, skipped };
+    return { status: "ok", items, skipped, fetchedAt: Date.now() };
   } catch (err) {
     console.error("[clinicorp] ler agenda do período falhou", err);
     return { status: "error", error: "Não foi possível ler a agenda do Clinicorp." };

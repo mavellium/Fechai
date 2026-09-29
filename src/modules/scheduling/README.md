@@ -13,8 +13,24 @@ mostrada no painel, e o horário combinado com o lead continua de pé.
 | `config.ts` | `ScheduleConfig` (expediente, fuso, duração padrão + variações) em `TenantAction.config`, chave `schedule_meeting`. Por agente. |
 | `time.ts` | Fuso: `parseLocalDateTime`, `partsInZone`, `monthRangeUtc`. Nada de data no projeto sem passar por aqui. |
 | `google.ts` | Espelho no Google Agenda (OAuth por tenant). |
-| `clinicorp.ts` | Espelho + leitura de disponibilidade e da agenda (para a `/agenda`) no Clinicorp (Basic auth por tenant). |
+| `clinicorp.ts` | Espelho + leitura de disponibilidade e da agenda (para a `/agenda`) no Clinicorp (Basic auth por tenant). Cache da agenda: `listClinicorpAgenda`, `clearClinicorpAgendaCache`. |
+| `agenda-pulse.ts` | A `/agenda` ao vivo: `agendaVersion` (versão do mês, igual na página e na rota), `readAgendaPulse` (o pulso), `monthDays`, `warmNeighborMonths`. |
+| `meta-reminder.ts` | Template aprovado da Meta para lembrar quem nunca conversou com o número (`metaReminderTemplate`): leitura, parâmetros e validação. Puro — a tela importa. |
 | `features.ts` | Quais calendários a conta habilitou em /integracoes. |
+
+Fora do módulo, o que usa estas peças:
+
+| Arquivo | O que faz |
+| --- | --- |
+| `app/(dashboard)/agenda/page.tsx` | A tela. Banco primeiro, Clinicorp por streaming (`<Suspense key={mês}>`); `after()` aquece os meses vizinhos. |
+| `app/(dashboard)/agenda/DayPanel.tsx` | A lista do dia (compromissos do fechai + consultas do Clinicorp), desenhada com e sem a agenda de lá. |
+| `app/(dashboard)/agenda/ClinicorpAppointmentItem.tsx` | Card só leitura da consulta do Clinicorp, com "lembrete enviado". |
+| `app/(dashboard)/agenda/CalendarMonth.tsx` | Grade do mês; prefetch completo em ‹ › e "Hoje", `prefetch={false}` nos dias. |
+| `app/(dashboard)/agenda/AgendaLiveRefresh.tsx` | "Ao vivo" + botão Atualizar: pergunta a versão a cada 15 s e refaz só quando muda. |
+| `app/(dashboard)/agenda/LinkPendingHint.tsx` | Acende o link clicado enquanto a navegação não chega (`useLinkStatus`). |
+| `app/api/agenda/pulso/route.ts` | A pergunta do ao vivo: versão do mês, relendo o Clinicorp com `fresh`. |
+| `app/(dashboard)/agentes/MetaReminderTemplatePicker.tsx` | Escolha do template da Meta do lembrete, variáveis e prévia. |
+| `workers/follow-up-worker/clinicorp-reminders.ts` | Envia os lembretes das consultas do Clinicorp (fila própria, 5 min). |
 
 ## Configuração do agendamento por agente
 
@@ -503,17 +519,20 @@ deixado de fora do botão de importar, que é síncrono.
 ### Consultas do Clinicorp na /agenda
 
 A `/agenda` mostra também as consultas marcadas **direto no Clinicorp**, lidas
-a cada abertura do mês (uma chamada a `/appointment/list` com `from`/`to` do
-mês, mais `/professional/list_all_professionals` para dar nome ao
-profissional). Antes a tela lia só o nosso banco, e a clínica via dias vazios
-que estavam cheios lá.
+do mês aberto (uma chamada a `/appointment/list` com `from`/`to` do mês, mais
+`/professional/list_all_professionals` para dar nome ao profissional; as duas
+com cache — ver abaixo). Antes a tela lia só o nosso banco, e a clínica via
+dias vazios que estavam cheios lá. Decisões e alternativas descartadas:
+[ADR-005](../../../docs/decisions/ADR-005-agenda-clinicorp.md).
 
 - **Só leitura, nada é importado.** A consulta não vira `Appointment`: não
-  recebe lembrete, não entra em relatório nem na cota, e não existe regra de
-  quem vence numa divergência — o Clinicorp continua dono do que foi marcado
-  nele. Por isso o card não tem Lembretes/Concluir/Cancelar e diz "para
-  alterar, use o Clinicorp". Importar de verdade exigiria polling,
-  deduplicação e essa regra — continua sendo decisão em aberto.
+  entra em relatório nem na cota, não tem ações nem override de lembrete, e
+  não existe regra de quem vence numa divergência — o Clinicorp continua dono
+  do que foi marcado nele. Por isso o card não tem Lembretes/Concluir/Cancelar
+  e diz "para alterar, use o Clinicorp". Os lembretes chegam a esses pacientes
+  por um caminho próprio (ver "Lembretes das consultas do Clinicorp"). Importar
+  de verdade exigiria sincronização, deduplicação e essa regra — continua
+  sendo decisão em aberto.
 - **O que o fechai espelhou aparece uma vez só**, como o nosso compromisso: a
   tela descarta a linha do Clinicorp cujo `id` está em
   `Appointment.clinicorpAppointmentId` de algum compromisso do mês.
@@ -540,14 +559,35 @@ que estavam cheios lá.
 - **Recebem lembrete, com regra própria de canal** — ver "Lembretes das
   consultas do Clinicorp" abaixo. A tela mostra "lembrete enviado" no card
   (`ClinicorpReminder.reminderSentAt`, casado pelo id **e** pelo horário).
-- **Cache curto no servidor** (`AGENDA_CACHE_MS`, 30s; falha 10s;
-  profissionais 10 min), no `globalThis` para a página e a rota do pulso
-  enxergarem o mesmo. Clicar num dia é uma navegação que refaz a página, e
-  esperar o Clinicorp a cada clique travava a tela. A conexão (flag,
-  credencial, clínica) é conferida a cada chamada — desligar para na hora —, só
-  a resposta de lá é reaproveitada, e a chave inclui assinante e clínica.
-  Pedidos simultâneos do mesmo mês esperam a mesma chamada. Nova credencial e
-  desconexão limpam o cache da conta (`clearClinicorpAgendaCache`).
+- **Trocar de mês nunca espera o Clinicorp.** Quatro camadas, da mais para a
+  menos frequente:
+  1. **Prefetch completo de ‹ › e "Hoje"** (`CalendarMonth`): o mês vizinho
+     já está no navegador (5 min, `staleTimes.static`), e o clique nem vai ao
+     servidor. Os dias ficam com `prefetch={false}` — 30 renderizações por mês
+     não compensam; o dia vem do cache do servidor.
+  2. **Streaming** (`page.tsx`): a página sai com o que está no nosso banco, e
+     calendário + dia são redesenhados quando a agenda de lá chega, num
+     `<Suspense key={mês}>`. A chave do mês é obrigatória — sem ela a
+     navegação é uma transição e o React segura a tela antiga até o Clinicorp
+     responder. Enquanto chega, o calendário diz "buscando Clinicorp…" na
+     linha do título (embaixo dele, sumir puxaria a grade) e o dia avisa que a
+     lista pode crescer. Conta sem Clinicorp ativo não entra no streaming.
+  3. **Meses vizinhos aquecidos no servidor**: `after()` chama
+     `warmNeighborMonths` depois de cada resposta.
+  4. **Cache servido enquanto é revalidado** (`AGENDA_CACHE_MS`, 30 min; falha
+     10 s; profissionais 10 min), no `globalThis` para a página e a rota do
+     pulso enxergarem o mesmo. Longo de propósito: quem garante que o dado
+     não fica velho é o pulso, que relê o mês aberto com `fresh` a cada 15 s —
+     e **na hora** quando a página chega com leitura antiga (`fetchedAt` →
+     `dataAsOf` do `AgendaLiveRefresh`), seja do cache do servidor ou do
+     prefetch do navegador. A conexão (flag, credencial, clínica) é conferida
+     a cada chamada — desligar para na hora —, só a resposta de lá é
+     reaproveitada, e a chave inclui assinante e clínica. Pedidos simultâneos
+     do mesmo mês esperam a mesma chamada. Nova credencial e desconexão limpam
+     o cache da conta (`clearClinicorpAgendaCache`).
+
+  A página também busca o agente em paralelo com as demais consultas ao
+  banco (antes era uma ida em série a mais por navegação).
 - **"Tempo real" é releitura, não webhook.** O Clinicorp não avisa quando uma
   consulta é marcada (o único webhook da API é de upload de arquivo). A cada
   `LIVE_INTERVAL_MS` (15s), `AgendaLiveRefresh` (`(dashboard)/agenda/`)

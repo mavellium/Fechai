@@ -14,7 +14,8 @@ import { Alert, FormFeedback } from "@/components/ui/alert";
 import { UnsavedForm, useUnsavedNavigation } from "@/components/ui/unsaved-changes";
 import { TIMEZONES } from "@/modules/scheduling/time";
 import { minuteLabel } from "@/modules/scheduling/weekly-availability";
-import type { MonthlyReport } from "@/modules/reports/monthly";
+import type { MonthlyCaseCandidate, MonthlyReport } from "@/modules/reports/monthly";
+import { FEATURED_CASE_MAX, formatDuration } from "@/modules/reports/monthly-time";
 import { monthlyOverridesSchema } from "@/modules/reports/monthly-overrides";
 import { MonthlyMetricFields } from "./MonthlyMetricFields";
 import { MonthlyAgentImport } from "./MonthlyAgentImport";
@@ -43,7 +44,7 @@ function readTime(text: string) {
   return h * 60 + m;
 }
 
-export function MonthlyRoiEditor({ tenantId, report: r, sources }: { tenantId: string; report: MonthlyReport; sources: MonthlyImportSources }) {
+export function MonthlyRoiEditor({ tenantId, report: r, sources, caseCandidates = [] }: { tenantId: string; report: MonthlyReport; sources: MonthlyImportSources; caseCandidates?: MonthlyCaseCandidate[] }) {
   const [defaults, setDefaults] = useState<MonthlyAiDraft>({ assumptions: r.assumptions, metricOverrides: r.metricOverrides ?? { current: {}, previous: {} }, adjustments: r.adjustments, nextMonth: r.nextMonth, decisionMaker: r.decisionMaker });
   const c = defaults.assumptions;
   const [aiOpen, setAiOpen] = useState(false);
@@ -65,6 +66,8 @@ export function MonthlyRoiEditor({ tenantId, report: r, sources }: { tenantId: s
   const nextId = useRef(procedures.length);
   const [untyped, setUntyped] = useState(c.countUntypedAsEvaluations);
   const [statuses, setStatuses] = useState(c.completedStatusTypes);
+  // Controlado: preencher com a IA remonta o formulário, e o caso não passa por ela.
+  const [featuredCase, setFeaturedCase] = useState(r.featuredCase ?? "");
   const [error, setError] = useState<string | null>(null);
   const [actionFeedback, setActionFeedback] = useState<{ ok: boolean; error?: string; info?: string } | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
@@ -81,7 +84,8 @@ export function MonthlyRoiEditor({ tenantId, report: r, sources }: { tenantId: s
   const readAssumptions = (form: FormData) => ({
     agentIds, timezone, humanHours: hoursConfirmed ? hours.map((day) => day.map((h) => ({ start: readTime(h.start), end: readTime(h.end) }))) : null,
     attendantMonthlyCents: readNumber(form.get("attendantMonthlyCents"), 100, true), attendantMonthlyHours: readNumber(form.get("attendantMonthlyHours")),
-    minutesPerConversation: readNumber(form.get("minutesPerConversation")), investmentCents: readNumber(form.get("investmentCents"), 100, true),
+    minutesPerConversation: readNumber(form.get("minutesPerConversation")), secondsPerMessage: readNumber(form.get("secondsPerMessage")),
+    investmentCents: readNumber(form.get("investmentCents"), 100, true),
     procedureVariable: String(form.get("procedureVariable") ?? ""), evaluationTypes: String(form.get("evaluationTypes") ?? "").split("\n").map((v) => v.trim()).filter(Boolean),
     countUntypedAsEvaluations: untyped, completedStatusTypes: statuses,
     procedures: procedures.map((p) => ({ name: String(form.get(`procedure-${p.id}`) ?? ""), ticketCents: readNumber(form.get(`ticket-${p.id}`), 100, true), conversionBps: readNumber(form.get(`conversion-${p.id}`), 100) })),
@@ -148,7 +152,9 @@ export function MonthlyRoiEditor({ tenantId, report: r, sources }: { tenantId: s
         <MonthlyMetricFields key={importVersion} report={loaded} value={metricOverrides} onChange={setMetricOverrides} />
         <section className="space-y-4"><CardTitle as="h3" hint="Campos vazios ficam pendentes até serem levantados com a clínica.">Investimento e equipe</CardTitle><div className="grid items-end gap-5 sm:grid-cols-2 xl:grid-cols-4">
           {moneyField("investmentCents", "Mensalidade do Fechai (R$)", c.investmentCents)}{moneyField("attendantMonthlyCents", "Custo mensal do atendente (R$)", c.attendantMonthlyCents)}
-          {numberField("attendantMonthlyHours", "Carga mensal do atendente (h)", c.attendantMonthlyHours)}{numberField("minutesPerConversation", "Tempo humano por conversa (min)", c.minutesPerConversation, "Estimativa usada para calcular a economia.")}
+          {numberField("attendantMonthlyHours", "Carga mensal do atendente (h)", c.attendantMonthlyHours)}
+          {numberField("secondsPerMessage", "Tempo por mensagem (s)", c.secondsPerMessage, "Ler e responder cada mensagem que o agente atendeu. Somado aos minutos de áudio ouvidos, calcula a economia. Ex.: 30.")}
+          {numberField("minutesPerConversation", "Tempo humano por conversa (min)", c.minutesPerConversation, "Usado só enquanto o tempo por mensagem estiver vazio.")}
         </div>{r.investmentSource && <p className="text-xs text-neutral panel:text-white/55">Mensalidade carregada de: {r.investmentSource}. Confira o valor cobrado nesta competência antes de salvar.</p>}</section>
         <section className="space-y-4 border-t border-ink/10 pt-6 panel:border-white/10">
           <CardTitle as="h3" hint="A receita considera somente contatos cuja primeira mensagem chegou fora deste expediente.">Horário de atendimento humano</CardTitle>
@@ -178,6 +184,18 @@ export function MonthlyRoiEditor({ tenantId, report: r, sources }: { tenantId: s
         <section className="space-y-4 border-t border-ink/10 pt-6 panel:border-white/10"><CardTitle as="h3">Revisão para o decisor</CardTitle>
           <Field label="Nome do decisor" htmlFor="roi-decisionMaker"><Input {...fieldProps("roi-decisionMaker")} name="decisionMaker" maxLength={100} defaultValue={defaults.decisionMaker} placeholder="Quem recebe e acompanha o resultado" /></Field>
           <div className="grid gap-5 lg:grid-cols-2"><Field label="O que ajustamos no agente" htmlFor="roi-adjustments" hint="Até 400 caracteres. Cite os ajustes feitos neste mês."><Textarea {...fieldProps("roi-adjustments", { hint: true })} name="adjustments" maxLength={400} defaultValue={defaults.adjustments} rows={4} /></Field><Field label="Próximo mês" htmlFor="roi-nextMonth" hint="Até 400 caracteres. Descreva as próximas ações."><Textarea {...fieldProps("roi-nextMonth", { hint: true })} name="nextMonth" maxLength={400} defaultValue={defaults.nextMonth} rows={4} /></Field></div>
+          <Field label="Caso do mês (opcional)" htmlFor="roi-featuredCase" hint={`Até ${FEATURED_CASE_MAX} caracteres. Só o perfil genérico, como "paciente de 74 anos": sem nome, telefone ou e-mail. Nomes de contatos do mês são recusados ao salvar.`}>
+            <Textarea {...fieldProps("roi-featuredCase", { hint: true })} name="featuredCase" maxLength={FEATURED_CASE_MAX} value={featuredCase} onChange={(e) => setFeaturedCase(e.target.value)} rows={3}
+              placeholder="Ex.: Uma paciente de 74 anos enviou 2 áudios de quase 5 minutos; o agente ouviu tudo, respondeu com paciência e deixou o retorno combinado." />
+          </Field>
+          {caseCandidates.length > 0 && <div className="rounded-control border border-ink/10 p-4 panel:border-white/10">
+            <p className="text-sm font-medium">Conversas com áudios longos neste mês</p>
+            <p className="mt-1 text-xs text-neutral panel:text-white/55">Para abrir, use “Entrar como” na conta do cliente. Leia a conversa antes de escrever o caso.</p>
+            <ul className="mt-3 space-y-2">{caseCandidates.map((candidate) => <li key={candidate.conversationId} className="flex flex-wrap items-center justify-between gap-2 text-sm">
+              <span className="tabular-nums">{new Intl.DateTimeFormat("pt-BR", { timeZone: c.timezone, day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(candidate.firstAt))} · {candidate.audios.length} {candidate.audios.length === 1 ? "áudio longo" : "áudios longos"}: {candidate.audios.map((s) => formatDuration(s)).join(", ")}</span>
+              <a href={`/conversas?id=${candidate.conversationId}`} target="_blank" rel="noreferrer" className="rounded-sm text-iris underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-iris">Abrir conversa</a>
+            </li>)}</ul>
+          </div>}
         </section>
         <details className="rounded-control border border-ink/10 p-4 panel:border-white/10"><summary className="cursor-pointer text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-iris">Critérios de classificação e Clinicorp</summary><div className="mt-5 space-y-5">
           <div className="grid gap-5 lg:grid-cols-2"><Field label="Variável que identifica o procedimento" htmlFor="roi-procedureVariable" hint="Use o nome configurado em Agentes → Variáveis."><Input {...fieldProps("roi-procedureVariable", { hint: true })} name="procedureVariable" maxLength={60} defaultValue={c.procedureVariable} /></Field><Field label="Tipos de atendimento considerados avaliações" htmlFor="roi-evaluationTypes" hint="Um nome por linha, conforme o agendamento do agente."><Textarea {...fieldProps("roi-evaluationTypes", { hint: true })} name="evaluationTypes" defaultValue={c.evaluationTypes.join("\n")} /></Field></div>

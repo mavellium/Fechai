@@ -1,5 +1,7 @@
 import { formatBRL } from "@/lib/format";
-import type { MonthlyReport, SplitCount } from "@/modules/reports/monthly";
+import { formatGapTime as gapTime } from "@/modules/knowledge-gaps/text";
+import type { MonthlyMetrics, MonthlyReport, SplitCount } from "@/modules/reports/monthly";
+import { formatDuration, formatMinutes, hoursPremise, timeHeadline, type DurationStats } from "@/modules/reports/monthly-time";
 import { Card, CardTitle } from "@/components/ui/card";
 import { Stat } from "@/components/ui/stat";
 import { Badge } from "@/components/ui/badge";
@@ -10,6 +12,10 @@ import { TIMEZONES } from "@/modules/scheduling/time";
 export const total = (s: SplitCount) => s.inside + s.outside + s.unclassified;
 const number = (v: number | null, suffix = "") => v === null ? "Pendente" : `${v.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}${suffix}`;
 const money = (v: number | null) => v === null ? "Pendente" : formatBRL(v);
+// Relatórios fechados antes da medição não têm `time`: "não medido", nunca zero.
+const audioCell = (m: MonthlyMetrics) => !m.time ? "Não medido"
+  : m.time.audioMinutes ? `${m.time.audios} · ${formatMinutes(m.time.audioMinutes)}` : number(m.time.audios);
+const usesMeasuredTime = (r: MonthlyReport) => r.assumptions.secondsPerMessage != null && Boolean(r.current.time) && r.metricOverrides?.current.assumedHours === undefined;
 export function monthlyRows(r: MonthlyReport) {
   const a = r.current, b = r.previous;
   return [
@@ -21,7 +27,10 @@ export function monthlyRows(r: MonthlyReport) {
     ["Avaliações realizadas · dentro / fora", r.assumptions.humanHours ? `${a.attended.inside} / ${a.attended.outside}` : "Pendente", r.previousAssumptions.humanHours ? `${b.attended.inside} / ${b.attended.outside}` : "Pendente"],
     ["Transbordos para humano", `${a.handoffs}${a.trackingComplete ? "" : " registrados*"}`, `${b.handoffs}${b.trackingComplete ? "" : " registrados*"}`],
     ["Perguntas sem resposta", `${a.unanswered}${a.trackingComplete ? "" : " registradas*"}`, `${b.unanswered}${b.trackingComplete ? "" : " registradas*"}`],
-    ["Horas assumidas (estimadas)", number(a.assumedHours, " h"), number(b.assumedHours, " h")],
+    ["Tempo médio para a equipe responder", gapTime(a), gapTime(b)],
+    ["Áudios ouvidos pelo agente", audioCell(a), audioCell(b)],
+    ["Mensagens de texto respondidas pelo agente", a.time ? number(a.time.textMessages) : "Não medido", b.time ? number(b.time.textMessages) : "Não medido"],
+    ["Horas devolvidas à equipe (estimadas)", number(a.assumedHours, " h"), number(b.assumedHours, " h")],
     ["ROI estimado", number(a.roiPercent, "%"), number(b.roiPercent, "%")],
   ];
 }
@@ -32,13 +41,52 @@ export function MonthlyRoiSummary({ report: r }: { report: MonthlyReport }) {
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
       <Stat label="ROI do mês" value={number(a.roiPercent, "%")} hint={a.roiPercent === null ? "aguardando premissas" : "retorno sobre o investimento"} />
       <Stat compact label="Receita estimada" value={money(a.revenueCents)} hint="contatos que chegaram fora do expediente" />
-      <Stat compact label="Economia estimada" value={money(a.savingsCents)} hint="horas assumidas pelo agente" />
+      <Stat compact label="Economia estimada" value={money(a.savingsCents)} hint="tempo devolvido à equipe" />
       <Stat compact label="Investimento mensal" value={money(a.investmentCents)} hint="mensalidade do Fechai" />
     </div>
-    <p className="text-sm leading-relaxed text-neutral panel:text-white/60">A receita considera as avaliações realizadas de contatos que chegaram fora do horário humano. A economia estima o tempo de atendimento assumido pelo agente.</p>
+    <p className="text-sm leading-relaxed text-neutral panel:text-white/60">A receita considera as avaliações realizadas de contatos que chegaram fora do horário humano. {usesMeasuredTime(r) ? "A economia estima o tempo que a recepção gastaria ouvindo os áudios e respondendo as mensagens que o agente atendeu." : "A economia estima o tempo de atendimento assumido pelo agente."}</p>
     {a.investmentCents === 0 && <Alert>Mensalidade zero: o ROI percentual não se aplica.</Alert>}
     {a.missing.length > 0 && <Alert tone="warn" title="Dados pendentes para calcular o retorno"><ul className="mt-1 list-disc space-y-1 pl-4">{a.missing.map((m) => <li key={m}>{m}</li>)}</ul></Alert>}
   </section>;
+}
+
+const OUTCOMES: [keyof NonNullable<MonthlyMetrics["time"]>["sessions"], string][] = [
+  ["all", "Todos"], ["scheduled", "Agendou"], ["handoff", "Transbordou para a equipe"], ["lost", "Perdido"], ["other", "Sem desfecho registrado"],
+];
+const durationRow = (label: string, s: DurationStats) => [label, number(s.count), formatMinutes(s.averageMinutes), formatMinutes(s.medianMinutes), number(s.averageMessages)];
+
+/** O trabalho da recepção que o agente assumiu. Ausente em relatórios fechados antes da medição. */
+function TimeReturnedCard({ report: r }: { report: MonthlyReport }) {
+  const a = r.current, t = a.time;
+  if (!t) return null;
+  const empty = t.sessions.all.count === 0 && t.textMessages + t.audios === 0;
+  return <Card>
+    <CardTitle hint="Estimativa. As premissas estão no fim deste bloco.">Tempo que o Fechai devolveu para sua equipe</CardTitle>
+    {empty ? <p className="text-sm text-neutral panel:text-white/55">Sem atendimentos do agente neste mês. O bloco é preenchido com as mensagens e os áudios que ele responder.</p> : <>
+      <p className="max-w-prose text-base leading-relaxed">{timeHeadline(t, total(a.conversations), a.assumedHours, a.savingsCents)}</p>
+      <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <Stat compact label="Áudio ouvido" value={t.audioMinutes ? formatMinutes(t.audioMinutes) : String(t.audios)} hint={t.audioMinutes ? `${t.audios} áudios respondidos` : "áudios respondidos"} />
+        <Stat compact label="Áudios longos" value={String(t.longAudios)} hint={t.longestAudioSeconds === null ? "acima de 2 min" : `acima de 2 min · maior: ${formatDuration(t.longestAudioSeconds)}`} />
+        <Stat compact label="Mensagens de texto" value={String(t.textMessages)} hint="respondidas pelo agente" />
+        <Stat compact label="Tempo devolvido" value={a.assumedHours === null ? "Pendente" : formatDuration(a.assumedHours * 3600)} hint={a.savingsCents === null ? "aguardando custo do atendente" : `${formatBRL(a.savingsCents)} estimados`} />
+      </div>
+      {r.featuredCase && <figure className="mt-6 border-l-2 border-iris pl-4">
+        <figcaption className="font-mono text-micro uppercase tracking-[0.2em] text-neutral panel:text-white/55">Caso do mês</figcaption>
+        <blockquote className="mt-2 max-w-prose text-sm leading-relaxed">{r.featuredCase}</blockquote>
+      </figure>}
+      <h3 className="mt-8 mb-3 text-sm font-medium">Duração dos atendimentos</h3>
+      <DataTable caption="Duração dos atendimentos por resultado" head={["Resultado", "Atendimentos", "Duração média", "Mediana", "Mensagens (média)"]}
+        rows={OUTCOMES.map(([key, label]) => ({ id: key, cells: durationRow(label, t.sessions[key]) }))} />
+      <p className="mt-3 text-sm">{t.toSchedule.count
+        ? `Até o agendamento: média de ${formatMinutes(t.toSchedule.averageMinutes)}, mediana de ${formatMinutes(t.toSchedule.medianMinutes)} e ${number(t.toSchedule.averageMessages)} mensagens trocadas desde a primeira mensagem do contato.`
+        : "Nenhum agendamento feito pelo agente em atendimentos iniciados neste mês."}</p>
+    </>}
+    <p className="mt-4 text-xs leading-relaxed text-neutral panel:text-white/55">
+      Contam as mensagens e os áudios do contato que o agente respondeu; áudio que ele não ouviu (sem transcrição) e o que a equipe respondeu ficam fora.
+      {t.unmeasuredAudios > 0 && ` ${t.unmeasuredAudios} áudio(s) sem duração medida — recebidos antes de o Fechai medir a duração ou em formato que não conseguimos ler — entram só com o tempo de resposta.`}
+      {" "}Um atendimento vai da primeira mensagem do contato até a última antes de 24h de silêncio. Agendou: agendamento feito pelo agente e não cancelado; perdido: contato marcado como perdido hoje, no último atendimento.
+    </p>
+  </Card>;
 }
 
 export function MonthlyView({ report: r, showSummary = true }: { report: MonthlyReport; showSummary?: boolean }) {
@@ -48,6 +96,7 @@ export function MonthlyView({ report: r, showSummary = true }: { report: Monthly
   const previousLabel = new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${r.previousMonth}-01T12:00:00Z`));
   return <div className="space-y-6 text-ink panel:text-white/85">
     {showSummary && <MonthlyRoiSummary report={r} />}
+    <TimeReturnedCard report={r} />
     <Card>
       <CardTitle hint="Nos indicadores por horário, o primeiro número é dentro do expediente humano e o segundo é fora.">O que aconteceu no mês</CardTitle>
       <p className="mb-4 text-sm text-neutral panel:text-white/55">Comparativo com {previousLabel}. Horários: dentro / fora do expediente humano.</p>
@@ -73,7 +122,7 @@ export function MonthlyView({ report: r, showSummary = true }: { report: Monthly
       <p className="mb-4 text-sm leading-relaxed text-neutral panel:text-white/65">Receita = avaliações realizadas de contatos que chegaram fora do expediente × conversão × ticket de cada procedimento. Economia = horas assumidas × custo/hora. ROI = (receita + economia − investimento) ÷ investimento.</p>
       <p className="mb-3 text-sm text-neutral panel:text-white/65">Agentes considerados: {r.agentNames?.length ? r.agentNames.join(", ") : "todos os agentes da conta"}. Mensalidade: {money(c.investmentCents)}{r.investmentSource ? ` · ${r.investmentSource}, a conferir nesta competência` : ""}.</p>
       <p className="text-sm">Custo do atendente: {money(c.attendantMonthlyCents)} / mês · carga: {number(c.attendantMonthlyHours, " h")} · custo/hora: {c.attendantMonthlyCents !== null && c.attendantMonthlyHours ? money(Math.round(c.attendantMonthlyCents / c.attendantMonthlyHours)) : "Pendente"}.</p>
-      <p className="mt-2 text-sm">{r.metricOverrides?.current.assumedHours !== undefined ? `Horas assumidas informadas manualmente: ${number(a.assumedHours, " h")}.` : `Horas estimadas: ${a.aiOnlyConversations} conversas respondidas pelo agente sem resposta humana no mês × ${number(c.minutesPerConversation, " minutos")} ÷ 60.`} Essa estimativa não mede tempo de execução da IA.</p>
+      <p className="mt-2 text-sm">Horas devolvidas à equipe: {hoursPremise(r)}{usesMeasuredTime(r) || r.metricOverrides?.current.assumedHours !== undefined ? "" : " (estimativa por conversa, usada enquanto o tempo por mensagem não é informado)"}. Essa estimativa não mede tempo de execução da IA.</p>
       <div className="my-5"><DataTable caption="Premissas por procedimento" head={["Procedimento", "Ticket médio", "Conversão"]} rows={c.procedures.map((p) => ({ id: p.name, cells: [p.name, money(p.ticketCents), number(p.conversionBps === null ? null : p.conversionBps / 100, "%")] }))} /></div>
       <details className="border-t border-ink/10 pt-4 panel:border-white/10"><summary className="cursor-pointer text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-iris">Expediente humano e critérios de contagem</summary>
         <div className="my-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">{c.humanHours ? c.humanHours.map((hours, i) => <div key={i}><p className="font-medium">{days[i]}</p><p className="mt-1 text-neutral panel:text-white/60">{hours.length ? hours.map((h) => `${time(h.start)}–${time(h.end)}`).join(", ") : "Fechado"}</p></div>) : "Horário humano pendente."}</div>

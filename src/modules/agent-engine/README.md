@@ -17,6 +17,19 @@ Cérebro do produto: recebe uma mensagem, monta o contexto (persona + RAG + hist
 - `summary.ts` — `summarizeConversation(tenantId, conversationId)`: resumo em texto da conversa, sob demanda, com cache no banco. Ver seção abaixo.
 - `disqualify.ts` — motivos da triagem (`DISQUALIFY_REASONS`), rótulos e o custo do atendimento manual que converte triagem em dinheiro. Ver seção abaixo.
 - `handoff.ts` — config da ação "Transferir para humano" e `notifyHandoffGroup`: avisa a equipe no grupo interno ao passar para atendimento, sem adicionar o contato. Ver seção abaixo.
+- `unanswered-rule.ts` — `unansweredRule(retrieved)`: a regra "nunca invente" que vai no prompt de todo turno com agente, com aviso extra quando a base não tem trecho próximo. Ver seção abaixo.
+
+### Perguntas sem resposta (`report_unanswered`, P-87)
+
+O agente não inventa: o que não está nas instruções, na base ou no resultado
+de uma ferramenta vira `report_unanswered({ question })` e a resposta ao
+contato é "vou confirmar com a equipe". A tool conta no relatório
+(`ReportEvent` `unanswered`) **e** põe a pergunta na fila de `/perguntas`
+(`modules/knowledge-gaps`); `handoff_human` com `unanswered: true` faz o mesmo
+ao transferir. Com a regra da conta `handoff`, `report_unanswered` também
+marca `needsHuman` pelo mesmo `transferToHuman` do `handoff_human`. A tool
+continua sem vaga de habilidade. Detalhes em
+[`knowledge-gaps/README.md`](../knowledge-gaps/README.md).
 
 ## Contratos expostos
 

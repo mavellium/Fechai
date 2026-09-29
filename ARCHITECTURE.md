@@ -17,7 +17,7 @@
 
 1. **Onboarding & Billing** — cadastro → checkout Stripe → webhook → provisiona tenant + instância WhatsApp.
 2. **Agentes** — persona (prompt), base de conhecimento (RAG), ações (toggle), conexão WhatsApp.
-3. **Motor de execução** — recebe msg → monta contexto (RAG + persona + histórico) → LLM com tools → executa ação → responde → agenda follow-up.
+3. **Motor de execução** — recebe msg → monta contexto (RAG + persona + histórico) → LLM com tools → executa ação → responde → agenda follow-up. O que não está na base não é inventado: vira pergunta na fila `/perguntas`, e a resposta aprovada volta para a base (ciclo P-87, [`knowledge-gaps`](src/modules/knowledge-gaps/README.md)).
 4. **Dados & Relatórios** — conversas, leads, métricas, logs.
 
 ## Regra de ouro do multi-tenant

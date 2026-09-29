@@ -18,6 +18,11 @@ export type IncomingMessage = {
   isGroup: boolean;
   /** A mensagem é de áudio (voz ou arquivo) — transcrita antes do turno. */
   hasAudio: boolean;
+  /**
+   * Duração do áudio em segundos, quando o provedor informa (a Evolution manda
+   * `seconds`; a Meta não manda, e o webhook mede o arquivo baixado).
+   */
+  audioSeconds?: number;
   /** Reação sobreposta a uma mensagem; `isFromMe` identifica quem reagiu. */
   isReaction?: boolean;
   /** A mensagem foi enviada pela própria instância (o número do tenant). */

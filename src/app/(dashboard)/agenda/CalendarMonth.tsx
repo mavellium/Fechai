@@ -13,9 +13,13 @@ const WEEKDAY_HEADERS = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
  * botão voltar do navegador e não manda um calendário inteiro de JavaScript
  * para o navegador.
  *
- * `prefetch={false}` nos links: a página é dinâmica e não tem `loading.js`,
- * então o prefetch não adianta a navegação e só gera requisição ao servidor por
- * casa visível. O retorno do clique é o `LinkPendingHint`.
+ * Prefetch em duas medidas. **‹ › e "Hoje" com `prefetch`** completo: o mês
+ * vizinho já chega inteiro ao navegador (e fica 5 min no cache do cliente),
+ * então trocar de mês não vai ao servidor — é o clique que a pessoa mais faz e
+ * o que mais demorava. **Dias com `prefetch={false}`**: a página é dinâmica e
+ * sem `loading.js`, e 30 prefetches completos por mês seriam 30 renderizações
+ * no servidor; o dia vem rápido do cache do Clinicorp. Nos dois, o retorno
+ * imediato do clique é o `LinkPendingHint`.
  *
  * A matemática de calendário usa `Date.UTC` de propósito — aqui são números de
  * calendário (dia 1, 31, quinta-feira), não instantes: usar horário local faria
@@ -28,6 +32,7 @@ export function CalendarMonth({
   today,
   countByDay,
   hrefFor,
+  busy = false,
 }: {
   year: number;
   month: number;
@@ -38,6 +43,8 @@ export function CalendarMonth({
   /** Quantos compromissos em cada dia, indexado por "AAAA-MM-DD". */
   countByDay: Map<string, number>;
   hrefFor: (params: { year?: number; month?: number; day?: number | null }) => string;
+  /** A agenda do Clinicorp ainda está chegando: as contagens podem subir. */
+  busy?: boolean;
 }) {
   const firstWeekday = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
   const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
@@ -57,15 +64,21 @@ export function CalendarMonth({
   return (
     <div>
       <div className="mb-4 flex items-center justify-between gap-2">
-        <div>
+        {/* Na mesma linha do título: embaixo dele, sumir o aviso puxaria a grade para cima. */}
+        <div className="flex min-w-0 flex-wrap items-baseline gap-x-2">
           <h2 className="font-display text-lg font-semibold capitalize text-white">{monthLabel}</h2>
+          {busy && (
+            <span className="font-mono text-micro uppercase tracking-wider text-white/45 motion-safe:animate-pulse">
+              buscando Clinicorp…
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-1.5">
           {!isCurrentMonth && (
             <Link
               href={hrefFor({ year: today.year, month: today.month, day: today.day })}
-              prefetch={false}
+              prefetch
               className="relative rounded-control px-2.5 py-1 font-mono text-micro uppercase tracking-wider text-iris transition-colors hover:bg-iris/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-iris"
             >
               Hoje
@@ -74,7 +87,7 @@ export function CalendarMonth({
           )}
           <Link
             href={hrefFor({ ...prev, day: null })}
-            prefetch={false}
+            prefetch
             className={navClass}
             rel="prev"
             aria-label="Mês anterior"
@@ -84,7 +97,7 @@ export function CalendarMonth({
           </Link>
           <Link
             href={hrefFor({ ...next, day: null })}
-            prefetch={false}
+            prefetch
             className={navClass}
             rel="next"
             aria-label="Próximo mês"

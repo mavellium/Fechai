@@ -18,6 +18,11 @@ controle de publicação.
   pelo superadmin, comparecimento confirmado, receita apenas da chegada fora
   do horário humano, economia estimada declarada, fechamento em snapshot e
   PDF A4 de uma página. Contrato: [`docs/P-79-relatorio-mensal-roi.md`](../../../docs/P-79-relatorio-mensal-roi.md).
+- `monthly.ts` também recebe `gaps` (perguntas da fila P-87 aprovadas na
+  janela: `agentId`, `firstAskedAt`, `answeredAt`) e calcula
+  `gapsAnswered`/`gapAnswerSeconds` no mês da aprovação, no escopo de agentes.
+  Não são corrigíveis em `metricOverrides`. Ver
+  [`knowledge-gaps/README.md`](../knowledge-gaps/README.md).
 - `monthly-overrides.ts`: valida `assumptions.metricOverrides` para o mês e o
   comparativo, aplica correções manuais e recalcula receita/economia/ROI.
   Correções não são herdadas ao copiar premissas para outro mês.

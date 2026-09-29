@@ -67,6 +67,24 @@ e da revisão atual. A pessoa aplica sugestões validadas e salva a revisão;
 a IA não publica nem confirma presença. O servidor exige SUPERADMIN e valida
 agentes do tenant também nesse caminho. Detalhes e limites no contrato P-79.
 
+## Perguntas sem resposta (P-87)
+
+O menu **Perguntas** abre `/admin/perguntas`: contas ativas com a quantidade
+na fila e **Quem responde** (Clínica · Mavellium · As duas), salvo na hora por
+`adminSetGapResponders` e auditado em `admin.gap_responders_changed`. Só o
+superadmin define isso — é combinado com o cliente, e a clínica não pode
+esconder a fila de quem foi contratado para responder. Padrão: Clínica.
+
+Nas contas em que a Mavellium responde, *Abrir fila* mostra os mesmos cards da
+clínica (`GapCard`), **sempre mascarados** (LGPD): iniciais, dois últimos
+dígitos do telefone, pergunta e trecho da conversa sem nomes, números e
+e-mails, e sem link para a conversa. As actions (`admin/perguntas/actions.ts`)
+recebem o tenant por `.bind` e checam superadmin **e** `responders` a cada
+chamada; a resposta fica registrada como "Mavellium". Personificar a conta
+também mascara `/perguntas`. Resumo diário por e-mail em
+`KNOWLEDGE_GAPS_ADMIN_EMAIL`, só com contagens. Contrato:
+[P-87](../../../docs/P-87-perguntas-sem-resposta.md).
+
 ## O que NÃO faz
 
 - Não faz billing real (trocar plano aqui é manual, não mexe na Stripe).

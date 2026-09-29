@@ -19,6 +19,7 @@ const NAV_PRODUTO: NavItem[] = [
   { href: "/integracoes", label: "Integrações", icon: "Plug" },
   { href: "/contatos", label: "Contatos", icon: "Users" },
   { href: "/conversas", label: "Conversas", icon: "MessagesSquare" },
+  { href: "/perguntas", label: "Perguntas", icon: "CircleHelp" },
   { href: "/agenda", label: "Agenda", icon: "CalendarDays" },
 ];
 

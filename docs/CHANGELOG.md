@@ -2,6 +2,58 @@
 
 Uma linha por milestone concluído (mais recente no topo).
 
+## Agenda com o Clinicorp: consultas de lá, ao vivo e com lembrete — 2026-09-28
+
+Decisões em [ADR-005](./decisions/ADR-005-agenda-clinicorp.md); regras em
+`src/modules/scheduling/README.md`.
+
+- **Consultas marcadas direto no Clinicorp aparecem na `/agenda`**
+  (`listClinicorpAgenda`): só leitura, sem importar para o banco, mescladas ao
+  calendário e à lista do dia, com paciente, profissional, telefone e
+  observações. O que o fechai já espelhou aparece uma vez só. Falha vira aviso
+  na tela, nunca calendário vazio em silêncio.
+- **Ao vivo**: a tela pergunta a versão do mês a `/api/agenda/pulso` a cada
+  15 s (e na hora ao voltar para a aba) e só se refaz quando algo mudou —
+  inclusive o que o agente marcou no WhatsApp. Botão **Atualizar** e indicador
+  "Ao vivo · atualizado às…". Pausa com um diálogo aberto, para não perder o
+  formulário.
+- **Troca de mês e de dia rápidas**: prefetch completo dos meses vizinhos,
+  streaming (a página sai com o banco; o Clinicorp entra depois num
+  `<Suspense key={mês}>`), meses vizinhos aquecidos com `after()`, cache de
+  30 min revalidado pelo pulso, dia clicado acende na hora (`LinkPendingHint`).
+- **Lembretes para os pacientes do Clinicorp** (worker, fila
+  `clinicorp-reminders`, a cada 5 min): mesmas regras de tempo dos lembretes do
+  fechai; pela **Meta só com template aprovado** (escolhido em Agentes ›
+  Agendar horário › Lembretes, com variáveis e prévia); pelo **Evolution nunca
+  primeiro contato**. Bloqueados, "pediu para parar", telefone inválido e
+  consulta espelhada ficam de fora; envio incerto pela Meta não é repetido;
+  remarcar no Clinicorp reabre os disparos. A `/agenda` mostra "lembrete
+  enviado".
+- Schema: `ClinicorpReminder` (`db push` + `generate` na web e no worker).
+  Env nova, opcional: `CLINICORP_REMINDER_SCAN_EVERY_MINUTES` (padrão 5).
+
+## Perguntas sem resposta (P-87) — 2026-09-28
+
+- Regra dura no prompt de todo turno: o agente não inventa informação do
+  negócio; o que não está na base vira `report_unanswered({ question })` e
+  "vou confirmar com a equipe". Aviso extra quando a base não tem trecho perto.
+- Fila em **Perguntas** (`/perguntas`): agrupada por texto e por vetor, com
+  trecho da conversa, quem perguntou, datas e contagem por contato. Responder,
+  salvar rascunho, aprovar (vira documento na base do agente), descartar.
+- Transbordo pela regra da conta: seguir atendendo (padrão) ou passar para a
+  equipe (`needsHuman` + grupo da transferência).
+- Retomar quem perguntou com a resposta aprovada: opcional, uma vez por
+  contato, respeitando janela (24h Meta, 7 dias QR), bloqueio, "pare" e
+  resposta humana já dada; não pausa o agente.
+- Avisos pelo worker: na hora e resumo diário, por e-mail e/ou grupo interno,
+  sem dado do contato. Resumo da Mavellium por `KNOWLEDGE_GAPS_ADMIN_EMAIL`.
+- `/admin/perguntas`: quem responde cada fila (clínica, Mavellium ou as duas)
+  e resposta pela Mavellium com nome, telefone e conversa mascarados (LGPD).
+- ROI mensal: tempo médio para a equipe responder; tela mostra a tendência de
+  perguntas sem resposta nos últimos seis meses.
+- Schema: `KnowledgeGap`, `KnowledgeGapOccurrence`, `KnowledgeGapSettings`
+  (`db push` + `generate` na web e no worker).
+
 ## ROI mensal: assistente Fazer com I.A — 2026-09-28
 
 - Botão **Fazer com I.A** na revisão administrativa abre conversa em

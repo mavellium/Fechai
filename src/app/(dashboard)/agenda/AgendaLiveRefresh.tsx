@@ -35,12 +35,23 @@ export function AgendaLiveRefresh({
   year,
   month,
   version,
+  dataAsOf,
   updatedAt,
 }: {
   year: number;
   month: number;
-  /** `agendaVersion` do que a página desenhou. */
-  version: string;
+  /**
+   * `agendaVersion` do que a página desenhou. Null enquanto a agenda do
+   * Clinicorp ainda chega por streaming: sem versão não há com o que comparar,
+   * e a volta só atualiza a hora.
+   */
+  version: string | null;
+  /**
+   * Quando os dados desenhados foram lidos (epoch ms). A leitura do Clinicorp
+   * pode vir do cache do servidor, ou o mês inteiro do prefetch do navegador:
+   * mais velho que uma volta, a tela pergunta na hora em vez de esperar 15s.
+   */
+  dataAsOf: number | null;
   /** Hora (no fuso da agenda) em que a página foi desenhada. */
   updatedAt: string;
 }) {
@@ -79,7 +90,7 @@ export function AgendaLiveRefresh({
         const now = current.current;
         if (now.year !== y || now.month !== m) return;
         setPulse(next);
-        if (fromClick || next.version !== shown) startTransition(() => router.refresh());
+        if (fromClick || (shown !== null && next.version !== shown)) startTransition(() => router.refresh());
       } catch {
         setFailed(true);
       } finally {
@@ -89,6 +100,16 @@ export function AgendaLiveRefresh({
     },
     [router],
   );
+
+  // Dados velhos na chegada (cache do servidor ou prefetch): pergunta já. O
+  // `setTimeout` tira a pergunta de dentro do efeito, que só a agenda.
+  useEffect(() => {
+    if (dataAsOf === null || Date.now() - dataAsOf < LIVE_INTERVAL_MS) return;
+    const id = window.setTimeout(() => {
+      if (document.visibilityState === "visible" && !document.querySelector("dialog[open]")) void check(false);
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, [dataAsOf, check]);
 
   useEffect(() => {
     const tick = () => {

@@ -3,6 +3,8 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { formatBRL } from "@/lib/format";
 import type { MonthlyReport } from "./monthly";
+import { formatDuration, formatMinutes, hoursPremise, timeHeadline } from "./monthly-time";
+import { formatGapTimeShort as gapTime } from "@/modules/knowledge-gaps/text";
 
 /** PDF A4 fixo de uma página, sem dados pessoais de pacientes. */
 export async function generateMonthlyPdf(r: MonthlyReport): Promise<Uint8Array> {
@@ -77,6 +79,23 @@ export async function generateMonthlyPdf(r: MonthlyReport): Promise<Uint8Array> 
   text(`Economia: ${money(a.savingsCents)}`, margin + 205, y - 20, 10);
   text(`Investimento: ${money(a.investmentCents)}`, margin + 205, y - 37, 10);
   y -= 78;
+  // Explica a "Economia" do quadro acima; relatórios fechados antes dele não têm `time`.
+  const t = a.time;
+  // Na página única cabem a frase, os áudios, o tempo até agendar e o caso; a
+  // duração por resultado fica na tabela do painel.
+  if (t) {
+    y -= 6;
+    text("TEMPO QUE O FECHAI DEVOLVEU PARA SUA EQUIPE (ESTIMADO)", margin, y, 9, bold, ink);
+    y -= 10;
+    y -= paragraph(timeHeadline(t, a.conversations.inside + a.conversations.outside + a.conversations.unclassified, a.assumedHours, a.savingsCents), 8.6, width, margin, y, ink);
+    y -= paragraph([
+      b.assumedHours === null ? "" : `Mês anterior: ${formatDuration(b.assumedHours * 3600)} devolvidas.`,
+      t.audios ? `Áudios ouvidos: ${t.audios} · acima de 2 min: ${t.longAudios} · maior: ${formatDuration(t.longestAudioSeconds)}${t.unmeasuredAudios ? ` · ${t.unmeasuredAudios} sem duração medida` : ""}.` : "",
+      t.toSchedule.count ? `Até agendar: média ${formatMinutes(t.toSchedule.averageMinutes)}, mediana ${formatMinutes(t.toSchedule.medianMinutes)}, ${num(t.toSchedule.averageMessages)} mensagens.` : "",
+      t.sessions.all.count ? "Duração dos atendimentos por resultado no painel." : "",
+    ].filter(Boolean).join(" "), 7.3);
+    if (r.featuredCase) y -= paragraph(`Caso do mês: ${r.featuredCase}`, 8, width, margin, y, ink);
+  }
   section("2 · O QUE ACONTECEU NO MÊS");
   text("Indicador", margin, y, 8, bold); text(r.month, 343, y, 8, bold); text(r.previousMonth, 456, y, 8, bold); y -= 14;
   const rows = [
@@ -87,8 +106,12 @@ export async function generateMonthlyPdf(r: MonthlyReport): Promise<Uint8Array> 
     ["Avaliações agendadas · dentro / fora", c.humanHours ? `${a.scheduled.inside} / ${a.scheduled.outside}` : "Pendente", r.previousAssumptions.humanHours ? `${b.scheduled.inside} / ${b.scheduled.outside}` : "Pendente"],
     ["Avaliações realizadas · dentro / fora", c.humanHours ? `${a.attended.inside} / ${a.attended.outside}` : "Pendente", r.previousAssumptions.humanHours ? `${b.attended.inside} / ${b.attended.outside}` : "Pendente"],
     ["Transbordos para humano", `${a.handoffs}${a.trackingComplete ? "" : "*"}`, `${b.handoffs}${b.trackingComplete ? "" : "*"}`],
-    ["Perguntas sem resposta", `${a.unanswered}${a.trackingComplete ? "" : "*"}`, `${b.unanswered}${b.trackingComplete ? "" : "*"}`],
-    ["Horas assumidas (estimadas)", num(a.assumedHours, " h"), num(b.assumedHours, " h")],
+    // O tempo da fila vai na mesma célula: a página é única e uma linha a mais
+    // faria relatórios que já cabiam recusarem a exportação.
+    ["Perguntas sem resposta · tempo p/ responder", `${a.unanswered}${a.trackingComplete ? "" : "*"}${gapTime(a)}`, `${b.unanswered}${b.trackingComplete ? "" : "*"}${gapTime(b)}`],
+    // Horas devolvidas não têm linha aqui: estão no bloco de tempo, com o mês
+    // anterior, e a página não comporta as duas coisas com conteúdo máximo.
+    ...(t ? [] : [["Horas assumidas (estimadas)", num(a.assumedHours, " h"), num(b.assumedHours, " h")]]),
     ["ROI estimado", num(a.roiPercent, "%"), num(b.roiPercent, "%")],
   ];
   for (const [label, value, previous] of rows) {
@@ -116,9 +139,8 @@ export async function generateMonthlyPdf(r: MonthlyReport): Promise<Uint8Array> 
   const noteHeight = Math.max(paragraph(r.adjustments || "Aguardando revisão da Mavellium.", 8.2, 246, margin, y, ink), paragraph(r.nextMonth || "Aguardando plano da Mavellium.", 8.2, 246, 308, y, ink));
   y -= noteHeight;
   section("PREMISSAS DO RETORNO ESTIMADO");
-  y -= paragraph(`Receita = realizadas de contatos que chegaram fora do horário humano × conversão × ticket, somada por procedimento. Economia = horas assumidas × custo/hora. ROI = (receita + economia - investimento) ÷ investimento.`, 7.5);
-  const hoursPremise = r.metricOverrides?.current.assumedHours !== undefined ? `${num(a.assumedHours, " h")} informadas manualmente` : `${a.aiOnlyConversations} conversas sem resposta humana × ${num(c.minutesPerConversation, " min")} ÷ 60`;
-  y -= paragraph(`Atendente: ${money(c.attendantMonthlyCents)}/mês ÷ ${num(c.attendantMonthlyHours, " h/mês")}. Horas assumidas: ${hoursPremise}. Mensalidade: ${money(c.investmentCents)}.`, 7.5);
+  y -= paragraph(`Receita = realizadas de contatos que chegaram fora do horário humano × conversão × ticket, somada por procedimento. Economia = horas devolvidas × custo/hora. ROI = (receita + economia - investimento) ÷ investimento.`, 7.5);
+  y -= paragraph(`Atendente: ${money(c.attendantMonthlyCents)}/mês ÷ ${num(c.attendantMonthlyHours, " h/mês")}. Horas devolvidas: ${hoursPremise(r, true)}. Mensalidade: ${money(c.investmentCents)}.`, 7.5);
   const days = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
   const time = (v: number) => `${String(Math.floor(v / 60)).padStart(2, "0")}:${String(v % 60).padStart(2, "0")}`;
   y -= paragraph(`Horário humano: ${c.humanHours ? c.humanHours.map((h, i) => `${days[i]} ${h.map((p) => `${time(p.start)}-${time(p.end)}`).join(",") || "fechado"}`).join("; ") : "pendente"}.`, 7.5);

@@ -5,6 +5,7 @@ import type {
   WhatsAppGroup,
   WhatsAppStatus,
 } from "./provider";
+import { reportedAudioSeconds } from "@/modules/voice/received-audio";
 
 function isPhoneJid(value: unknown): value is string {
   return typeof value === "string" &&
@@ -338,8 +339,8 @@ export class EvolutionProvider implements WhatsAppProvider {
         message?: {
           conversation?: string;
           extendedTextMessage?: { text?: string };
-          audioMessage?: unknown;
-          pttMessage?: unknown;
+          audioMessage?: { seconds?: unknown } | null;
+          pttMessage?: { seconds?: unknown } | null;
           reactionMessage?: { text?: string; key?: { remoteJid?: string } };
         };
       };
@@ -360,8 +361,11 @@ export class EvolutionProvider implements WhatsAppProvider {
       data.message?.conversation ??
       data.message?.extendedTextMessage?.text ??
       "";
-    // Voz (pttMessage) e arquivo de áudio (audioMessage) têm a mesma forma.
-    const hasAudio = Boolean(data.message?.audioMessage ?? data.message?.pttMessage);
+    // Voz (pttMessage) e arquivo de áudio (audioMessage) têm a mesma forma,
+    // inclusive a duração em `seconds`, que o relatório mensal soma.
+    const audio = data.message?.audioMessage ?? data.message?.pttMessage;
+    const hasAudio = Boolean(audio);
+    const audioSeconds = hasAudio ? reportedAudioSeconds(audio?.seconds) : undefined;
     const jid = typeof data.key?.remoteJid === "string" ? data.key.remoteJid : "";
     const isGroup = jid.endsWith("@g.us");
     // O identificador @lid não é um telefone. Em chats privados a Evolution
@@ -387,6 +391,7 @@ export class EvolutionProvider implements WhatsAppProvider {
       // Grupos têm JID com sufixo @g.us (ex: 5511999999999-1615000000@g.us).
       isGroup,
       hasAudio,
+      ...(audioSeconds ? { audioSeconds } : {}),
       messageKeyId: data.key?.id,
       isReaction: Boolean(reaction),
       isFromMe: Boolean(data.key?.fromMe),

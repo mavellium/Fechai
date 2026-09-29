@@ -5,6 +5,7 @@ import { scanAndSendClinicorpReminders } from "./clinicorp-reminders";
 import { scanWhatsappHealth } from "../../src/modules/whatsapp/health";
 import { scanBroadcasts } from "../../src/modules/broadcasts/worker";
 import { touchBroadcastWorker } from "../../src/modules/broadcasts/health";
+import { scanKnowledgeGaps } from "../../src/modules/knowledge-gaps/notify";
 
 // Worker de mensagens no tempo. Follow-up/lembretes rodam na cadência comercial
 // configurada; a saúde do WhatsApp tem um job próprio, mais rápido:
@@ -25,6 +26,7 @@ const FOLLOWUP_QUEUE = "follow-up";
 const REMINDER_QUEUE = "appointment-reminders";
 const HEALTH_QUEUE = "whatsapp-health";
 const CLINICORP_REMINDER_QUEUE = "clinicorp-reminders";
+const KNOWLEDGE_GAP_QUEUE = "knowledge-gaps";
 const FOLLOWUP_EVERY_MS =
   Number(process.env.FOLLOWUP_SCAN_EVERY_MINUTES ?? 15) * 60_000;
 const REMINDER_EVERY_MS =
@@ -36,12 +38,17 @@ const HEALTH_EVERY_MS =
 // de atraso num lembrete de consulta não mudam nada para o paciente.
 const CLINICORP_REMINDER_EVERY_MS =
   Number(process.env.CLINICORP_REMINDER_SCAN_EVERY_MINUTES ?? 5) * 60_000;
+// Perguntas sem resposta (P-87): "na hora" com até 2 min de atraso junta num
+// aviso só as perguntas que chegaram juntas; o resumo diário só confere a hora.
+const KNOWLEDGE_GAP_EVERY_MS =
+  Number(process.env.KNOWLEDGE_GAP_SCAN_EVERY_MINUTES ?? 2) * 60_000;
 
 async function main() {
   const followUpQueue = new Queue(FOLLOWUP_QUEUE, { connection });
   const reminderQueue = new Queue(REMINDER_QUEUE, { connection });
   const healthQueue = new Queue(HEALTH_QUEUE, { connection });
   const clinicorpReminderQueue = new Queue(CLINICORP_REMINDER_QUEUE, { connection });
+  const knowledgeGapQueue = new Queue(KNOWLEDGE_GAP_QUEUE, { connection });
   const broadcastQueue = new Queue("whatsapp-broadcasts", { connection });
   await broadcastQueue.setGlobalConcurrency(1);
   await broadcastQueue.upsertJobScheduler(
@@ -113,6 +120,11 @@ async function main() {
     { every: CLINICORP_REMINDER_EVERY_MS },
     { name: "scan-clinicorp-reminders" },
   );
+  await knowledgeGapQueue.upsertJobScheduler(
+    "scan-scheduler",
+    { every: KNOWLEDGE_GAP_EVERY_MS },
+    { name: "scan-knowledge-gaps" },
+  );
 
   const followUpWorker = new Worker(
     FOLLOWUP_QUEUE,
@@ -143,6 +155,17 @@ async function main() {
     },
     { connection },
   );
+  const knowledgeGapWorker = new Worker(
+    KNOWLEDGE_GAP_QUEUE,
+    async () => {
+      const r = await scanKnowledgeGaps();
+      if (r.notices || r.digests || r.admin) {
+        console.log(`[perguntas] avisos=${r.notices} resumos=${r.digests} mavellium=${r.admin}`);
+      }
+      return r;
+    },
+    { connection },
+  );
   const healthWorker = new Worker(
     HEALTH_QUEUE,
     async () => {
@@ -167,10 +190,14 @@ async function main() {
   clinicorpReminderWorker.on("failed", (job, err) =>
     console.error(`[lembrete clinicorp] job ${job?.id} falhou`, err),
   );
+  knowledgeGapWorker.on("failed", (job, err) =>
+    console.error(`[perguntas] job ${job?.id} falhou`, err),
+  );
   console.log(
     `[worker] online — follow-up a cada ${FOLLOWUP_EVERY_MS / 60000} min; ` +
       `lembretes a cada ${REMINDER_EVERY_MS / 60000} min; ` +
       `lembretes do Clinicorp a cada ${CLINICORP_REMINDER_EVERY_MS / 60000} min; ` +
+      `avisos de perguntas sem resposta a cada ${KNOWLEDGE_GAP_EVERY_MS / 60000} min; ` +
       `saúde do WhatsApp a cada ${HEALTH_EVERY_MS / 60000} min`,
   );
 }

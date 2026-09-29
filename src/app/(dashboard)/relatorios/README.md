@@ -23,7 +23,8 @@ O PDF A4 tem uma página e as cinco partes
 solicitadas. Leia [`docs/P-79-relatorio-mensal-roi.md`](../../../../docs/P-79-relatorio-mensal-roi.md)
 antes de alterar a nova visão: **não usa a regra do Financeiro legado**.
 Receita só vem de avaliações realizadas cuja primeira chegada foi fora do
-expediente humano; economia usa minutos humanos declarados por conversa.
+expediente humano; economia usa o tempo medido (áudio ouvido + mensagens × tempo
+por mensagem) e, sem tempo por mensagem, os minutos declarados por conversa.
 Premissas mensais, falta de dado explícita, fechamento em snapshot e entrega
 manual registrada. A leitura do Clinicorp confirma presença pelo ID do espelho
 e pelos status `Type` conferidos pela Mavellium, sem alterar a agenda local.
@@ -31,7 +32,53 @@ Conexão cadastrada e consulta com sucesso são estados separados: falha da agen
 preserva a lista válida de status e mostra o endpoint/código HTTP no editor,
 sem expor o corpo externo. A importação atualiza o aviso e a lista carregados;
 comparecimentos vinculados continuam pendentes quando não há confirmação.
-Eventos anteriores à implantação não são inventados. P-86 e a fila P-87 ficam fora.
+Eventos anteriores à implantação não são inventados. P-86 fica fora.
+A fila P-87 (`/perguntas`, [contrato](../../../../docs/P-87-perguntas-sem-resposta.md))
+acrescenta a linha **Tempo médio para a equipe responder**: média de
+`answeredAt − firstAskedAt` das perguntas aprovadas na competência
+(`MonthlyMetrics.gapAnswerSeconds`/`gapsAnswered`, opcionais — snapshot antigo
+mostra "Sem registro", mês sem aprovação mostra "Nenhuma aprovada"). Formatação
+única em `formatGapTime`/`formatGapTimeShort` (`modules/knowledge-gaps/text.ts`);
+no PDF o tempo vai na célula de perguntas sem resposta para não aumentar a página.
+
+#### Tempo que o Fechai devolveu para sua equipe
+
+Bloco do ROI mensal (`src/modules/reports/monthly-time.ts`, puro) que mostra o
+trabalho da recepção assumido pelo agente. Regras que não se quebram:
+
+- **Duração do áudio é medida, nunca estimada.** `Message.audioSeconds` vem do
+  payload da Evolution (`audioMessage.seconds`) ou, na Meta (que não informa),
+  do próprio arquivo OGG (`audioDurationSeconds`, `src/modules/voice/received-audio.ts`).
+  `null` = não medido (formato não lido ou áudio anterior à coluna) e aparece
+  como "sem duração medida", **nunca como zero**. O histórico desde 23/09/2026
+  (quando o áudio recebido passou a ir para a CDN) se mede com
+  `scripts/mede-audios-recebidos.ts`.
+- **Conta o que o agente respondeu.** Mensagem do contato entra quando a
+  primeira resposta depois dela é da IA; se a equipe respondeu primeiro, o
+  trabalho foi dela. Áudio sem transcrição (`UNTRANSCRIBED_AUDIO`, `[Áudio]`)
+  a IA não ouviu e não conta.
+- **Horas devolvidas** = (minutos de áudio × 60 + (mensagens + áudios) ×
+  `assumptions.secondsPerMessage`) ÷ 3600. Sem `secondsPerMessage` vale a
+  fórmula antiga por conversa; `assumedHours` corrigido manualmente vence as
+  duas. `secondsPerMessage` tem `default(null)`: revisões salvas antes dele
+  continuam válidas (sem o default, o parse falhava e zerava as premissas).
+- **Atendimento** vai da primeira mensagem do contato até a última antes de
+  24h de silêncio (a conversa é uma por contato, para sempre, sem "fim"). Só
+  entram os iniciados no mês com resposta do agente. Resultado: agendou
+  (agendamento do agente, não cancelado, até 24h após a última mensagem) >
+  transbordou (`ReportEvent` handoff) > perdido (`Lead.status = lost` hoje, só
+  no último atendimento; desqualificado não é perdido) > sem desfecho.
+- **Caso do mês** (`MonthlyRoiReport.featuredCase`, até 240 caracteres) é
+  escrito pela Mavellium, nunca pela IA. `saveMonthlyRoi` recusa e-mail, 8+
+  dígitos seguidos e qualquer palavra do nome de um contato atendido no mês
+  (`featuredCaseProblem`). O admin vê sugestões (conversas com áudios longos,
+  `loadMonthlyCaseCandidates`) que não vão para o snapshot nem para o PDF.
+- `MonthlyMetrics.time` e `MonthlyReport.featuredCase` são **opcionais**:
+  snapshots fechados antes deles não os têm, e a tela/PDF escondem o bloco.
+- No PDF, o bloco fica logo abaixo do quadro do ROI (explica a "Economia") e
+  **substitui a linha "Horas assumidas"** da tabela; a duração por resultado só
+  aparece no painel. Com conteúdo máximo sobram ~2pt na página — qualquer linha
+  nova no PDF precisa tirar outra (teste em `tests/relatorio-mensal-tempo.test.ts`).
 
 `/relatorios` tem **três visões do produto**, trocadas por um toggle no topo (querystring `?visao=`), além da visão de afiliados para participantes do programa:
 
@@ -71,7 +118,7 @@ Tudo começa na `page.tsx`, que resolve a janela (`?periodo=`/`?de=&ate=`), comp
 | Arquivo | Papel |
 | --- | --- |
 | `page.tsx` | Server Component: lê `?periodo/de/ate/visao/mes`, resolve janela e publicações, computa sob demanda e renderiza Operacional, Financeiro, ROI mensal ou afiliados conforme papel/visão. |
-| `MonthlyView.tsx` | Cinco partes do ROI mensal, comparação, premissas, fontes e link para exportação do snapshot em PDF. |
+| `MonthlyView.tsx` | Cinco partes do ROI mensal, bloco "Tempo que o Fechai devolveu" (`TimeReturnedCard`), comparação, premissas, fontes e link para exportação do snapshot em PDF. |
 | `RangePicker.tsx` | `<details>` com presets de período + intervalo custom; **preserva `?visao=`** nos links e no form (hidden input). |
 | `FinancialView.tsx` | "use client": linha de KPIs, card "Retorno estimado" + "Valor do lead" com `<dialog>` (campo com máscara `CurrencyInput`), delega os gráficos a `FinancialCharts.tsx`. |
 | `TriagePanel.tsx` | "use client": KPIs da triagem (filtrados / tempo / economia), quebra por motivo e `<dialog>` do custo do atendimento. |

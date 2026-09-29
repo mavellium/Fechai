@@ -16,6 +16,7 @@ import { notifyHandoffGroup, handoffToolDescription, type HandoffConfig } from "
 import { ACTION_BY_KEY, type ActionKey } from "./actions";
 import { offerAlternativeSlots, runSchedulingTool, SCHEDULING_TOOLS, schedulingToolAllowed } from "./scheduling-tools";
 import { allVariableDefinitions, parseVariableDefinitions, rememberConversationVariables, type VariableDefinition } from "./variables";
+import { registerKnowledgeGap, type RegisterGapResult } from "@/modules/knowledge-gaps/register";
 
 export type ToolContext = {
   tenantId: string;
@@ -75,10 +76,68 @@ export function getToolSchemas(
   }
   if (variableDefinitions) schemas.push({
     name: "report_unanswered",
-    description: "Registra que há uma pergunta do contato sem resposta na base disponível, para o relatório mensal. Use somente quando você não souber responder; não invente a resposta. Esse registro não transfere nem pausa a conversa. Se handoff_human estiver disponível e for transferir, use unanswered=true nela em vez deste registro.",
-    parameters: { type: "object", properties: {} },
+    description:
+      "Põe uma pergunta do contato que você não sabe responder com segurança na fila da equipe, que responde e ensina o agente. " +
+      "Use sempre que o contato pedir uma informação do negócio (preço, procedimento, convênio, prazo, política, endereço, horário, se um serviço existe) " +
+      "que não esteja escrita nas instruções, na base de conhecimento ou no resultado de uma ferramenta — ou quando os trechos respondem só em parte. " +
+      "Nunca invente nem deduza a resposta. Se for transferir com handoff_human, use unanswered=true nela em vez deste registro.",
+    parameters: {
+      type: "object",
+      properties: { question: { type: "string", description: QUESTION_PARAM } },
+      required: ["question"],
+    },
   });
   return schemas;
+}
+
+const QUESTION_PARAM =
+  "A pergunta do contato em uma frase curta e geral, como numa lista de perguntas frequentes, sem nome, telefone nem outro dado pessoal. Ex.: 'Vocês aceitam o convênio Unimed?'";
+
+/**
+ * Pergunta sem resposta: conta no relatório mensal e entra na fila da equipe
+ * (`modules/knowledge-gaps`). Os dois registros nunca lançam.
+ */
+async function registerUnanswered(ctx: ToolContext, question: unknown) {
+  await recordReportEvent({ tenantId: ctx.tenantId, conversationId: ctx.conversationId, kind: "unanswered" });
+  return registerKnowledgeGap({
+    tenantId: ctx.tenantId,
+    conversationId: ctx.conversationId,
+    agentId: ctx.agentId,
+    question,
+  });
+}
+
+/**
+ * Marca "precisa de você" e avisa o grupo da equipe na TRANSIÇÃO — o
+ * `needsHuman: false` no filtro é o que impede aviso repetido quando o LLM
+ * chama a tool de novo. Usada por `handoff_human` e pela regra "passar para a
+ * equipe" das perguntas sem resposta.
+ */
+async function transferToHuman(ctx: ToolContext, reason?: string) {
+  const marked = await prisma.conversation.updateMany({
+    where: { id: ctx.conversationId, tenantId: ctx.tenantId, needsHuman: false },
+    data: { needsHuman: true },
+  });
+  if (marked.count > 0) {
+    await recordReportEvent({ tenantId: ctx.tenantId, conversationId: ctx.conversationId, kind: "handoff" });
+    await notifyHandoffGroup(ctx.tenantId, ctx.agentId, ctx.conversationId, { reason });
+  }
+}
+
+/**
+ * O que o LLM lê depois de registrar a pergunta. A instrução de não
+ * responder vem aqui E na regra do sistema: é o momento exato em que o modelo
+ * decide o texto, e sem ela ele tende a "ajudar" com um palpite logo depois de
+ * admitir que não sabe.
+ */
+function unansweredToolResult(status: RegisterGapResult["status"], handedOff: boolean): string {
+  const rule =
+    "Não responda a essa pergunta nem dê palpite, valor, prazo ou informação aproximada. " +
+    "Diga ao contato, com suas palavras, que vai confirmar com a equipe e retorna assim que tiver a resposta. " +
+    "Continue ajudando no que você sabe.";
+  if (status === "test") return `Conversa de teste: a pergunta não entra na fila da equipe. Responda como faria com um contato real. ${rule}`;
+  const where = status === "failed" ? "" : "Pergunta registrada na fila da equipe. ";
+  return `${where}${handedOff ? "A conversa também foi passada para a equipe. " : ""}${rule}`;
 }
 
 export async function runToolHandler(
@@ -87,8 +146,15 @@ export async function runToolHandler(
   args: Record<string, unknown>,
 ): Promise<string> {
   if (key === "report_unanswered") {
-    await recordReportEvent({ tenantId: ctx.tenantId, conversationId: ctx.conversationId, kind: "unanswered" });
-    return "Pergunta sem resposta registrada. Explique a limitação ao contato sem inventar informação.";
+    const gap = await registerUnanswered(ctx, args.question);
+    // Regra da conta (/perguntas): além da fila, passar a conversa para a
+    // equipe. No teste também marca — é o comportamento que o dono quer ver.
+    const handOff = gap.mode === "handoff";
+    if (handOff) {
+      await transferToHuman(ctx, `Pergunta que o agente não soube responder: ${str(args.question) ?? "ver conversa"}`)
+        .catch((err) => console.error("[tools] transbordo da pergunta sem resposta falhou", err));
+    }
+    return unansweredToolResult(gap.status, handOff);
   }
   if (key === "remember_variables") {
     try {
@@ -352,25 +418,19 @@ const TOOLS: Record<ActionKey, ToolDef> = {
         properties: {
           reason: { type: "string", description: "Resumo curto do que o contato quer e por que precisa de atendimento humano ou prioridade." },
           unanswered: { type: "boolean", description: "True somente quando há uma pergunta do contato que você não consegue responder com a base disponível. Não invente uma resposta; transfira para a equipe. False nos outros motivos." },
+          question: { type: "string", description: `Só com unanswered=true. ${QUESTION_PARAM}` },
         },
         required: ["reason"],
       },
     },
     handler: async (ctx, args) => {
-      const marked = await prisma.conversation.updateMany({
-        where: { id: ctx.conversationId, tenantId: ctx.tenantId, needsHuman: false },
-        data: { needsHuman: true },
-      });
       // Avisa quando entra em prioridade, uma vez mesmo se o LLM repetir a tool.
-      if (marked.count > 0) {
-        await recordReportEvent({ tenantId: ctx.tenantId, conversationId: ctx.conversationId, kind: "handoff" });
-        await notifyHandoffGroup(ctx.tenantId, ctx.agentId, ctx.conversationId, {
-          reason: typeof args.reason === "string" ? args.reason : undefined,
-        });
-      }
+      await transferToHuman(ctx, typeof args.reason === "string" ? args.reason : undefined);
 
-      if (args.unanswered === true) await recordReportEvent({ tenantId: ctx.tenantId,
-        conversationId: ctx.conversationId, kind: "unanswered" });
+      if (args.unanswered === true) {
+        const gap = await registerUnanswered(ctx, args.question ?? args.reason);
+        return unansweredToolResult(gap.status, true);
+      }
       return "Conversa marcada como 'precisa atenção' de um humano.";
     },
   },

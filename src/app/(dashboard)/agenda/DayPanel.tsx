@@ -1,0 +1,236 @@
+import type { ComponentProps } from "react";
+import Link from "next/link";
+import { CalendarX2, User } from "lucide-react";
+import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { cn } from "@/lib/utils";
+import type { ClinicorpAgendaItem } from "@/modules/scheduling/clinicorp";
+import type { ReminderRule } from "@/modules/scheduling/config";
+import type { listMonthAppointments } from "@/modules/scheduling/repository";
+import { parseReminderOverride } from "@/modules/scheduling/reminder-override";
+import { timeInZone } from "@/modules/scheduling/time";
+import { AppointmentActions } from "./AppointmentActions";
+import { AppointmentReminders } from "./AppointmentReminders";
+import { ClinicorpAppointmentItem } from "./ClinicorpAppointmentItem";
+import { NewAppointmentDialog } from "./NewAppointmentDialog";
+
+type MonthAppointment = Awaited<ReturnType<typeof listMonthAppointments>>["rows"][number];
+
+/** Um item da lista do dia: compromisso do fechai ou consulta lida do Clinicorp. */
+export type DayEntry =
+  | { kind: "fechai"; at: Date; appointment: MonthAppointment }
+  | { kind: "clinicorp"; at: Date; item: ClinicorpAgendaItem };
+
+/**
+ * O dia escolhido, à direita do calendário.
+ *
+ * Separado da página porque é desenhado duas vezes na troca de mês: primeiro
+ * só com o que está no nosso banco (`clinicorpLoading`), na hora, e de novo
+ * quando a agenda do Clinicorp chega por streaming — ver `page.tsx`.
+ */
+export function DayPanel({
+  label,
+  isToday,
+  entries,
+  clinicorpLoading,
+  timezone,
+  clinicorpEnabled,
+  agentReminders,
+  location,
+  reminderSentAt,
+  dialog,
+}: {
+  label: string | null;
+  isToday: boolean;
+  entries: DayEntry[];
+  /** A agenda do Clinicorp ainda está chegando: a lista pode crescer. */
+  clinicorpLoading: boolean;
+  timezone: string;
+  clinicorpEnabled: boolean;
+  /** Lembretes gerais da conta, já vazios quando a ação está desligada. */
+  agentReminders: ReminderRule[];
+  location: string;
+  /** "id|início" → quando o lembrete saiu (consultas do Clinicorp). */
+  reminderSentAt: Map<string, Date>;
+  dialog: Omit<ComponentProps<typeof NewAppointmentDialog>, "triggerLabel">;
+}) {
+  const clinicorpCount = entries.filter((e) => e.kind === "clinicorp").length;
+
+  return (
+    <Card className="flex flex-col p-5 lg:p-6 lg:col-span-5 xl:col-span-5 max-h-[33rem]">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3.5 shrink-0">
+        <div>
+          <div className="flex items-center gap-2">
+            <h2 className="font-display text-lg font-semibold capitalize text-white">
+              {label ?? "Escolha um dia"}
+            </h2>
+            {isToday && (
+              <span className="rounded-control bg-iris/20 px-2 py-0.5 font-mono text-micro uppercase tracking-wider text-iris">
+                Hoje
+              </span>
+            )}
+          </div>
+          <p className="mt-0.5 font-mono text-micro uppercase tracking-wider text-white/45">
+            {entries.length} {entries.length === 1 ? "compromisso marcado" : "compromissos marcados"}
+            {clinicorpCount > 0 && ` · ${clinicorpCount} no Clinicorp`}
+            {clinicorpLoading && " · buscando no Clinicorp…"}
+          </p>
+        </div>
+
+        {entries.length > 0 && <NewAppointmentDialog {...dialog} triggerLabel="+ Agendar" />}
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-y-auto pr-1">
+        {entries.length === 0 ? (
+          <div className="flex h-full flex-col items-center justify-center py-10 text-center">
+            <EmptyState
+              icon={CalendarX2}
+              title={clinicorpLoading ? "Buscando consultas do Clinicorp" : "Nenhum horário marcado"}
+              description={
+                clinicorpLoading
+                  ? "Nada marcado pelo fechai neste dia. As consultas do Clinicorp aparecem aqui em instantes."
+                  : "Quando o agente agendar no WhatsApp, o horário aparece aqui automaticamente."
+              }
+              action={<NewAppointmentDialog {...dialog} triggerLabel="Marcar horário neste dia" />}
+              className="py-2"
+            />
+          </div>
+        ) : (
+          <ul className="space-y-3">
+            {entries.map((entry) => {
+              if (entry.kind === "clinicorp") {
+                return (
+                  <ClinicorpAppointmentItem
+                    key={`clinicorp-${entry.item.id}`}
+                    item={entry.item}
+                    timezone={timezone}
+                    // Pelo horário também: remarcada lá, o envio da data antiga não vale.
+                    reminderSentAt={reminderSentAt.get(`${entry.item.id}|${entry.item.startsAt.getTime()}`) ?? null}
+                  />
+                );
+              }
+              const { appointment } = entry;
+              const leadDisplayName = appointment.patientName || appointment.lead?.name || appointment.lead?.phone || appointment.title;
+              const avatarInitial = leadDisplayName.slice(0, 1).toUpperCase();
+
+              // Status visual sutil como no módulo de conversas (sem pílulas chamativas)
+              const statusConfig =
+                appointment.status === "scheduled"
+                  ? { text: "marcado", color: "text-success", bar: "bg-success" }
+                  : appointment.status === "canceled"
+                    ? { text: "cancelado", color: "text-danger", bar: "bg-danger" }
+                    : { text: "realizado", color: "text-white/40", bar: "bg-white/25" };
+
+              return (
+                <li
+                  key={appointment.id}
+                  className="relative flex flex-col gap-3 rounded-surface border border-white/10 bg-white/5 p-3.5 transition-all duration-150 hover:border-white/20 hover:bg-white/[0.08]"
+                >
+                  {/* Faixa indicadora de urgência/status na borda esquerda */}
+                  <span
+                    aria-hidden
+                    className={cn("absolute left-0 top-3 bottom-3 w-1 rounded-full", statusConfig.bar)}
+                  />
+
+                  <div className="flex min-w-0 flex-1 items-start gap-3 pl-1.5">
+                    {/* Avatar / Inicial do Lead */}
+                    <span
+                      aria-hidden
+                      className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/10 font-display text-xs font-semibold uppercase text-white/80"
+                    >
+                      {avatarInitial}
+                    </span>
+
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="inline-flex items-center rounded-control border border-iris/30 bg-iris/15 px-2 py-0.5 font-mono text-xs font-semibold tabular-nums text-iris">
+                          {timeInZone(appointment.startsAt, timezone)}–
+                          {timeInZone(appointment.endsAt, timezone)}
+                        </span>
+                        <span className="truncate font-semibold text-white text-sm">{appointment.title}</span>
+
+                        {/* Status e Origem como texto discreto estilizado (padrão conversas) */}
+                        <span className={cn("font-mono text-micro uppercase tracking-wider font-medium ml-1", statusConfig.color)}>
+                          {statusConfig.text}
+                        </span>
+                        {appointment.source === "agent" && (
+                          <span className="font-mono text-micro uppercase tracking-wider text-iris/80">
+                            • pelo agente
+                          </span>
+                        )}
+                      </div>
+
+                      {appointment.lead && (
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-white/60">
+                          <span className="flex items-center gap-1 font-mono text-micro uppercase tracking-wider text-white/70">
+                            <User size={12} aria-hidden className="text-white/40" />
+                            Contato: {appointment.lead.name || appointment.lead.phone}
+                          </span>
+                          <Link
+                            href={`/conversas?q=${encodeURIComponent(appointment.lead.phone)}`}
+                            className="font-mono text-micro uppercase tracking-wide text-iris hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-iris"
+                          >
+                            Ver conversa →
+                          </Link>
+                        </div>
+                      )}
+
+                      {appointment.notes && (
+                        <p className="mt-1.5 rounded-control border border-white/5 bg-black/20 px-2.5 py-1 text-xs leading-relaxed text-white/70">
+                          {appointment.notes}
+                        </p>
+                      )}
+
+                      <div className="mt-1.5 flex flex-wrap items-center gap-3">
+                        {appointment.googleEventId && (
+                          <span className="inline-flex items-center gap-1.5 font-mono text-micro uppercase tracking-wide text-white/40">
+                            <span className="h-1.5 w-1.5 rounded-full bg-sky-400" />
+                            Google Agenda
+                          </span>
+                        )}
+
+                        {appointment.status === "scheduled" && clinicorpEnabled && (
+                          <span
+                            className={cn(
+                              "inline-flex items-center gap-1.5 font-mono text-micro uppercase tracking-wide",
+                              appointment.clinicorpAppointmentId ? "text-success" : "text-warn"
+                            )}
+                          >
+                            <span
+                              className={cn(
+                                "h-1.5 w-1.5 rounded-full",
+                                appointment.clinicorpAppointmentId ? "bg-success" : "bg-warn"
+                              )}
+                            />
+                            {appointment.clinicorpAppointmentId
+                              ? "Clinicorp enviado"
+                              : "Pendente Clinicorp"}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {appointment.status === "scheduled" && (
+                    <div className="flex shrink-0 items-center gap-2 border-t border-white/10 pt-2 sm:border-t-0 sm:pt-0">
+                      <AppointmentReminders
+                        id={appointment.id}
+                        title={appointment.title}
+                        override={parseReminderOverride(appointment.reminderOverride)}
+                        agentReminders={agentReminders}
+                        location={location}
+                        lastSentAt={appointment.reminderSentAt}
+                        closedCount={appointment.remindersSent.length}
+                      />
+                      <AppointmentActions id={appointment.id} title={appointment.title} />
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+    </Card>
+  );
+}

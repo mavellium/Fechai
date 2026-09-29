@@ -8,13 +8,14 @@ const clinicorp = vi.hoisted(() => ({ listClinicorpAgenda: vi.fn() }));
 vi.mock("@/lib/prisma", () => ({ prisma: db }));
 vi.mock("@/modules/scheduling/clinicorp", () => clinicorp);
 
-import { agendaVersion, monthDays, readAgendaPulse } from "@/modules/scheduling/agenda-pulse";
+import { agendaVersion, monthDays, readAgendaPulse, warmNeighborMonths } from "@/modules/scheduling/agenda-pulse";
 import type { ClinicorpAgenda, ClinicorpAgendaItem } from "@/modules/scheduling/clinicorp";
 
 const item = (id: string, hour: string, patientName = "Paciente"): ClinicorpAgendaItem => ({
   id, patientName, startsAt: new Date(`2026-09-29T${hour}:00Z`), endsAt: null, phone: null, professional: null, notes: null,
 });
-const ok = (items: ClinicorpAgendaItem[]): ClinicorpAgenda => ({ status: "ok", items, skipped: 0 });
+// `fetchedAt` diferente a cada leitura: a versão não pode depender dele.
+const ok = (items: ClinicorpAgendaItem[]): ClinicorpAgenda => ({ status: "ok", items, skipped: 0, fetchedAt: Math.random() });
 const local = { count: 2, lastUpdate: new Date("2026-09-28T12:00:00Z") };
 
 beforeEach(() => vi.clearAllMocks());
@@ -59,6 +60,15 @@ describe("pulso da agenda", () => {
     }));
     expect(pulse.version).toBe(agendaVersion(local, ok([item("1", "12:00")])));
     expect(pulse.checkedAt).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+  });
+
+  it("aquece o mês anterior e o seguinte, pelo cache (sem forçar releitura), virando o ano", async () => {
+    clinicorp.listClinicorpAgenda.mockResolvedValue(ok([]));
+    await warmNeighborMonths("tenant-1", 2026, 12, "America/Sao_Paulo");
+    expect(clinicorp.listClinicorpAgenda.mock.calls).toEqual([
+      ["tenant-1", "2026-11-01", "2026-11-30", "America/Sao_Paulo"],
+      ["tenant-1", "2027-01-01", "2027-01-31", "America/Sao_Paulo"],
+    ]);
   });
 
   it("dá o último dia certo de cada mês", () => {

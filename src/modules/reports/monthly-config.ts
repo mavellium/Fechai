@@ -17,6 +17,11 @@ export const monthlyAssumptionsSchema = z.object({
   attendantMonthlyCents: nullableNumber(1_000_000_000).refine((v) => v === null || Number.isInteger(v)),
   attendantMonthlyHours: nullableNumber(744).refine((v) => v === null || v > 0, "Informe a carga mensal do atendente."),
   minutesPerConversation: nullableNumber(120).refine((v) => v === null || v > 0),
+  // Leitura e resposta de cada mensagem que o agente respondeu. Preenchido,
+  // substitui `minutesPerConversation` na economia. `default(null)` porque as
+  // revisões salvas antes dele não têm a chave — sem isso a leitura falharia
+  // e todas as premissas do mês voltariam vazias.
+  secondsPerMessage: nullableNumber(600).refine((v) => v === null || v > 0, "Informe um tempo por mensagem maior que zero.").default(null),
   investmentCents: nullableNumber(1_000_000_000).refine((v) => v === null || Number.isInteger(v)),
   procedureVariable: z.string().trim().max(60).default("procedimento"),
   evaluationTypes: z.array(z.string().trim().min(1).max(100)).min(1).max(20),
@@ -33,7 +38,7 @@ export const monthlyAssumptionsSchema = z.object({
 export type MonthlyAssumptions = z.infer<typeof monthlyAssumptionsSchema>;
 export const EMPTY_ASSUMPTIONS: MonthlyAssumptions = {
   timezone: "America/Sao_Paulo", humanHours: null, attendantMonthlyCents: null,
-  attendantMonthlyHours: null, minutesPerConversation: null, investmentCents: null,
+  attendantMonthlyHours: null, minutesPerConversation: null, secondsPerMessage: null, investmentCents: null,
   procedureVariable: "procedimento", evaluationTypes: ["Avaliação"], countUntypedAsEvaluations: false, completedStatusTypes: [], procedures: [],
 };
 export function parseMonthlyAssumptions(raw: unknown): MonthlyAssumptions {

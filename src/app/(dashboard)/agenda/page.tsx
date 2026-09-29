@@ -1,5 +1,7 @@
+import { Suspense, type ReactNode } from "react";
 import Link from "next/link";
-import { CalendarX2, Clock, User, UsersRound } from "lucide-react";
+import { after } from "next/server";
+import { Clock, UsersRound } from "lucide-react";
 import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { Alert } from "@/components/ui/alert";
@@ -13,24 +15,26 @@ import { getCalendarFeatures } from "@/modules/scheduling/features";
 import {
   getClinicorpStatus,
   listClinicorpAgenda,
+  type ClinicorpAgenda,
   type ClinicorpAgendaItem,
 } from "@/modules/scheduling/clinicorp";
 import { listMonthAppointments } from "@/modules/scheduling/repository";
-import { clockInZone, dayKeyInZone, timeInZone, todayInZone } from "@/modules/scheduling/time";
-import { agendaVersion, monthDays } from "@/modules/scheduling/agenda-pulse";
-import { ClinicorpAppointmentItem } from "./ClinicorpAppointmentItem";
+import { clockInZone, dayKeyInZone, todayInZone } from "@/modules/scheduling/time";
+import { agendaVersion, monthDays, warmNeighborMonths } from "@/modules/scheduling/agenda-pulse";
 import { AgendaLiveRefresh } from "./AgendaLiveRefresh";
 import { leadStatusLabel } from "../conversas/leadStatus";
 import { CalendarMonth } from "./CalendarMonth";
-import { AppointmentActions } from "./AppointmentActions";
-import { AppointmentReminders } from "./AppointmentReminders";
-import { parseReminderOverride } from "@/modules/scheduling/reminder-override";
+import { DayPanel, type DayEntry } from "./DayPanel";
 import { NewAppointmentDialog, type ContactOption } from "./NewAppointmentDialog";
-import { cn } from "@/lib/utils";
 import { CalendarSyncStatus, type CalendarSyncItem } from "./CalendarSyncStatus";
 
 /** Quantos contatos mostrar no painel lateral — o resto fica em /contatos. */
 const SIDEBAR_CONTACTS = 6;
+
+/** Espera uma promessa dentro de um `<Suspense>` e desenha com o valor. */
+async function Await<T>({ promise, children }: { promise: Promise<T>; children: (value: T) => ReactNode | Promise<ReactNode> }) {
+  return children(await promise);
+}
 
 /**
  * Agenda da conta: mês à esquerda, dia escolhido à direita.
@@ -38,6 +42,15 @@ const SIDEBAR_CONTACTS = 6;
  * A ação "Agendar horário" existia como mock — trocava o status do lead e a
  * data combinada se perdia na conversa. Esta tela é o outro lado dela: o que o
  * agente marca no WhatsApp aparece aqui, junto do que foi marcado à mão.
+ *
+ * **Trocar de mês não espera o Clinicorp.** A página sai com o que está no
+ * nosso banco, e a agenda de lá entra por streaming num `<Suspense>` com a
+ * chave do mês — chave nova é o que faz o React mostrar o fallback na
+ * navegação, em vez de segurar a tela antiga até o Clinicorp responder. Por
+ * isso calendário e dia são desenhados duas vezes: com `agenda: null` (buscando)
+ * e com a agenda. Os meses vizinhos já ficam aquecidos no cache do servidor
+ * (`after` + `warmNeighborMonths`) e pré-carregados no navegador
+ * (`prefetch` em ‹ ›, ver `CalendarMonth`).
  */
 export default async function AgendaPage({
   searchParams,
@@ -47,18 +60,31 @@ export default async function AgendaPage({
   const { tenantId } = await requireTenant();
   const { ano, mes, dia, google } = await searchParams;
 
-  // A configuração de horário do agente principal é a da conta: fuso e duração
-  // padrão saem dela (ver módulo scheduling).
-  const primaryAgent = await prisma.agent.findFirst({
-    where: { tenantId, archived: false },
-    orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }],
-    select: {
-      id: true,
-      name: true,
-      enabled: true,
-      actions: { where: { key: "schedule_meeting" }, select: { enabled: true, config: true } },
-    },
-  });
+  // Tudo que não depende do fuso sai junto com o agente: uma ida ao banco a
+  // menos em série em cada troca de mês.
+  const [primaryAgent, features, integration, clinicorp, contacts] = await Promise.all([
+    // A configuração de horário do agente principal é a da conta: fuso e
+    // duração padrão saem dela (ver módulo scheduling).
+    prisma.agent.findFirst({
+      where: { tenantId, archived: false },
+      orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }],
+      select: {
+        id: true,
+        name: true,
+        enabled: true,
+        actions: { where: { key: "schedule_meeting" }, select: { enabled: true, config: true } },
+      },
+    }),
+    getCalendarFeatures(tenantId),
+    prisma.calendarIntegration.findUnique({ where: { tenantId } }),
+    getClinicorpStatus(tenantId),
+    prisma.lead.findMany({
+      where: { tenantId, isTest: false },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+      select: { id: true, name: true, phone: true, status: true },
+    }),
+  ]);
 
   const scheduleAction = primaryAgent?.actions[0];
   const config = parseScheduleConfig(scheduleAction?.config);
@@ -82,59 +108,18 @@ export default async function AgendaPage({
   const pad = (n: number) => String(n).padStart(2, "0");
   const { from, to } = monthDays(year, month);
 
-  const [{ rows: monthRows, byDay }, features, integration, clinicorp, clinicorpAgenda, contacts] = await Promise.all([
-    listMonthAppointments(tenantId, year, month, config.timezone),
-    getCalendarFeatures(tenantId),
-    prisma.calendarIntegration.findUnique({ where: { tenantId } }),
-    getClinicorpStatus(tenantId),
-    // O que a recepção marcou direto no Clinicorp: só leitura, nunca importado.
-    // Com cache curto: clicar num dia não espera o Clinicorp de novo.
-    listClinicorpAgenda(tenantId, from, to, config.timezone),
-    prisma.lead.findMany({
-      where: { tenantId, isTest: false },
-      orderBy: { createdAt: "desc" },
-      take: 100,
-      select: { id: true, name: true, phone: true, status: true },
-    }),
-  ]);
+  // Habilitado, com credencial legível e clínica escolhida: só então há o que
+  // buscar lá. Sem isso a página nem entra no streaming.
+  const clinicorpActive = Boolean(features.clinicorpEnabled && clinicorp?.businessId);
+  // Começa já e NÃO é esperada aqui: entra pelo `<Suspense>` lá embaixo.
+  const clinicorpAgenda: Promise<ClinicorpAgenda> = clinicorpActive
+    ? listClinicorpAgenda(tenantId, from, to, config.timezone)
+    : Promise.resolve({ status: "off" });
+  const { rows: monthRows, byDay } = await listMonthAppointments(tenantId, year, month, config.timezone);
 
-  // O que o fechai já espelhou lá aparece uma vez só: como o nosso compromisso,
-  // que tem lembretes e ações.
-  const mirrored = new Set(monthRows.map((row) => row.clinicorpAppointmentId).filter(Boolean));
-  const clinicorpByDay = new Map<string, ClinicorpAgendaItem[]>();
-  if (clinicorpAgenda.status === "ok") {
-    for (const item of clinicorpAgenda.items) {
-      if (mirrored.has(item.id)) continue;
-      const key = dayKeyInZone(item.startsAt, config.timezone);
-      clinicorpByDay.set(key, [...(clinicorpByDay.get(key) ?? []), item]);
-    }
-  }
-
-  // Lembrete que o worker mandou para consulta do Clinicorp (ver
-  // workers/follow-up-worker/clinicorp-reminders.ts). Só o que saiu de fato.
-  const clinicorpIds = [...clinicorpByDay.values()].flat().map((item) => item.id);
-  const clinicorpReminders = clinicorpIds.length
-    ? await prisma.clinicorpReminder.findMany({
-        where: { tenantId, clinicorpAppointmentId: { in: clinicorpIds }, reminderSentAt: { not: null } },
-        select: { clinicorpAppointmentId: true, reminderSentAt: true, startsAt: true },
-      })
-    : [];
-  const clinicorpReminderAt = new Map(
-    clinicorpReminders.map((r) => [`${r.clinicorpAppointmentId}|${r.startsAt.getTime()}`, r.reminderSentAt!]),
-  );
-
-  const countByDay = new Map<string, number>();
-  for (const [key, rows] of [...byDay, ...clinicorpByDay]) {
-    countByDay.set(key, (countByDay.get(key) ?? 0) + rows.length);
-  }
-
-  const selectedKey = selectedDay ? `${year}-${pad(month)}-${pad(selectedDay)}` : null;
-  const dayAppointments = selectedKey ? (byDay.get(selectedKey) ?? []) : [];
-  const dayClinicorp = selectedKey ? (clinicorpByDay.get(selectedKey) ?? []) : [];
-  const dayEntries = [
-    ...dayAppointments.map((appointment) => ({ kind: "fechai" as const, at: appointment.startsAt, appointment })),
-    ...dayClinicorp.map((item) => ({ kind: "clinicorp" as const, at: item.startsAt, item })),
-  ].sort((a, b) => a.at.getTime() - b.at.getTime());
+  // Depois da resposta: o mês anterior e o seguinte ficam no cache, e o
+  // clique em ‹ › não espera o Clinicorp.
+  if (clinicorpActive) after(() => warmNeighborMonths(tenantId, year, month, config.timezone));
 
   const hrefFor = ({
     year: y = year,
@@ -180,6 +165,7 @@ export default async function AgendaPage({
     label: c.name ? `${c.name} · ${c.phone}` : c.phone,
   }));
 
+  const selectedKey = selectedDay ? `${year}-${pad(month)}-${pad(selectedDay)}` : null;
   const selectedLabel = selectedKey
     ? new Intl.DateTimeFormat("pt-BR", {
         weekday: "long",
@@ -189,40 +175,132 @@ export default async function AgendaPage({
       }).format(new Date(`${selectedKey}T12:00:00Z`))
     : null;
 
+  const dialog = {
+    contacts: contactOptions,
+    defaultDate: selectedKey ?? `${today.year}-${pad(today.month)}-${pad(today.day)}`,
+    defaultDuration: config.durationMinutes,
+    durations: config.durations,
+    requiresContact: Boolean(features.clinicorpEnabled && clinicorp?.syncEnabled),
+  };
+
+  const local = {
+    count: monthRows.length,
+    lastUpdate: monthRows.reduce<Date | null>((max, row) => (!max || row.updatedAt > max ? row.updatedAt : max), null),
+  };
+  const renderedDate = new Date();
+  const renderedAt = renderedDate.getTime();
+  const updatedAt = clockInZone(renderedDate, config.timezone);
+
+  // `agenda: null` = a do Clinicorp ainda está chegando (fallback do Suspense).
+  const liveRefresh = (agenda: ClinicorpAgenda | null) => (
+    <AgendaLiveRefresh
+      year={year}
+      month={month}
+      version={agenda ? agendaVersion(local, agenda) : null}
+      // Do cache, a leitura pode ser de minutos atrás: a tela confere na hora.
+      dataAsOf={agenda?.status === "ok" ? agenda.fetchedAt : agenda ? renderedAt : null}
+      updatedAt={updatedAt}
+    />
+  );
+
+  const monthView = (agenda: ClinicorpAgenda | null, reminderSentAt: Map<string, Date>) => {
+    // O que o fechai já espelhou lá aparece uma vez só: como o nosso
+    // compromisso, que tem lembretes e ações.
+    const mirrored = new Set(monthRows.map((row) => row.clinicorpAppointmentId).filter(Boolean));
+    const clinicorpByDay = new Map<string, ClinicorpAgendaItem[]>();
+    if (agenda?.status === "ok") {
+      for (const item of agenda.items) {
+        if (mirrored.has(item.id)) continue;
+        const key = dayKeyInZone(item.startsAt, config.timezone);
+        clinicorpByDay.set(key, [...(clinicorpByDay.get(key) ?? []), item]);
+      }
+    }
+
+    const countByDay = new Map<string, number>();
+    for (const [key, rows] of [...byDay, ...clinicorpByDay]) {
+      countByDay.set(key, (countByDay.get(key) ?? 0) + rows.length);
+    }
+
+    const entries: DayEntry[] = selectedKey
+      ? [
+          ...(byDay.get(selectedKey) ?? []).map((appointment) => ({ kind: "fechai" as const, at: appointment.startsAt, appointment })),
+          ...(clinicorpByDay.get(selectedKey) ?? []).map((item) => ({ kind: "clinicorp" as const, at: item.startsAt, item })),
+        ].sort((a, b) => a.at.getTime() - b.at.getTime())
+      : [];
+
+    return (
+      <>
+        {/* Sem a leitura, o calendário mostraria dias livres que estão cheios lá. */}
+        {agenda?.status === "error" && (
+          <Alert tone="warn" title="Consultas do Clinicorp não carregaram">
+            {agenda.error} O calendário abaixo mostra só o que foi marcado pelo fechai.
+            A agenda tenta de novo sozinha a cada 15 segundos, ou clique em Atualizar.
+          </Alert>
+        )}
+        {agenda?.status === "ok" && agenda.skipped > 0 && (
+          <Alert tone="info">
+            {agenda.skipped === 1
+              ? "1 consulta do Clinicorp veio sem data ou horário legível e não aparece no calendário."
+              : `${agenda.skipped} consultas do Clinicorp vieram sem data ou horário legível e não aparecem no calendário.`}{" "}
+            Confira direto no Clinicorp.
+          </Alert>
+        )}
+
+        <div className="grid gap-6 lg:grid-cols-12 lg:items-start">
+          <Card className="p-4 lg:p-6 lg:col-span-7 xl:col-span-7">
+            <CalendarMonth
+              year={year}
+              month={month}
+              selectedDay={selectedDay}
+              today={today}
+              countByDay={countByDay}
+              hrefFor={hrefFor}
+              busy={agenda === null}
+            />
+          </Card>
+
+          <DayPanel
+            label={selectedLabel}
+            isToday={selectedDay === today.day && month === today.month && year === today.year}
+            entries={entries}
+            clinicorpLoading={agenda === null}
+            timezone={config.timezone}
+            clinicorpEnabled={features.clinicorpEnabled}
+            // Mesma regra do worker: lembrete só sai com a ação ligada.
+            agentReminders={scheduleAction?.enabled && config.reminderEnabled ? config.reminders : []}
+            location={config.location}
+            reminderSentAt={reminderSentAt}
+            dialog={dialog}
+          />
+        </div>
+      </>
+    );
+  };
+
+  // A chave do mês é o que faz a navegação mostrar o fallback (o que já está
+  // no banco) em vez de esperar o Clinicorp com a tela antiga congelada.
+  const monthKey = `${year}-${month}`;
+
   return (
     <div className="w-full space-y-6">
       <PageHeader
         eyebrow="agenda"
         title="Agenda"
         description={
-          clinicorpAgenda.status === "ok"
+          clinicorpActive
             ? "Os horários que seu agente marcou nas conversas, o que você marcar à mão e as consultas do Clinicorp."
             : "Os horários que seu agente marcou nas conversas, mais o que você marcar à mão."
         }
         actions={
           <>
-            <AgendaLiveRefresh
-              year={year}
-              month={month}
-              version={agendaVersion(
-                {
-                  count: monthRows.length,
-                  lastUpdate: monthRows.reduce<Date | null>(
-                    (max, row) => (!max || row.updatedAt > max ? row.updatedAt : max),
-                    null,
-                  ),
-                },
-                clinicorpAgenda,
-              )}
-              updatedAt={clockInZone(new Date(), config.timezone)}
-            />
-            <NewAppointmentDialog
-              contacts={contactOptions}
-              defaultDate={selectedKey ?? `${today.year}-${pad(today.month)}-${pad(today.day)}`}
-              defaultDuration={config.durationMinutes}
-              durations={config.durations}
-              requiresContact={Boolean(features.clinicorpEnabled && clinicorp?.syncEnabled)}
-            />
+            {clinicorpActive ? (
+              <Suspense key={monthKey} fallback={liveRefresh(null)}>
+                <Await promise={clinicorpAgenda}>{(agenda) => liveRefresh(agenda)}</Await>
+              </Suspense>
+            ) : (
+              liveRefresh({ status: "off" })
+            )}
+            <NewAppointmentDialog {...dialog} />
           </>
         }
       />
@@ -265,227 +343,15 @@ export default async function AgendaPage({
         </Alert>
       )}
 
-      {/* Sem a leitura, o calendário mostraria dias livres que estão cheios lá. */}
-      {clinicorpAgenda.status === "error" && (
-        <Alert tone="warn" title="Consultas do Clinicorp não carregaram">
-          {clinicorpAgenda.error} O calendário abaixo mostra só o que foi marcado pelo fechai.
-          A agenda tenta de novo sozinha a cada 15 segundos, ou clique em Atualizar.
-        </Alert>
+      {clinicorpActive ? (
+        <Suspense key={monthKey} fallback={monthView(null, new Map())}>
+          <Await promise={clinicorpAgenda}>
+            {async (agenda) => monthView(agenda, await sentClinicorpReminders(tenantId, agenda))}
+          </Await>
+        </Suspense>
+      ) : (
+        monthView({ status: "off" }, new Map())
       )}
-      {clinicorpAgenda.status === "ok" && clinicorpAgenda.skipped > 0 && (
-        <Alert tone="info">
-          {clinicorpAgenda.skipped === 1
-            ? "1 consulta do Clinicorp veio sem data ou horário legível e não aparece no calendário."
-            : `${clinicorpAgenda.skipped} consultas do Clinicorp vieram sem data ou horário legível e não aparecem no calendário.`}{" "}
-          Confira direto no Clinicorp.
-        </Alert>
-      )}
-
-      {/* Primeira View: Calendário (~65%) e Agendamentos do Dia (~35%) Lado a Lado */}
-      <div className="grid gap-6 lg:grid-cols-12 lg:items-start">
-        {/* Calendário do Mês (Ocupa ~65% do grid, altura natural compacta) */}
-        <Card className="p-4 lg:p-6 lg:col-span-7 xl:col-span-7">
-          <CalendarMonth
-            year={year}
-            month={month}
-            selectedDay={selectedDay}
-            today={today}
-            countByDay={countByDay}
-            hrefFor={hrefFor}
-          />
-        </Card>
-
-        {/* Agendamentos do Dia Selecionado (Ocupa ~35% do grid, com altura máxima e scroll interno) */}
-        <Card className="flex flex-col p-5 lg:p-6 lg:col-span-5 xl:col-span-5 max-h-[33rem]">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3.5 shrink-0">
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="font-display text-lg font-semibold capitalize text-white">
-                  {selectedLabel ?? "Escolha um dia"}
-                </h2>
-                {selectedDay === today.day && month === today.month && year === today.year && (
-                  <span className="rounded-control bg-iris/20 px-2 py-0.5 font-mono text-micro uppercase tracking-wider text-iris">
-                    Hoje
-                  </span>
-                )}
-              </div>
-              <p className="mt-0.5 font-mono text-micro uppercase tracking-wider text-white/45">
-                {dayEntries.length} {dayEntries.length === 1 ? "compromisso marcado" : "compromissos marcados"}
-                {dayClinicorp.length > 0 && ` · ${dayClinicorp.length} no Clinicorp`}
-              </p>
-            </div>
-
-            {dayEntries.length > 0 && (
-              <NewAppointmentDialog
-                contacts={contactOptions}
-                defaultDate={selectedKey ?? `${today.year}-${pad(today.month)}-${pad(today.day)}`}
-                defaultDuration={config.durationMinutes}
-                durations={config.durations}
-                requiresContact={Boolean(features.clinicorpEnabled && clinicorp?.syncEnabled)}
-                triggerLabel="+ Agendar"
-              />
-            )}
-          </div>
-
-          <div className="flex-1 min-h-0 overflow-y-auto pr-1">
-            {dayEntries.length === 0 ? (
-              <div className="flex h-full flex-col items-center justify-center py-10 text-center">
-                <EmptyState
-                  icon={CalendarX2}
-                  title="Nenhum horário marcado"
-                  description="Quando o agente agendar no WhatsApp, o horário aparece aqui automaticamente."
-                  action={
-                    <NewAppointmentDialog
-                      contacts={contactOptions}
-                      defaultDate={selectedKey ?? `${today.year}-${pad(today.month)}-${pad(today.day)}`}
-                      defaultDuration={config.durationMinutes}
-                      durations={config.durations}
-                      requiresContact={Boolean(features.clinicorpEnabled && clinicorp?.syncEnabled)}
-                      triggerLabel="Marcar horário neste dia"
-                    />
-                  }
-                  className="py-2"
-                />
-              </div>
-            ) : (
-              <ul className="space-y-3">
-                {dayEntries.map((entry) => {
-                  if (entry.kind === "clinicorp") {
-                    return (
-                      <ClinicorpAppointmentItem
-                        key={`clinicorp-${entry.item.id}`}
-                        item={entry.item}
-                        timezone={config.timezone}
-                        // Pelo horário também: remarcada lá, o envio da data antiga não vale.
-                        reminderSentAt={clinicorpReminderAt.get(`${entry.item.id}|${entry.item.startsAt.getTime()}`) ?? null}
-                      />
-                    );
-                  }
-                  const { appointment } = entry;
-                  const leadDisplayName = appointment.patientName || appointment.lead?.name || appointment.lead?.phone || appointment.title;
-                  const avatarInitial = leadDisplayName.slice(0, 1).toUpperCase();
-
-                  // Status visual sutil como no módulo de conversas (sem pílulas chamativas)
-                  const statusConfig =
-                    appointment.status === "scheduled"
-                      ? { text: "marcado", color: "text-success", bar: "bg-success" }
-                      : appointment.status === "canceled"
-                        ? { text: "cancelado", color: "text-danger", bar: "bg-danger" }
-                        : { text: "realizado", color: "text-white/40", bar: "bg-white/25" };
-
-                  return (
-                    <li
-                      key={appointment.id}
-                      className="relative flex flex-col gap-3 rounded-surface border border-white/10 bg-white/5 p-3.5 transition-all duration-150 hover:border-white/20 hover:bg-white/[0.08]"
-                    >
-                      {/* Faixa indicadora de urgência/status na borda esquerda */}
-                      <span
-                        aria-hidden
-                        className={cn("absolute left-0 top-3 bottom-3 w-1 rounded-full", statusConfig.bar)}
-                      />
-
-                      <div className="flex min-w-0 flex-1 items-start gap-3 pl-1.5">
-                        {/* Avatar / Inicial do Lead */}
-                        <span
-                          aria-hidden
-                          className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/10 font-display text-xs font-semibold uppercase text-white/80"
-                        >
-                          {avatarInitial}
-                        </span>
-
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <span className="inline-flex items-center rounded-control border border-iris/30 bg-iris/15 px-2 py-0.5 font-mono text-xs font-semibold tabular-nums text-iris">
-                              {timeInZone(appointment.startsAt, config.timezone)}–
-                              {timeInZone(appointment.endsAt, config.timezone)}
-                            </span>
-                            <span className="truncate font-semibold text-white text-sm">{appointment.title}</span>
-
-                            {/* Status e Origem como texto discreto estilizado (padrão conversas) */}
-                            <span className={cn("font-mono text-micro uppercase tracking-wider font-medium ml-1", statusConfig.color)}>
-                              {statusConfig.text}
-                            </span>
-                            {appointment.source === "agent" && (
-                              <span className="font-mono text-micro uppercase tracking-wider text-iris/80">
-                                • pelo agente
-                              </span>
-                            )}
-                          </div>
-
-                          {appointment.lead && (
-                            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-white/60">
-                              <span className="flex items-center gap-1 font-mono text-micro uppercase tracking-wider text-white/70">
-                                <User size={12} aria-hidden className="text-white/40" />
-                                Contato: {appointment.lead.name || appointment.lead.phone}
-                              </span>
-                              <Link
-                                href={`/conversas?q=${encodeURIComponent(appointment.lead.phone)}`}
-                                className="font-mono text-micro uppercase tracking-wide text-iris hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-iris"
-                              >
-                                Ver conversa →
-                              </Link>
-                            </div>
-                          )}
-
-                          {appointment.notes && (
-                            <p className="mt-1.5 rounded-control border border-white/5 bg-black/20 px-2.5 py-1 text-xs leading-relaxed text-white/70">
-                              {appointment.notes}
-                            </p>
-                          )}
-
-                          <div className="mt-1.5 flex flex-wrap items-center gap-3">
-                            {appointment.googleEventId && (
-                              <span className="inline-flex items-center gap-1.5 font-mono text-micro uppercase tracking-wide text-white/40">
-                                <span className="h-1.5 w-1.5 rounded-full bg-sky-400" />
-                                Google Agenda
-                              </span>
-                            )}
-
-                            {appointment.status === "scheduled" && features.clinicorpEnabled && (
-                              <span
-                                className={cn(
-                                  "inline-flex items-center gap-1.5 font-mono text-micro uppercase tracking-wide",
-                                  appointment.clinicorpAppointmentId ? "text-success" : "text-warn"
-                                )}
-                              >
-                                <span
-                                  className={cn(
-                                    "h-1.5 w-1.5 rounded-full",
-                                    appointment.clinicorpAppointmentId ? "bg-success" : "bg-warn"
-                                  )}
-                                />
-                                {appointment.clinicorpAppointmentId
-                                  ? "Clinicorp enviado"
-                                  : "Pendente Clinicorp"}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      {appointment.status === "scheduled" && (
-                        <div className="flex shrink-0 items-center gap-2 border-t border-white/10 pt-2 sm:border-t-0 sm:pt-0">
-                          <AppointmentReminders
-                            id={appointment.id}
-                            title={appointment.title}
-                            override={parseReminderOverride(appointment.reminderOverride)}
-                            // Mesma regra do worker: lembrete só sai com a ação ligada.
-                            agentReminders={scheduleAction?.enabled && config.reminderEnabled ? config.reminders : []}
-                            location={config.location}
-                            lastSentAt={appointment.reminderSentAt}
-                            closedCount={appointment.remindersSent.length}
-                          />
-                          <AppointmentActions id={appointment.id} title={appointment.title} />
-                        </div>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </div>
-        </Card>
-      </div>
 
       {/* Linha de Apoio: Horário de atendimento, Sincronização e Contatos em 3 colunas */}
       <div className="grid gap-4 md:grid-cols-3">
@@ -561,4 +427,18 @@ export default async function AgendaPage({
       </div>
     </div>
   );
+}
+
+/**
+ * "id|início" → quando saiu o lembrete de cada consulta do Clinicorp (ver
+ * workers/follow-up-worker/clinicorp-reminders.ts). Só o que saiu de fato, e
+ * pelo horário também: remarcada lá, o envio da data antiga não vale.
+ */
+async function sentClinicorpReminders(tenantId: string, agenda: ClinicorpAgenda): Promise<Map<string, Date>> {
+  if (agenda.status !== "ok" || agenda.items.length === 0) return new Map();
+  const rows = await prisma.clinicorpReminder.findMany({
+    where: { tenantId, clinicorpAppointmentId: { in: agenda.items.map((item) => item.id) }, reminderSentAt: { not: null } },
+    select: { clinicorpAppointmentId: true, reminderSentAt: true, startsAt: true },
+  });
+  return new Map(rows.map((r) => [`${r.clinicorpAppointmentId}|${r.startsAt.getTime()}`, r.reminderSentAt!]));
 }

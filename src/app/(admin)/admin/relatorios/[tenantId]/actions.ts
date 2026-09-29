@@ -4,7 +4,8 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireSuperadmin } from "@/lib/session";
 import { payloadTooLarge } from "@/lib/rate-limit";
-import { monthlyAssumptionsSchema, monthKey } from "@/modules/reports/monthly-config";
+import { monthlyAssumptionsSchema, monthKey, monthlyWindow } from "@/modules/reports/monthly-config";
+import { FEATURED_CASE_MAX, featuredCaseProblem } from "@/modules/reports/monthly-time";
 import { computeMonthlyReport, type MonthlyReport } from "@/modules/reports/monthly";
 import { monthlyOverridesSchema, parseMonthlyOverrides, editableMonthlyMetrics } from "@/modules/reports/monthly-overrides";
 import { recordAudit } from "@/modules/audit/log";
@@ -56,23 +57,33 @@ export async function saveMonthlyRoi(tenantId: string, month: string, _previous:
     if (!overrides.success) return { ok: false, error: overrides.error.issues[0]?.message ?? "Revise os indicadores." };
   }
   const text = (key: string) => String(form.get(key) ?? "").trim();
-  const adjustments = text("adjustments"), nextMonth = text("nextMonth"), decisionMaker = text("decisionMaker");
+  const adjustments = text("adjustments"), nextMonth = text("nextMonth"), decisionMaker = text("decisionMaker"), featuredCase = text("featuredCase");
   if (adjustments.length > 400 || nextMonth.length > 400 || decisionMaker.length > 100) return { ok: false, error: "Use até 400 caracteres em cada bloco e 100 no decisor para caber em uma página." };
+  if (featuredCase.length > FEATURED_CASE_MAX) return { ok: false, error: `Use até ${FEATURED_CASE_MAX} caracteres no caso do mês para caber em uma página.` };
   const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { id: true } });
   if (!tenant) return { ok: false, error: "Clínica não encontrada." };
+  if (featuredCase) {
+    // O caso vai para o decisor e para o PDF: nenhum contato atendido no mês
+    // pode ser reconhecido pelo nome, telefone ou e-mail.
+    const window = monthlyWindow(month, parsed.data.timezone);
+    const contacts = await prisma.lead.findMany({ where: { tenantId, isTest: false, name: { not: null },
+      conversation: { messages: { some: { createdAt: { gte: window.start, lt: window.end } } } } }, select: { name: true } });
+    const problem = featuredCaseProblem(featuredCase, contacts.map((c) => c.name));
+    if (problem) return { ok: false, error: problem };
+  }
   if (!await validAgents(tenantId, parsed.data.agentIds)) return { ok: false, error: "Selecione somente agentes deste cliente." };
   // Transação e filtro de status: um fechamento concorrente não pode ser sobrescrito.
   const saved = await prisma.$transaction(async (tx) => {
     const existing = await tx.monthlyRoiReport.findUnique({ where: { tenantId_month: { tenantId, month } } });
     if (existing && form.has("revision") && String(form.get("revision")) !== existing.updatedAt.toISOString()) return false;
     const metricOverrides = overrides?.success ? overrides.data : parseMonthlyOverrides(existing?.assumptions);
-    const data = { assumptions: { ...parsed.data, metricOverrides }, adjustments, nextMonth, decisionMaker, preparedBy: session.user.id };
+    const data = { assumptions: { ...parsed.data, metricOverrides }, adjustments, nextMonth, decisionMaker, featuredCase, preparedBy: session.user.id };
     if (!existing) { await tx.monthlyRoiReport.create({ data: { tenantId, month, ...data } }); return true; }
     const updated = await tx.monthlyRoiReport.updateMany({ where: { id: existing.id, tenantId, status: "draft", updatedAt: existing.updatedAt }, data });
     return updated.count === 1;
   });
   if (!saved) return { ok: false, error: "O relatório está fechado ou mudou durante a edição. Atualize e reabra a revisão antes de alterar." };
-  await recordAudit({ event: "report.monthly_saved", tenantId, target: { type: "MonthlyRoiReport", id: `${tenantId}:${month}`, label: month }, after: { assumptions: parsed.data, metricOverrides: overrides?.success ? overrides.data : undefined, adjustments, nextMonth, decisionMaker } });
+  await recordAudit({ event: "report.monthly_saved", tenantId, target: { type: "MonthlyRoiReport", id: `${tenantId}:${month}`, label: month }, after: { assumptions: parsed.data, metricOverrides: overrides?.success ? overrides.data : undefined, adjustments, nextMonth, decisionMaker, featuredCase } });
   invalidate(tenantId);
   return { ok: true, info: "Indicadores, premissas e revisão salvos para este mês." };
 }

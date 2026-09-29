@@ -240,7 +240,7 @@ describe("agenda do Clinicorp na /agenda", () => {
 
   it("lê o mês inteiro da clínica escolhida, sem gravar nada", async () => {
     agenda([]);
-    expect(await list()).toEqual({ status: "ok", items: [], skipped: 0 });
+    expect(await list()).toEqual({ status: "ok", items: [], skipped: 0, fetchedAt: expect.any(Number) });
     const [url] = fetchMock.mock.calls.find(([url]) => url.pathname.endsWith("/appointment/list"))! as unknown as [URL];
     expect(Object.fromEntries(url.searchParams)).toMatchObject({ from: "2026-09-01", to: "2026-09-30", businessId: "4791226171916288" });
     expect(url.searchParams.has("includeAssigns")).toBe(false);
@@ -282,7 +282,7 @@ describe("agenda do Clinicorp na /agenda", () => {
 
   it("conta o que não dá para posicionar em vez de esconder calado", async () => {
     agenda([null, { id: 8, fromTime: "09:00" }, { AtomicDate: 20260929, fromTime: "09:00" }, { id: 9, AtomicDate: 20260929 }]);
-    expect(await list()).toEqual({ status: "ok", items: [], skipped: 4 });
+    expect(await list()).toEqual({ status: "ok", items: [], skipped: 4, fetchedAt: expect.any(Number) });
   });
 
   it("sem a lista de profissionais, as consultas aparecem sem o nome", async () => {
@@ -314,6 +314,18 @@ describe("agenda do Clinicorp na /agenda", () => {
     expect(listCalls()).toBe(2);
     // Profissional quase nunca muda: uma chamada só.
     expect(proCalls()).toBe(1);
+  });
+
+  // Relato: trocar de mês continuava lento — cada volta a um mês esperava o Clinicorp.
+  it("serve o mês do cache por muito tempo, dizendo de quando é a leitura", async () => {
+    agenda([]);
+    const first = await list();
+    const later = Date.now() + 20 * 60_000;
+    vi.spyOn(Date, "now").mockReturnValue(later);
+    const again = await list();
+    expect(fetchMock.mock.calls.filter(([url]) => url.pathname.endsWith("/appointment/list"))).toHaveLength(1);
+    // A tela usa isso para perguntar na hora se a leitura é velha.
+    expect(again).toMatchObject({ status: "ok", fetchedAt: first.status === "ok" ? first.fetchedAt : -1 });
   });
 
   it("dois pedidos ao mesmo tempo esperam a mesma chamada", async () => {

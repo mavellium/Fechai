@@ -254,6 +254,17 @@ describe("Telefone do contato no webhook", () => {
     }))).toMatchObject({ fromPhone: "5511987654321" });
   });
 
+  it("lê a duração do áudio informada pela Evolution", async () => {
+    const provider = await novoProvider();
+    const audio = (message: Record<string, unknown>) => ({ instance: "tenant_abc",
+      data: { key: { remoteJid: "5511987654321@s.whatsapp.net", id: "AUD1" }, message } });
+    expect(provider.parseWebhook(audio({ audioMessage: { seconds: 256, ptt: true } }))).toMatchObject({ hasAudio: true, audioSeconds: 256 });
+    expect(provider.parseWebhook(audio({ pttMessage: { seconds: "288" } }))).toMatchObject({ hasAudio: true, audioSeconds: 288 });
+    // Sem duração no payload: fica para a leitura do arquivo, nunca zero.
+    expect(provider.parseWebhook(audio({ audioMessage: { seconds: 0 } }))).not.toHaveProperty("audioSeconds");
+    expect(provider.parseWebhook(audio({ audioMessage: {} }))).not.toHaveProperty("audioSeconds");
+  });
+
   it("não trata LID sem telefone alternativo como número de contato", async () => {
     const provider = await novoProvider();
     expect(provider.parseWebhook(mensagem({ remoteJid: "123456789012345@lid" }))).toBeNull();

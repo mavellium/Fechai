@@ -31,6 +31,20 @@ buscar sob demanda. UI em `agentes/ViewEditDocumentDialog.tsx`.
 - **Toda** query filtra por `tenantId`.
 - `fileUrl`/`fileName`: o arquivo original enviado pelo cliente (`addDocument` em `agentes/actions.ts`) é guardado na BunnyCDN via `@/lib/bunny` — `content` continua sendo só o texto extraído para o RAG. `deleteDocument` apaga o arquivo da CDN junto com a linha.
 
+## Documentos criados pela fila de perguntas (P-87)
+
+Aprovar uma resposta em `/perguntas` chama `ingestDocument` (ou
+`updateDocument`, quando a pergunta já tinha documento) na base do agente
+da pergunta. O título é "Pergunta respondida: …" e o conteúdo junta pergunta
+e resposta no mesmo trecho, para a busca achar a resposta pela pergunta
+parecida seguinte. Eles aparecem na lista de /agentes como qualquer
+documento; apagar lá tira o conteúdo do agente, e a próxima aprovação daquela
+pergunta recria. Ver [`knowledge-gaps/README.md`](../knowledge-gaps/README.md).
+
+A busca (`searchSimilarChunks`) devolve `distance`; o orquestrador usa a do
+trecho mais próximo para o aviso de "base fraca" da regra de não inventar
+(`agent-engine/unanswered-rule.ts`).
+
 ## O que NÃO faz
 
 - Não decide *quando* buscar — isso é do `agent-engine` (Milestone 5).

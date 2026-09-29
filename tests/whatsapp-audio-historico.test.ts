@@ -46,6 +46,7 @@ vi.mock("@/modules/voice/storage", () => ({ storeVoiceMessage: mocks.storeVoiceM
 vi.mock("@/modules/voice/reply", () => ({ speakReply: mocks.speakReply }));
 
 import { processIncomingWhatsapp } from "@/modules/whatsapp/process-incoming";
+import { opusAudio } from "./fixtures/ogg";
 
 const incoming: IncomingMessage = {
   instanceExternalId: "inst-1",
@@ -103,8 +104,9 @@ describe("áudio no histórico do WhatsApp", () => {
     await processIncomingWhatsapp(incoming, provider);
 
     expect(mocks.transcribeAudio).not.toHaveBeenCalled();
+    // O arquivo do teste não é OGG e a Evolution não mandou duração: não medido.
     expect(mocks.appendMessage).toHaveBeenCalledWith(
-      "conversa-1", "user", "[Áudio]", undefined, "audio-in-1", "https://cdn.test/recebido.ogg",
+      "conversa-1", "user", "[Áudio]", undefined, "audio-in-1", "https://cdn.test/recebido.ogg", null,
     );
     expect(mocks.runAgentTurn).not.toHaveBeenCalled();
   });
@@ -115,7 +117,7 @@ describe("áudio no histórico do WhatsApp", () => {
     await processIncomingWhatsapp(incoming, provider);
 
     expect(mocks.appendMessage).toHaveBeenCalledWith(
-      "conversa-1", "user", "[Áudio]", undefined, "audio-in-1", "https://cdn.test/recebido.ogg",
+      "conversa-1", "user", "[Áudio]", undefined, "audio-in-1", "https://cdn.test/recebido.ogg", null,
     );
     expect(mocks.runAgentTurn).not.toHaveBeenCalled();
   });
@@ -126,7 +128,7 @@ describe("áudio no histórico do WhatsApp", () => {
     await processIncomingWhatsapp({ ...incoming, isFromMe: true, messageKeyId: "audio-out-1" }, provider);
 
     expect(mocks.appendMessage).toHaveBeenCalledWith(
-      "conversa-1", "assistant", "Quero agendar", "human", "audio-out-1", "https://cdn.test/recebido.ogg",
+      "conversa-1", "assistant", "Quero agendar", "human", "audio-out-1", "https://cdn.test/recebido.ogg", null,
     );
     expect(mocks.runAgentTurn).not.toHaveBeenCalled();
     expect(mocks.conversationUpdate).toHaveBeenCalledWith({
@@ -141,6 +143,29 @@ describe("áudio no histórico do WhatsApp", () => {
 
     expect(mocks.getMediaAsBase64).not.toHaveBeenCalled();
     expect(mocks.appendMessage).not.toHaveBeenCalled();
+  });
+
+  it("usa a duração informada pela Evolution sem precisar ler o arquivo", async () => {
+    await processIncomingWhatsapp({ ...incoming, audioSeconds: 256 }, provider);
+
+    expect(mocks.runAgentTurn).toHaveBeenCalledWith(expect.objectContaining({ incomingAudioSeconds: 256 }));
+  });
+
+  it("mede o arquivo quando o provedor não informa a duração (Meta)", async () => {
+    mocks.getMediaAsBase64.mockResolvedValue({ base64: opusAudio(288).toString("base64"), mime: "audio/ogg" });
+
+    await processIncomingWhatsapp({ ...incoming, mediaId: "media-1" }, { ...provider, name: "meta" } as WhatsAppProvider);
+
+    expect(mocks.runAgentTurn).toHaveBeenCalledWith(expect.objectContaining({ incomingAudioSeconds: 288 }));
+  });
+
+  it("guarda a duração informada mesmo quando o download da mídia falha", async () => {
+    mocks.getMediaAsBase64.mockRejectedValue(new Error("mídia expirada"));
+
+    await processIncomingWhatsapp({ ...incoming, audioSeconds: 90 }, provider);
+
+    expect(mocks.appendMessage).toHaveBeenCalledWith("conversa-1", "user", "[Áudio]", undefined, "audio-in-1", null, 90);
+    expect(mocks.runAgentTurn).not.toHaveBeenCalled();
   });
 
   it("guarda a resposta falada pela IA para reprodução", async () => {

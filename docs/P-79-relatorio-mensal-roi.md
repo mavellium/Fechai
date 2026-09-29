@@ -179,17 +179,23 @@ A receita é somada por procedimento. A origem usa a **primeira mensagem do
 contato, anterior à marcação**, nunca a hora da consulta nem a hora em que o
 agendamento foi criado. Contato sem origem identificável não vira “fora”.
 
+`horas devolvidas = (minutos de áudio ouvidos × 60 + (mensagens de texto +
+áudios respondidos pelo agente) × segundos por mensagem) ÷ 3600`
+
+Vale quando a premissa **tempo por mensagem** (leitura e resposta, ex.: 30 s)
+está preenchida. Vazia — como em toda revisão anterior a ela —, continua a
+estimativa por conversa:
+
 `horas estimadas = conversas respondidas pela IA, sem resposta humana no mês
 × minutos humanos declarados por conversa ÷ 60`
 
-Essa é a estimativa automática de horas; uma correção manual de horas
-assumidas substitui esse resultado na competência e permanece identificada
-como ajuste. A economia usa as horas resultantes, mantendo custo/carga
-mensal declarados.
+Uma correção manual de horas substitui as duas na competência e permanece
+identificada como ajuste. A economia usa as horas resultantes, mantendo
+custo/carga mensal declarados.
 
 `custo/hora = custo mensal em centavos ÷ carga mensal em horas`
 
-`economia estimada = horas estimadas × custo/hora`
+`economia estimada = horas devolvidas × custo/hora`
 
 `ROI = (receita + economia − mensalidade) ÷ mensalidade`
 
@@ -197,6 +203,44 @@ Os valores são explicitamente estimados. Mensalidade zero não gera divisão
 por zero: ROI percentual não se aplica. Conversão zero e custo zero são
 premissas válidas. Ausência de premissas gera `null`/“Pendente”, nunca um
 número financeiro inventado.
+
+## Tempo que o Fechai devolveu para sua equipe
+
+Origem: pedido do Vinícius (28/09/2026) — uma paciente de 74 anos mandou dois
+áudios de 4min16s e 4min48s; sem o agente, a recepção teria de ouvir quase dez
+minutos e adaptar a fala. Esse tempo e essa paciência passam a aparecer no
+relatório, como estimativa com premissas visíveis.
+
+- **Áudio ouvido:** soma da duração dos áudios do contato que o agente ouviu
+  (transcritos) e respondeu no mês, com a quantidade acima de 2 minutos e o
+  maior áudio. A duração vem da Evolution (`seconds` do payload) ou, na Meta,
+  do arquivo OGG baixado pelo webhook (`Message.audioSeconds`). Áudio sem
+  duração medida aparece como tal e entra só com o tempo de resposta.
+- **Mensagens de texto respondidas pelo agente.** Uma mensagem é do agente
+  quando a primeira resposta depois dela é da IA; se a equipe respondeu
+  primeiro, o trabalho foi da equipe.
+- **Horas devolvidas** e economia: fórmula na seção acima.
+- **Duração dos atendimentos:** um atendimento começa na mensagem do contato e
+  termina na última mensagem antes de 24h de silêncio. Média e mediana por
+  resultado — agendou (agendamento feito pelo agente, não cancelado),
+  transbordou (evento de transbordo), perdido (contato marcado como perdido
+  hoje, no último atendimento; desqualificado não conta) e sem desfecho.
+  **Até o agendamento:** média e mediana do tempo e das mensagens trocadas desde
+  a primeira mensagem do atendimento. A duração é informativa: não entra no
+  dinheiro e não tem correção manual; áudio, mensagens e horas têm.
+- **Caso do mês:** texto opcional de até 240 caracteres escrito pela Mavellium
+  só com o perfil genérico ("paciente de 74 anos"). O servidor recusa e-mail,
+  sequência de 8+ dígitos e qualquer palavra do nome de um contato atendido no
+  mês. O admin recebe como sugestão as conversas com áudios longos (para abrir
+  com "Entrar como"); a sugestão não entra no snapshot nem no PDF, e a IA do
+  editor não redige nem vê o caso.
+
+Na tela o bloco vem logo depois do retorno. No PDF fica abaixo do quadro do ROI,
+com a frase, os áudios, o tempo até agendar e o caso; ele substitui a linha
+"Horas assumidas" da tabela (o mês anterior vai no próprio bloco) e a duração
+por resultado fica no painel. Relatórios fechados antes do bloco continuam como
+foram entregues. Áudios recebidos antes de 23/09/2026 não têm arquivo na CDN e
+ficam sem duração: nada é reconstruído por estimativa.
 
 ## Fontes e limites da medição
 
@@ -229,9 +273,16 @@ número financeiro inventado.
 - IDs string preservam 64 bits; números fora da precisão segura são recusados.
 - `ReportEvent`: qualificação explícita (lead quente), transbordo e pergunta
   sem resposta. As ferramentas registram eventos idempotentes e o webhook
-  registra assunção por reação. `report_unanswered` é observação interna, sem
-  vaga de habilidade, pausa ou mensagem adicional. Participa do loop normal
-  de ferramentas; a geração do relatório não inicia chamadas de IA.
+  registra assunção por reação. `report_unanswered` não ocupa vaga de
+  habilidade e participa do loop normal de ferramentas; a geração do
+  relatório não inicia chamadas de IA. Desde o P-87 a mesma tool também põe a
+  pergunta na fila `/perguntas` e, se a conta escolheu "passar para a equipe",
+  marca `needsHuman` e conta um transbordo — ver
+  [P-87](./P-87-perguntas-sem-resposta.md).
+- Tempo médio para a equipe responder (P-87): `answeredAt − firstAskedAt` das
+  perguntas da fila aprovadas na competência, no escopo de agentes
+  selecionado. Opcional no snapshot: fechamentos anteriores mostram "Sem
+  registro". No PDF vai na célula de perguntas sem resposta.
 - Todos os dados operacionais filtram tenant e excluem lead/conversa de teste.
 - A implantação **não reconstrói** eventos que nunca foram registrados.
   `Tenant.reportTrackingStartedAt` declara o início da cobertura; contagens
@@ -240,7 +291,9 @@ número financeiro inventado.
   da conversa ou no evento de qualificação. Valores sem correspondência nas
   premissas não recebem ticket/conversão por aproximação.
 - Não há chamada de IA para produzir o relatório. Ajustes e plano são
-  escritos/revisados pela Mavellium. P-86 (tráfego) e a fila P-87 ficam fora.
+  escritos/revisados pela Mavellium. P-86 (tráfego) fica fora; a fila P-87
+  foi entregue à parte ([contrato](./P-87-perguntas-sem-resposta.md)) e só
+  acrescenta o tempo médio de resposta a este relatório.
 
 ## Histórico, revisão e autorização
 
@@ -270,6 +323,12 @@ pacientes.
   leitura de grades cadastradas e união dos horários dos agentes.
 - `src/modules/reports/events.ts`: registro explícito, best-effort e idempotente.
 - `src/modules/reports/monthly-pdf.ts`: PDF de uma página.
+- `src/modules/reports/monthly-time.ts`: tempo devolvido, duração dos
+  atendimentos, formatação, frase do bloco e checagem do caso do mês.
+- `src/modules/voice/received-audio.ts`: duração do OGG e marcador de áudio
+  não transcrito.
+- `scripts/mede-audios-recebidos.ts`: mede os áudios já guardados na CDN
+  (prévia por padrão, `--apply` para gravar).
 - `src/app/(admin)/admin/relatorios/`: fila mensal, revisão, fechamento, entrega.
 - `src/app/(admin)/admin/relatorios/[tenantId]/MonthlyMetricFields.tsx`:
   edição dos indicadores atuais e anteriores.
@@ -290,6 +349,10 @@ teste que tenha números/compromissos reais. O novo client é necessário tanto
 para `Appointment.serviceType` quanto para os eventos das tools.
 As correções manuais em JSON, logos e ajustes de listagem não exigem nova
 alteração de schema. A seleção de agentes também usa o JSON existente.
+O tempo devolvido acrescenta `Message.audioSeconds` e
+`MonthlyRoiReport.featuredCase`: `db push` + `generate` e reiniciar web e
+worker; depois `npx tsx scripts/mede-audios-recebidos.ts` (prévia) e
+`--apply` para medir o histórico desde 23/09/2026.
 
 Validação: testes de fórmula, limites/fusos, presença, isolamento, autorização,
 snapshot, concorrência e PDF A4 de uma página. Typecheck, lint e inspeção visual
