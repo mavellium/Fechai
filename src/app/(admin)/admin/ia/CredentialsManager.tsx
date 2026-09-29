@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useCallback, useEffect, useState, useTransition } from "react";
+import { useActionToast } from "@/components/ui/toast";
 import { KeyRound, Plus, Trash2 } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -172,6 +173,7 @@ export function CredentialsManager({ credentials }: { credentials: SafeCredentia
 
 function AddCredentialModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [state, formAction, pending] = useActionState(addAiCredential, null);
+  useActionToast(state, pending, { entity: "credencial", gender: "f", action: "create" });
   const [provider, setProvider] = useState("gemini");
   const isCustom = provider === "custom";
 

@@ -8,6 +8,10 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 <!-- END:nextjs-agent-rules -->
 
+## Working in notificações de salvamento (toast)
+
+Before adding a save/submit screen, read `src/components/ui/toast/TOASTS.md`. Todo retorno de salvar (carregando, sucesso, validação, rede/servidor, sessão expirada, permissão) vai ao topo pelo `ToastProvider` do `PanelShell`: formulário com `useActionState` usa `useActionToast(state, pending, { entity, action, gender })`, envio por `fetch` usa `useSaveFeedback` + `requestSave`. Só sucesso some sozinho; erro fica até fechar ou tentar de novo. Detalhe técnico nunca vai à tela (`sanitizeReason`). Formulário dentro de `<dialog>` modal **mantém o `FormFeedback` inline**, porque o diálogo deixa o toast inalcançável.
+
 ## Working in Disparos (/disparos, Excel/JSON, Meta templates)
 
 Before touching broadcasts, read `src/modules/broadcasts/README.md`. A página e

@@ -1,8 +1,8 @@
 "use client";
 
 import { useId, useRef, useState, useTransition } from "react";
+import { useActionToast } from "@/components/ui/toast";
 import { ArrowDown, ArrowUp, Ban, Check, Copy, Pencil, Plus, Trash2, Undo2, X } from "lucide-react";
-import { FormFeedback } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Field, fieldProps } from "@/components/ui/field";
@@ -17,6 +17,7 @@ const normalize = (text: string) => text.trim().replace(/[\r\n]+/g, " ");
 export function RulesForm({ agentId, initial }: { agentId: string; initial: string }) {
   const [state, setState] = useState<Result | null>(null);
   const [pending, startTransition] = useTransition();
+  useActionToast(state, pending, { entity: "regras", gender: "f", plural: true });
   const [rules, setRules] = useState<Rule[]>(() => initial.split("\n").map((text, index) => ({ id: `initial-${index}`, text: text.trim() })).filter((rule) => rule.text));
   const [saved, setSaved] = useState(() => serialize(rules));
   const [draft, setDraft] = useState("");
@@ -129,7 +130,6 @@ export function RulesForm({ agentId, initial }: { agentId: string; initial: stri
         }}><Undo2 size={14} aria-hidden />Desfazer</Button>
       </div>}
     </fieldset>
-    <FormFeedback error={state?.error} info={state?.info} />
     <div className="flex flex-wrap items-center gap-3">
       <Button type="button" onClick={save} loading={pending} loadingLabel="Salvando regras">Salvar regras</Button>
       <p className="text-xs text-white/50">As alterações só valem para o agente depois de salvar.</p>

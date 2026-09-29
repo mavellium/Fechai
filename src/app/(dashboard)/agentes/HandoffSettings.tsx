@@ -1,13 +1,14 @@
 "use client";
 
 import { useActionState, useCallback, useEffect, useId, useState, useTransition } from "react";
+import { useActionToast } from "@/components/ui/toast";
 import { RefreshCw } from "lucide-react";
 import {
   MAX_GROUP_REASON,
   type GroupListResult,
   type HandoffConfig,
 } from "@/modules/agent-engine/handoff";
-import { Alert, FormFeedback } from "@/components/ui/alert";
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field, fieldProps } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -32,6 +33,7 @@ const LOAD_FAILED: GroupListResult = {
  */
 export function HandoffSettings({ agentId, config }: { agentId: string; config: HandoffConfig }) {
   const [state, formAction, pending] = useActionState(saveHandoffConfigAction, null);
+  useActionToast(state, pending, { entity: "transferência para humano", gender: "f" });
   const [notifyGroup, setNotifyGroup] = useState(config.notifyGroup);
   const [groupId, setGroupId] = useState(config.groupId ?? "");
   const [groupName, setGroupName] = useState(config.groupName ?? "");
@@ -122,7 +124,6 @@ export function HandoffSettings({ agentId, config }: { agentId: string; config: 
         </Field>
       </div>
 
-      <FormFeedback error={state?.error} info={state?.info} />
 
       <Button type="submit" variant="outline" loading={pending} loadingLabel="Salvando transferência">
         Salvar transferência

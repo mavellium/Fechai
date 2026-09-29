@@ -1,8 +1,8 @@
 "use client";
 
 import { useActionState, useId, useState } from "react";
+import { useActionToast } from "@/components/ui/toast";
 import { Eye, EyeOff } from "lucide-react";
-import { FormFeedback } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field, fieldProps } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -13,6 +13,7 @@ import { UnsavedForm } from "@/components/ui/unsaved-changes";
 
 export function PasswordForm() {
   const [state, formAction, pending] = useActionState(changePassword, null);
+  useActionToast(state, pending, { entity: "senha", gender: "f", action: "update" });
   const [show, setShow] = useState(false);
   // Só para alimentar a checklist de força — o valor enviado sai do FormData.
   const [newPassword, setNewPassword] = useState("");
@@ -86,7 +87,6 @@ export function PasswordForm() {
         {show ? "Ocultar senhas" : "Mostrar senhas"}
       </label>
 
-      <FormFeedback error={state?.error} info={state?.info} />
 
       <Button type="submit" loading={pending} loadingLabel="Alterando senha">
         Alterar senha

@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useRef } from "react";
+import { useActionToast } from "@/components/ui/toast";
 import { useRouter } from "next/navigation";
 import { CalendarPlus, X } from "lucide-react";
 import posthog from "posthog-js";
@@ -50,6 +51,7 @@ export function NewAppointmentDialog({
   const durationRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
   const [state, formAction, pending] = useActionState(createManualAppointment, null);
+  useActionToast(state, pending, { entity: "agendamento", action: "create" });
 
   // Fecha e atualiza a lista quando o servidor confirmou.
   useEffect(() => {

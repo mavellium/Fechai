@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { useActionToast } from "@/components/ui/toast";
 import { useActionState } from "react";
 import { Pencil, TrendingUp, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -33,6 +34,7 @@ export function FinancialView({ summary }: { summary: FinancialSummary }) {
   const confirmNavigation = useUnsavedNavigation();
   const close = () => confirmNavigation(() => dialog.current?.close(), dialog.current);
   const [state, formAction, pending] = useActionState(saveLeadValue, null);
+  useActionToast(state, pending, { entity: "valor do lead" });
 
   useEffect(() => {
     if (state?.ok) dialog.current?.close();

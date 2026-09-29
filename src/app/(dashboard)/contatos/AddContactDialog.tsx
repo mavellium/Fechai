@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { useActionToast } from "@/components/ui/toast";
 import { useActionState } from "react";
 import { Plus, X } from "lucide-react";
 import posthog from "posthog-js";
@@ -20,6 +21,7 @@ export function AddContactDialog({ label = "Novo contato" }: { label?: string })
   const confirmNavigation = useUnsavedNavigation();
   const close = () => confirmNavigation(() => ref.current?.close(), ref.current);
   const [state, formAction, pending] = useActionState(addContact, null);
+  useActionToast(state, pending, { entity: "contato", action: "create" });
 
   useEffect(() => {
     if (state?.ok) ref.current?.close();

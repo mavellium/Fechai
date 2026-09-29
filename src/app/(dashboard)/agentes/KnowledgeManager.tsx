@@ -1,9 +1,10 @@
 "use client";
 
 import { useRef, useState, useTransition, type ChangeEvent, type FormEvent } from "react";
+import { useActionToast } from "@/components/ui/toast";
 import { Download, FileText, Trash2, X } from "lucide-react";
 import posthog from "posthog-js";
-import { Alert, FormFeedback } from "@/components/ui/alert";
+import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmButton } from "@/components/ui/confirm-dialog";
@@ -36,6 +37,7 @@ const STATUS: Record<string, { label: string; tone: "success" | "warn" | "danger
 export function KnowledgeManager({ agentId, documents }: { agentId: string; documents: Doc[] }) {
   const [state, setState] = useState<Result | null>(null);
   const [pending, setPending] = useState(false);
+  useActionToast(state, pending, { entity: "documento", action: "create" });
   const [files, setFiles] = useState<SelectedKnowledgeFile[]>([]);
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
@@ -171,7 +173,6 @@ export function KnowledgeManager({ agentId, documents }: { agentId: string; docu
 
           {fileError && <Alert tone="warn">{fileError}</Alert>}
 
-          <FormFeedback error={state?.error} info={state?.info} />
 
           {progress && <p role="status" className="text-sm text-white/70">{progress}</p>}
           <Button type="submit" loading={pending} loadingLabel="Enviando documentos">

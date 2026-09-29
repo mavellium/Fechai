@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useState, useTransition } from "react";
-import { FormFeedback } from "@/components/ui/alert";
+import { useActionToast } from "@/components/ui/toast";
 import { Button } from "@/components/ui/button";
 import { Field, fieldProps } from "@/components/ui/field";
 import { Textarea } from "@/components/ui/textarea";
@@ -14,6 +14,7 @@ export function VoicePromptForm({ agentId, initial }: { agentId: string; initial
   const [saved, setSaved] = useState(initial);
   const [state, setState] = useState<Result | null>(null);
   const [pending, startTransition] = useTransition();
+  useActionToast(state, pending, { entity: "instrução de voz", gender: "f" });
   const inputId = useId();
 
   function save() {
@@ -50,9 +51,6 @@ export function VoicePromptForm({ agentId, initial }: { agentId: string; initial
         <Button type="button" variant="outline" onClick={save} disabled={pending || value.trim() === saved}>
           {pending ? "Salvando..." : "Salvar instruções"}
         </Button>
-      </div>
-      <div className="mt-2" aria-live="polite">
-        <FormFeedback error={state?.error} info={state?.ok ? state.info : undefined} />
       </div>
     </div>
   );

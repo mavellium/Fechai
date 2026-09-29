@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useRef } from "react";
+import { useActionToast } from "@/components/ui/toast";
 import { Plus } from "lucide-react";
 import posthog from "posthog-js";
 import { Button } from "@/components/ui/button";
@@ -21,6 +22,7 @@ export function NewAgentButton({ usage }: { usage: AgentUsage }) {
   const confirmNavigation = useUnsavedNavigation();
   const close = () => confirmNavigation(() => ref.current?.close(), ref.current);
   const [state, formAction, pending] = useActionState(createAgentAction, null);
+  useActionToast(state, pending, { entity: "agente", action: "create" });
 
   if (!usage.canCreate) {
     return (

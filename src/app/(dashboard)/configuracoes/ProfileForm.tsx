@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useId } from "react";
-import { FormFeedback } from "@/components/ui/alert";
+import { useActionToast } from "@/components/ui/toast";
 import { Button } from "@/components/ui/button";
 import { Field, fieldProps } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -10,6 +10,7 @@ import { UnsavedForm } from "@/components/ui/unsaved-changes";
 
 export function ProfileForm({ name, email }: { name: string; email: string }) {
   const [state, formAction, pending] = useActionState(updateProfile, null);
+  useActionToast(state, pending, { entity: "perfil", action: "update" });
   const nameId = useId();
   const emailId = useId();
 
@@ -27,7 +28,6 @@ export function ProfileForm({ name, email }: { name: string; email: string }) {
         <Input {...fieldProps(emailId, { hint: true })} value={email} disabled readOnly />
       </Field>
 
-      <FormFeedback error={state?.error} info={state?.info} />
 
       <Button type="submit" loading={pending} loadingLabel="Salvando perfil">
         Salvar perfil

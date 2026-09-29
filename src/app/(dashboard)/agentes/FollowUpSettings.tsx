@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useId, useMemo, useState } from "react";
+import { useActionToast } from "@/components/ui/toast";
 import { Trash2 } from "lucide-react";
 import {
   FOLLOWUP_UNITS,
@@ -15,7 +16,6 @@ import {
   type FollowUpSequenceKey,
   type FollowUpUnit,
 } from "@/modules/follow-up/config";
-import { FormFeedback } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SelectMenu } from "@/components/ui/select-menu";
@@ -81,6 +81,7 @@ function fromDraft(seq: SequenceDraft): FollowUpSequence {
 
 export function FollowUpSettings({ agentId, config }: { agentId: string; config: FollowUpConfig }) {
   const [state, formAction, pending] = useActionState(saveFollowUpConfigAction, null);
+  useActionToast(state, pending, { entity: "follow-up" });
   const baseId = useId();
 
   const [sequences, setSequences] = useState<Record<FollowUpSequenceKey, SequenceDraft>>(() => ({
@@ -300,7 +301,6 @@ export function FollowUpSettings({ agentId, config }: { agentId: string; config:
         do agente. Variável sem valor na conversa some da frase.
       </p>
 
-      <FormFeedback error={state?.error} info={state?.info} />
 
       <Button type="submit" variant="outline" loading={pending} loadingLabel="Salvando follow-up">
         Salvar follow-up

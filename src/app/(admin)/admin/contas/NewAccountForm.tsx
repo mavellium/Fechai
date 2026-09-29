@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useId, useState } from "react";
+import { useActionToast } from "@/components/ui/toast";
 import { Plus, ShieldAlert, UserRound } from "lucide-react";
 import { PLANS } from "@/modules/billing/plans";
 import { Alert } from "@/components/ui/alert";
@@ -40,6 +41,7 @@ export function NewAccountForm({
   };
 
   const [state, formAction, pending] = useActionState(createAccount, null);
+  useActionToast(state, pending, { entity: "conta", gender: "f", action: "create" });
   const [copyError, setCopyError] = useState<string | null>(null);
 
   return (

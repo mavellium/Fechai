@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { useActionToast } from "@/components/ui/toast";
 import { useActionState } from "react";
 import { Clock, Filter, Pencil, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -43,6 +44,7 @@ export function TriagePanel({ triage }: { triage: TriageSummary }) {
   const confirmNavigation = useUnsavedNavigation();
   const close = () => confirmNavigation(() => dialog.current?.close(), dialog.current);
   const [state, formAction, pending] = useActionState(saveAttendanceCost, null);
+  useActionToast(state, pending, { entity: "custo de atendimento" });
 
   useEffect(() => {
     if (state?.ok) dialog.current?.close();

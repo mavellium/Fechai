@@ -1,5 +1,6 @@
 "use client";
 import { startTransition, useActionState, useRef, useState, useTransition } from "react";
+import { useActionToast } from "@/components/ui/toast";
 import { Check, ChevronDown, Download, Pencil, Plus, Sparkles, Trash2 } from "lucide-react";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -73,6 +74,7 @@ export function MonthlyRoiEditor({ tenantId, report: r, sources, caseCandidates 
   const [acknowledged, setAcknowledged] = useState(false);
   const [busy, start] = useTransition();
   const [state, submit, saving] = useActionState(saveMonthlyRoi.bind(null, tenantId, r.month), null);
+  useActionToast(state, saving, { entity: "relatório mensal" });
   const confirmNavigation = useUnsavedNavigation();
   const locked = r.status === "ready";
   const pending = busy || saving;
@@ -205,7 +207,7 @@ export function MonthlyRoiEditor({ tenantId, report: r, sources, caseCandidates 
           {[...new Map([...c.completedStatusTypes.map((type) => ({ type, description: type })), ...loaded.clinicorpStatusTypes].map((s) => [s.type, s])).values()].map((s) => <div key={s.type} className="flex items-center gap-3"><Switch label={`Comparecimento: ${s.description}`} disabled={pending || s.type.toUpperCase() === "CONFIRMED"} checked={statuses.includes(s.type)} onCheckedChange={(checked) => setStatuses(checked ? [...statuses, s.type] : statuses.filter((type) => type !== s.type))} /><span className="text-sm">{s.description}</span></div>)}<input type="hidden" name="completedStatusTypes" value={JSON.stringify(statuses)} />
         </div></details>
         <Button type="submit" loading={saving}><Check size={15} aria-hidden />Salvar revisão</Button>
-      </fieldset><FormFeedback error={error ?? state?.error} info={state?.info} />
+      </fieldset><FormFeedback error={error} />
     </UnsavedForm>}
     <div className="mt-5 space-y-4 border-t border-ink/10 pt-5 panel:border-white/10">
       {!locked && !r.current.trackingComplete && <div className="flex items-start gap-3"><Switch checked={acknowledged} onCheckedChange={setAcknowledged} disabled={pending} label="Cobertura parcial revisada" /><p className="text-sm text-neutral panel:text-white/65">Revisei a cobertura parcial. Os eventos históricos ausentes aparecerão como não medidos.</p></div>}

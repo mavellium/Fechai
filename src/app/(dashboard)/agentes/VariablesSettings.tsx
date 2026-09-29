@@ -1,8 +1,8 @@
 "use client";
 
 import { useRef, useState, useTransition } from "react";
+import { useActionToast } from "@/components/ui/toast";
 import { Plus, Trash2 } from "lucide-react";
-import { FormFeedback } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -15,6 +15,7 @@ export function VariablesSettings({ agentId, initial }: { agentId: string; initi
   const [saved, setSaved] = useState(JSON.stringify(initial));
   const [state, setState] = useState<Result | null>(null);
   const [pending, startTransition] = useTransition();
+  useActionToast(state, pending, { entity: "variáveis", gender: "f", plural: true });
   const rootRef = useRef<HTMLDivElement>(null);
   useUnsavedChanges(pending || JSON.stringify(rows) !== saved, "Variáveis", rootRef, save);
 
@@ -76,7 +77,6 @@ export function VariablesSettings({ agentId, initial }: { agentId: string; initi
         <Plus size={15} aria-hidden />Adicionar variável
       </Button>
     </fieldset>
-    <FormFeedback error={state?.error} info={state?.info} />
     <Button type="button" onClick={save} loading={pending} loadingLabel="Salvando variáveis">Salvar variáveis</Button>
   </div>;
 }

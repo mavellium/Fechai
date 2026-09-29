@@ -1,9 +1,9 @@
 "use client";
 
 import { useActionState, useId, useState } from "react";
+import { useActionToast } from "@/components/ui/toast";
 import { Star } from "lucide-react";
 import posthog from "posthog-js";
-import { FormFeedback } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field, fieldProps } from "@/components/ui/field";
 import { Textarea } from "@/components/ui/textarea";
@@ -11,6 +11,7 @@ import { submitFeedback } from "./actions";
 
 export function FeedbackForm() {
   const [state, formAction, pending] = useActionState(submitFeedback, null);
+  useActionToast(state, pending, { entity: "feedback", action: "create" });
   const [rating, setRating] = useState(0);
   const messageId = useId();
 
@@ -78,7 +79,6 @@ export function FeedbackForm() {
         />
       </Field>
 
-      <FormFeedback info={state?.info} />
 
       <Button type="submit" loading={pending} loadingLabel="Enviando feedback">
         Enviar feedback

@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useState } from "react";
+import { useActionToast } from "@/components/ui/toast";
 import { Eye, EyeOff } from "lucide-react";
 import {
   composeSystemPrompt,
@@ -8,7 +9,6 @@ import {
   PERSONA_GROUPS,
   type PersonaAnswers,
 } from "@/modules/agent-engine/persona";
-import { FormFeedback } from "@/components/ui/alert";
 import { Field, fieldProps } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -47,6 +47,7 @@ export function PersonaForm({
   initial: Partial<PersonaAnswers>;
 }) {
   const [state, formAction, pending] = useActionState(savePersona, null);
+  useActionToast(state, pending, { entity: "persona", gender: "f" });
   const [answers, setAnswers] = useState<PersonaAnswers>({ ...EMPTY, ...initial });
   const [showPreview, setShowPreview] = useState(false);
 
@@ -124,7 +125,6 @@ export function PersonaForm({
         )}
       </div>
 
-      <FormFeedback error={state?.error} info={state?.info} />
 
       <Button type="submit" loading={pending} loadingLabel="Salvando persona">
         Salvar persona

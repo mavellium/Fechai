@@ -1,6 +1,7 @@
 "use client";
 
 import { startTransition, useActionState, useRef, useState } from "react";
+import { useActionToast } from "@/components/ui/toast";
 import type { ScheduleConfig } from "@/modules/scheduling/config";
 import {
   MAX_DURATIONS,
@@ -13,7 +14,6 @@ import { MetaReminderTemplatePicker } from "./MetaReminderTemplatePicker";
 import { ReminderAudienceSettings } from "./ReminderAudienceSettings";
 import type { MetaReminderTemplate } from "@/modules/scheduling/meta-reminder";
 import { TIMEZONES } from "@/modules/scheduling/time";
-import { FormFeedback } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field, fieldProps } from "@/components/ui/field";
 import { InfoHint } from "@/components/ui/info-hint";
@@ -65,6 +65,7 @@ export function ScheduleSettings({
   metaReminders?: boolean;
 }) {
   const [state, formAction, pending] = useActionState(saveScheduleConfigAction, null);
+  useActionToast(state, pending, { entity: "configuração de agendamento", gender: "f" });
   const [weeklyAvailability, setWeeklyAvailability] = useState(() => getWeeklyAvailability(config));
   // `minutes: null` é a linha em branco: existe enquanto a pessoa digita e é o
   // estado em que cada tipo importado do Clinicorp nasce (a API não diz a
@@ -398,7 +399,6 @@ export function ScheduleSettings({
       <input type="hidden" name="metaReminderTemplate" value={metaTemplate ? JSON.stringify(metaTemplate) : ""} />
 
 
-      <FormFeedback error={state?.error} info={state?.info} />
       <Button type="submit" variant="outline" loading={pending} loadingLabel="Salvando agendamento">
         Salvar configurações de agendamento
       </Button>

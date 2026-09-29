@@ -1,8 +1,9 @@
 "use client";
 
 import { useActionState, useState, useTransition, type ChangeEvent } from "react";
+import { useActionToast } from "@/components/ui/toast";
 import posthog from "posthog-js";
-import { Alert, FormFeedback } from "@/components/ui/alert";
+import { Alert } from "@/components/ui/alert";
 import { StatusDot } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/copy-button";
@@ -48,6 +49,7 @@ export function SnippetBox({
   const [copyError, setCopyError] = useState<string | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
   const [state, formAction, pending] = useActionState(updateWidgetConfig, null);
+  useActionToast(state, pending, { entity: "configuração do widget", gender: "f" });
   const [togglePending, startToggle] = useTransition();
   const pullZone = process.env.NEXT_PUBLIC_BUNNY_PULL_ZONE;
 
@@ -241,7 +243,6 @@ export function SnippetBox({
           </div>
         </Field>
 
-        <FormFeedback error={state?.error} info={state?.info} />
 
         <Button type="submit" variant="outline" size="sm" loading={pending} loadingLabel="Salvando">
           Salvar personalização

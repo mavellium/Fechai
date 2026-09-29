@@ -1,8 +1,8 @@
 "use client";
 
 import { useId, useState, useTransition } from "react";
+import { useActionToast } from "@/components/ui/toast";
 import { Plus, X } from "lucide-react";
-import { FormFeedback } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field, fieldProps } from "@/components/ui/field";
 import { InfoHint } from "@/components/ui/info-hint";
@@ -39,6 +39,7 @@ export function SpeechBlocklistForm({ agentId, initial }: { agentId: string; ini
   const [draft, setDraft] = useState("");
   const [state, setState] = useState<Result | null>(null);
   const [pending, startTransition] = useTransition();
+  useActionToast(state, pending, { entity: "lista de termos", gender: "f" });
   const inputId = useId();
 
   function commit(next: string[], anterior: string[]) {
@@ -150,9 +151,6 @@ export function SpeechBlocklistForm({ agentId, initial }: { agentId: string; ini
         </ul>
       )}
 
-      <div className="mt-3">
-        <FormFeedback error={state?.error} info={state?.ok ? state.info : undefined} />
-      </div>
     </div>
   );
 }

@@ -1,10 +1,10 @@
 "use client";
 
 import { useActionState, useCallback, useEffect, useId, useState, useTransition } from "react";
+import { useActionToast } from "@/components/ui/toast";
 import type { GroupListResult } from "@/modules/agent-engine/handoff";
 import { GAP_MODES, GAP_RESPONDERS, type GapSettings } from "@/modules/knowledge-gaps/settings";
 import { TIMEZONES } from "@/modules/scheduling/time";
-import { FormFeedback } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field, Fieldset } from "@/components/ui/field";
 import { RadioCards } from "@/components/ui/radio-cards";
@@ -25,6 +25,7 @@ const HOURS = Array.from({ length: 24 }, (_, h) => ({ value: String(h), label: `
  */
 export function GapSettingsForm({ settings }: { settings: GapSettings }) {
   const [state, formAction, pending] = useActionState(saveGapSettingsAction, null);
+  useActionToast(state, pending, { entity: "configuração das perguntas sem resposta", gender: "f" });
   const [mode, setMode] = useState(settings.onUnanswered);
   const [notifyEmail, setNotifyEmail] = useState(settings.notifyEmail);
   const [notifyWhatsapp, setNotifyWhatsapp] = useState(settings.notifyWhatsapp);
@@ -130,7 +131,6 @@ export function GapSettingsForm({ settings }: { settings: GapSettings }) {
         </div>
       </Fieldset>
 
-      <FormFeedback error={state?.error} info={state?.info} />
       <Button type="submit" variant="outline" loading={pending} loadingLabel="Salvando">
         Salvar regra e avisos
       </Button>

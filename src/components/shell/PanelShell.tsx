@@ -8,6 +8,7 @@ import { type UsageNavData } from "./UsageNav";
 import { Sidebar } from "./Sidebar";
 import { MobileNav } from "./MobileNav";
 import { UnsavedChangesProvider } from "@/components/ui/unsaved-changes";
+import { ToastProvider } from "@/components/ui/toast";
 
 /**
  * Casca comum do dashboard e do admin: barra lateral no desktop, gaveta no
@@ -87,7 +88,7 @@ export function PanelShell({
     // minimizar) ficava empurrado abaixo da dobra. Fixando a casca na altura
     // da viewport e deixando só o `main` rolar, a sidebar (e seu rodapé)
     // ficam sempre visíveis.
-    <UnsavedChangesProvider><div data-surface="dark" className="flex h-screen overflow-hidden bg-ink">
+    <UnsavedChangesProvider><div data-surface="dark" className="flex h-screen overflow-hidden bg-ink"><ToastProvider>
       <a
         href="#conteudo"
         className="sr-only rounded-control bg-white px-4 py-2 text-sm font-medium text-ink focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50"
@@ -153,6 +154,6 @@ export function PanelShell({
           <div className="relative flex min-h-0 flex-1 flex-col">{children}</div>
         </main>
       </div>
-    </div></UnsavedChangesProvider>
+    </ToastProvider></div></UnsavedChangesProvider>
   );
 }

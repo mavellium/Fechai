@@ -1,8 +1,8 @@
 "use client";
 
 import { useId, useState, useTransition } from "react";
+import { useActionToast } from "@/components/ui/toast";
 import { AlertTriangle } from "lucide-react";
-import { FormFeedback } from "@/components/ui/alert";
 import { InfoHint } from "@/components/ui/info-hint";
 import { SelectMenu } from "@/components/ui/select-menu";
 import { VOICE_STYLES, parseVoiceStyle } from "@/modules/voice/style";
@@ -27,6 +27,7 @@ export function VoiceStyleSelect({ agentId, initial }: { agentId: string; initia
   const [value, setValue] = useState(() => parseVoiceStyle(initial).key);
   const [state, setState] = useState<Result | null>(null);
   const [, startTransition] = useTransition();
+  useActionToast(state, false, { entity: "estilo de voz" });
   const labelId = useId();
 
   const atual = parseVoiceStyle(value);
@@ -78,9 +79,6 @@ export function VoiceStyleSelect({ agentId, initial }: { agentId: string; initia
         </p>
       )}
 
-      <div className="mt-3" aria-live="polite">
-        <FormFeedback error={state?.error} info={state?.ok ? state.info : undefined} />
-      </div>
     </div>
   );
 }
