@@ -41,7 +41,7 @@ function authHeader(cred: ClinicorpCredentials): string {
   return `Basic ${basic}`;
 }
 
-type CallResult<T> = { ok: true; data: T } | { ok: false; error: string; status?: number };
+type CallResult<T> = { ok: true; data: T; status?: number; emptyBody?: boolean } | { ok: false; error: string; status?: number };
 
 /**
  * Uma chamada à API. Devolve o erro em vez de lançar porque quem chama decide
@@ -87,7 +87,7 @@ async function call<T>(
 
     // Alguns endpoints respondem 200 com corpo vazio.
     const text = await res.text();
-    if (!text.trim()) return { ok: true, data: null as T };
+    if (!text.trim()) return { ok: true, data: null as T, status: res.status, emptyBody: true };
     const data = JSON.parse(text) as T;
     const row = (Array.isArray(data) ? data[0] : data) as Record<string, unknown> | null;
     if (row && typeof row === "object" &&
@@ -101,7 +101,7 @@ async function call<T>(
           : "O Clinicorp recusou a operação sem explicar o motivo. Confira as credenciais e os dados do agendamento.",
       };
     }
-    return { ok: true, data };
+    return { ok: true, data, status: res.status, emptyBody: false };
   } catch (err) {
     const error =
       err instanceof Error && err.name === "TimeoutError"
@@ -332,12 +332,13 @@ export type ClinicorpSyncResult =
 // ---------------------------------------------------------------------------
 
 /**
- * Só os dígitos. O `/patient/get` aceita telefone em qualquer formato, mas o
- * nosso lead vem do WhatsApp como "5547999999999" e mandar assim é o formato
- * que a busca de lá reconhece sem ambiguidade.
+ * Telefone brasileiro no formato do Clinicorp: DDD + número, sem o 55 do
+ * WhatsApp. O tamanho distingue o código do país de um DDD 55 legítimo.
+ * A normalização é só para a integração; o contato mantém seu número original.
  */
-function digits(phone: string): string {
-  return phone.replace(/\D/g, "");
+function clinicorpPhone(phone: string): string {
+  const digits = phone.replace(/\D/g, "");
+  return /^55\d{10,11}$/.test(digits) ? digits.slice(2) : digits;
 }
 
 /**
@@ -353,12 +354,16 @@ async function resolvePatientId(
   integration: ClinicorpIntegration,
   lead: { name: string | null; phone: string | null },
 ): Promise<string | null> {
-  const phone = lead.phone ? digits(lead.phone) : "";
+  const phone = lead.phone ? clinicorpPhone(lead.phone) : "";
   if (!phone) return null;
 
   const found = await call<unknown>(integration, "/patient/get", {
     query: { subscriber_id: integration.subscriberId, Phone: phone },
   });
+
+  // Falha de busca não prova que o paciente não existe. Não crie outro cadastro
+  // quando a API não conseguiu conferir o telefone.
+  if (!found.ok) return null;
 
   if (found.ok && found.data) {
     // O endpoint devolve o objeto direto, mas já respondeu array em algumas
@@ -390,7 +395,20 @@ async function resolvePatientId(
     | Record<string, unknown>
     | undefined;
   const id = row?.PatientId ?? row?.id ?? row?.Id;
-  return id ? String(id) : null;
+  if (id) return String(id);
+
+  // O retorno documentado de /patient/create contém os dados do paciente, mas
+  // não promete PatientId. Consulte o cadastro pelo mesmo telefone para obter
+  // o identificador de /patient/get; nunca repita o POST para tentar achar o ID.
+  const verified = await call<unknown>(integration, "/patient/get", {
+    query: { subscriber_id: integration.subscriberId, Phone: phone },
+  });
+  if (!verified.ok) return null;
+  const verifiedRow = (Array.isArray(verified.data) ? verified.data[0] : verified.data) as
+    | Record<string, unknown>
+    | undefined;
+  const verifiedId = verifiedRow?.PatientId;
+  return verifiedId && verifiedRow?.Status !== "DELETED" ? String(verifiedId) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -402,6 +420,7 @@ export type ClinicorpEventInput = {
   /** Nome do paciente, que pode ser diferente de quem enviou a mensagem. */
   patientName?: string;
   notes?: string | null;
+  serviceType?: string | null;
   startsAt: Date;
   endsAt: Date;
   timeZone: string;
@@ -455,7 +474,7 @@ export async function pushAppointmentToClinicorp(
     if (!integration.businessId) {
       return await failed("Nenhuma clínica escolhida para receber os agendamentos: escolha a clínica abaixo e salve as preferências.");
     }
-    if (!isTest && (!input.lead?.phone || !digits(input.lead.phone))) {
+    if (!isTest && (!input.lead?.phone || !clinicorpPhone(input.lead.phone))) {
       return await failed(input.lead
         ? "O contato não tem telefone, e o Clinicorp precisa dele para achar ou cadastrar o paciente. Adicione o telefone em Contatos."
         : "O horário não tem contato vinculado, e o Clinicorp precisa de um paciente com telefone. Vincule um contato ao marcar.");
@@ -491,6 +510,15 @@ export async function pushAppointmentToClinicorp(
       return await failed("O identificador do paciente é inválido ou excede a precisão suportada.");
     }
 
+    // O contrato de create_appointment_by_api documenta Procedures, não Notes.
+    // Inclua também o motivo clínico da conversa, além do tipo que define a duração.
+    const procedures = [
+      ...(isTest ? ["Agendamento de teste feito no chat de teste do fechai. Pode excluir."] : []),
+      input.serviceType?.trim(), input.notes?.trim(),
+    ].filter(Boolean).join("\n");
+    const mobilePhone = !isTest && samePerson && input.lead?.phone
+      ? clinicorpPhone(input.lead.phone) : undefined;
+
     const res = await call<unknown>(integration, "/appointment/create_appointment_by_api", {
       method: "POST",
       body: {
@@ -499,16 +527,14 @@ export async function pushAppointmentToClinicorp(
         ...(integration.dentistId ? { Dentist_PersonId: Number(integration.dentistId) } : {}),
         ...(patientId ? { Patient_PersonId: Number(patientId) } : {}),
         PatientName: isTest ? "TESTE fechai (chat de teste do agente)" : patientName,
-        ...(!isTest && samePerson && input.lead?.phone ? { MobilePhone: digits(input.lead.phone) } : {}),
+        ...(mobilePhone ? { MobilePhone: mobilePhone } : {}),
         // A data vai como o dia local em ISO. Mandar o instante UTC cru faria o
         // agendamento cair no dia anterior para horários da manhã no Brasil.
         date: `${localDate(input.startsAt, input.timeZone)}T00:00:00.000Z`,
         fromTime: localTime(input.startsAt, input.timeZone),
         toTime: localTime(input.endsAt, input.timeZone),
         ...(categoryId ? { CategoryId: Number(categoryId) } : {}),
-        ...(isTest
-          ? { Notes: ["Agendamento de teste feito no chat de teste do fechai. Pode excluir.", input.notes].filter(Boolean).join("\n") }
-          : input.notes ? { Notes: input.notes } : {}),
+        ...(procedures ? { Procedures: procedures } : {}),
       },
     });
 
@@ -523,10 +549,27 @@ export async function pushAppointmentToClinicorp(
       | Record<string, unknown>
       | undefined;
     const id = row?.id ?? row?.Id;
-    if (!id || !/^\d+$/.test(String(id)) || !Number.isSafeInteger(Number(id)) || Number(id) <= 0 ||
-        (row?.Status && row.Status !== "CREATED")) {
+    const validId = Boolean(id) && /^\d+$/.test(String(id)) && Number.isSafeInteger(Number(id)) && Number(id) > 0;
+    if (!validId || (row?.Status && row.Status !== "CREATED")) {
       const status = row?.Status ? ` (status "${String(row.Status)}")` : "";
-      return await failed(`O Clinicorp respondeu sem confirmar a criação${status}. Confira a agenda da clínica antes de marcar de novo, para não duplicar.`);
+      const reason = clinicorpReason(res.data);
+      const detail = reason ? ` Motivo informado: "${reason}".`
+        : res.emptyBody ? ` Resposta HTTP ${res.status} sem conteúdo.`
+          : !validId ? " A resposta não contém um identificador de agendamento válido."
+            : " O status retornado não confirma a criação.";
+      // Nunca registre o corpo, os headers ou os valores dos campos: podem
+      // conter credenciais e dados do paciente. A estrutura permite diagnosticar
+      // um retorno vazio ou diferente do contrato sem expor essas informações.
+      console.error("[clinicorp] criar agendamento sem confirmação", {
+        tenantId, httpStatus: res.status, emptyBody: res.emptyBody,
+        responseType: res.data === null ? "null" : Array.isArray(res.data) ? "array" : typeof res.data,
+        ...(Array.isArray(res.data) ? { rowCount: res.data.length } : {}),
+        responseFields: row && typeof row === "object" ? Object.keys(row).slice(0, 25) : [],
+        hasId: id !== undefined && id !== null, idType: typeof id, idValid: validId,
+        statusProvided: Boolean(row?.Status), statusConfirmed: row?.Status === "CREATED",
+        isTest, patientProvided: Boolean(patientId), phoneProvided: Boolean(mobilePhone),
+      });
+      return await failed(`O Clinicorp respondeu sem confirmar a criação${status}.${detail} Confira a agenda da clínica antes de marcar de novo, para não duplicar.`);
     }
     await recordOutcome(tenantId, null);
     return { status: "synced", appointmentId: String(id) };

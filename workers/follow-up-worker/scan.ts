@@ -85,8 +85,9 @@ export function nextFollowUp(conv: FollowUpCandidate, cfg: FollowUpConfig): Next
   // decide isso é a varredura, que já filtra pelo agente na consulta.
   if (conv.agentEnabled === false) return null;
   // Follow-up tenta recuperar uma venda/conversa abandonada. Depois que há
-  // consulta atual ou futura, o objetivo já foi alcançado; dali em diante quem
-  // fala sozinho são os lembretes da consulta, não uma cobrança genérica.
+  // consulta (marcada ou realizada, futura ou passada), o objetivo já foi
+  // alcançado; dali em diante quem fala sozinho são os lembretes da consulta,
+  // não uma cobrança genérica. Só consulta cancelada não conta.
   if (conv.hasActiveAppointment) return null;
   if (!conv.lastInboundAt) return null;
   // Só faz sentido se a última mensagem foi do agente (o contato ficou em
@@ -179,12 +180,14 @@ export async function scanAndSendFollowUps(now: Date = new Date()) {
       // esteira automática não pode falar por cima de quem está atendendo.
       agentPaused: false,
       lastInboundAt: { gte: since },
+      // Qualquer consulta não cancelada (marcada ou realizada, futura ou
+      // passada) encerra o follow-up: o objetivo já foi alcançado.
       // Vale para agendamento do agente e manual: ambos se ligam ao Lead. Usar
       // `conversation.appointments` deixaria passar o manual, que não guarda
       // `conversationId`.
       lead: {
         appointments: {
-          none: { status: "scheduled", endsAt: { gt: now } },
+          none: { status: { in: ["scheduled", "done"] } },
         },
       },
     },
@@ -196,7 +199,7 @@ export async function scanAndSendFollowUps(now: Date = new Date()) {
           // `nextFollowUp` e protege o envio mesmo se a consulta principal for
           // ampliada/refatorada depois.
           appointments: {
-            where: { status: "scheduled", endsAt: { gt: now } },
+            where: { status: { in: ["scheduled", "done"] } },
             select: { id: true },
             take: 1,
           },

@@ -338,7 +338,7 @@ export function TenantRow(t: Props) {
                 <Eye size={15} aria-hidden />
                 Ver como
               </Button>
-              {!t.isAdminAccount && <ButtonLink href={`/admin/relatorios/${t.id}`} variant="outline" size="sm">ROI mensal</ButtonLink>}
+              {!t.isAdminAccount && <ButtonLink href={`/admin/relatorios/${t.id}`} variant="outline" size="sm">Relatórios</ButtonLink>}
 
               <div className="flex items-center gap-2">
                 <ConfirmButton

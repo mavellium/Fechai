@@ -46,7 +46,11 @@ restaurável nem coleta de logs de servidor ou da agenda externa. A solicitaçã
 
 ## Relatórios mensais de ROI
 
-O menu **ROI mensal** abre `/admin/relatorios`, com clientes ativos que possuem
+A conversa "Fazer com I.A" é guardada por cliente e competência em `MonthlyRoiAiChat`
+(`reports/monthly-ai-chat.ts`, máx. 100 mensagens) e reaparece ao reabrir o painel; o
+admin pode apagá-la. Guardar nunca derruba a resposta da IA.
+
+O menu **Relatórios** abre `/admin/relatorios`, com clientes ativos que possuem
 usuário `OWNER` que utiliza o produto. A listagem exibe Cliente, Data de entrada
 do cliente (`Tenant.createdAt`, data de Brasília), Revisão e Ação, com
 cabeçalhos centralizados e selo **Por clientes**, sem contador. Entrega e

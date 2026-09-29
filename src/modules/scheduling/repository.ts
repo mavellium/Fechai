@@ -221,6 +221,7 @@ export async function createAppointment(input: CreateAppointmentInput) {
     title: input.title,
     patientName: input.patientName,
     notes: input.notes,
+    serviceType: input.serviceType,
     startsAt: input.startsAt,
     endsAt,
     timeZone: input.timezone,
@@ -326,6 +327,7 @@ export async function rescheduleAppointment(input: {
       ...event,
       patientName: previous.patientName ?? undefined,
       notes: previous.notes,
+      serviceType: previous.serviceType,
       lead,
     })
       : Promise.resolve({ status: "failed", error: "Não foi possível remover o horário anterior no Clinicorp." } as const),
@@ -351,6 +353,7 @@ export async function rescheduleAppointment(input: {
       }) : Promise.resolve(googleEventId),
       clinicorpRemoved && previous.clinicorpAppointmentId ? pushAppointmentToClinicorp(input.tenantId, {
         title: previous.title, patientName: previous.patientName ?? undefined, notes: previous.notes,
+        serviceType: previous.serviceType,
         startsAt: previous.startsAt, endsAt: previous.endsAt, timeZone: input.timezone, lead,
       }) : Promise.resolve({ status: "skipped" } as const),
     ]);

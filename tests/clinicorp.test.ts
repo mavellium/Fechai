@@ -65,7 +65,7 @@ describe("envio de agendamentos ao Clinicorp", () => {
     expect(JSON.parse(String(init.body))).toMatchObject({
       Clinic_BusinessId: 4791226171916288, Dentist_PersonId: 222222222222,
       Patient_PersonId: 333333333333, CategoryId: 1234567890125,
-      date: "2026-09-14T00:00:00.000Z", fromTime: "16:30", toTime: "16:45", MobilePhone: "5511999990000",
+      date: "2026-09-14T00:00:00.000Z", fromTime: "16:30", toTime: "16:45", MobilePhone: "11999990000",
     });
     expect(db.clinicorpIntegration.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ lastError: null, lastSyncAt: expect.any(Date) }) }));
   });
@@ -86,7 +86,82 @@ describe("envio de agendamentos ao Clinicorp", () => {
     expect(body.PatientName).toBe("Maria Souza");
     expect(body.Patient_PersonId).toBeUndefined();
     expect(body.MobilePhone).toBeUndefined();
-    expect(body.Notes).toBe("Primeira consulta");
+    expect(body.Procedures).toBe("Primeira consulta");
+    expect(body).not.toHaveProperty("Notes");
+  });
+
+  it.each([
+    ["+55 (11) 99999-0000", "11999990000"],
+    ["5511999990000", "11999990000"],
+    ["+55 (11) 3333-4444", "1133334444"],
+    ["(11) 99999-0000", "11999990000"],
+    ["(55) 99999-0000", "55999990000"],
+    ["+55 (55) 99999-0000", "55999990000"],
+  ])("normaliza %s só no Clinicorp para %s, preservando DDD 55", async (phone, expected) => {
+    const lead = { name: event.lead.name, phone };
+    await pushAppointmentToClinicorp("tenant-1", { ...event, lead });
+    const [lookup] = fetchMock.mock.calls.find(([url]) => url.pathname.endsWith("/patient/get"))!;
+    expect(lookup.searchParams.get("Phone")).toBe(expected);
+    const [, init] = fetchMock.mock.calls.find(([url]) => url.pathname.endsWith("/create_appointment_by_api"))!;
+    expect(JSON.parse(String(init.body)).MobilePhone).toBe(expected);
+    expect(lead.phone).toBe(phone);
+  });
+
+  it("cria paciente e agenda com o mesmo telefone sem código do país", async () => {
+    const original = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (url: URL, init?: RequestInit) => {
+      if (url.pathname.endsWith("/patient/get")) return json(null);
+      if (url.pathname.endsWith("/patient/create")) return json({ PatientId: 33 });
+      return original(url, init);
+    });
+    expect(await pushAppointmentToClinicorp("tenant-1", event)).toMatchObject({ status: "synced" });
+    const [, created] = fetchMock.mock.calls.find(([url]) => url.pathname.endsWith("/patient/create"))!;
+    const [, booked] = fetchMock.mock.calls.find(([url]) => url.pathname.endsWith("/create_appointment_by_api"))!;
+    expect(JSON.parse(String(created.body))).toMatchObject({ MobilePhone: "11999990000", IgnoreSameName: "X" });
+    expect(JSON.parse(String(booked.body))).toMatchObject({ MobilePhone: "11999990000", Patient_PersonId: 33 });
+  });
+
+  it("obtém PatientId por consulta quando o cadastro devolve só os dados documentados", async () => {
+    const original = fetchMock.getMockImplementation()!;
+    let lookups = 0;
+    fetchMock.mockImplementation(async (url: URL, init?: RequestInit) => {
+      if (url.pathname.endsWith("/patient/get")) return json(++lookups === 1 ? null : { PatientId: 88, Status: "ACTIVE" });
+      if (url.pathname.endsWith("/patient/create")) return json({ Name: event.lead.name, MobilePhone: "11999990000" });
+      return original(url, init);
+    });
+    expect(await pushAppointmentToClinicorp("tenant-1", event)).toMatchObject({ status: "synced" });
+    const lookupsSent = fetchMock.mock.calls.filter(([url]) => url.pathname.endsWith("/patient/get"));
+    expect(lookupsSent).toHaveLength(2);
+    for (const [url] of lookupsSent) expect(url.searchParams.get("Phone")).toBe("11999990000");
+    expect(fetchMock.mock.calls.filter(([url]) => url.pathname.endsWith("/patient/create"))).toHaveLength(1);
+    const [, booked] = fetchMock.mock.calls.find(([url]) => url.pathname.endsWith("/create_appointment_by_api"))!;
+    expect(JSON.parse(String(booked.body)).Patient_PersonId).toBe(88);
+  });
+
+  it("não cria paciente quando a busca pelo telefone falha", async () => {
+    const original = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (url: URL, init?: RequestInit) => url.pathname.endsWith("/patient/get")
+      ? json({ Message: "Consulta indisponível" }, 500) : original(url, init));
+    await pushAppointmentToClinicorp("tenant-1", event);
+    expect(fetchMock.mock.calls.some(([url]) => url.pathname.endsWith("/patient/create"))).toBe(false);
+    const [, booked] = fetchMock.mock.calls.find(([url]) => url.pathname.endsWith("/create_appointment_by_api"))!;
+    expect(JSON.parse(String(booked.body))).not.toHaveProperty("Patient_PersonId");
+  });
+
+  it("envia o tipo e a queixa da avaliação no campo Procedures documentado", async () => {
+    const result = await createAppointment({
+      tenantId: "tenant-1", leadId: "lead-1", title: event.lead.name,
+      notes: "Avaliar possibilidade de implante", serviceType: "Avaliação",
+      startsAt: event.startsAt, durationMinutes: 15, source: "agent", timezone: event.timeZone,
+    });
+    expect(result.clinicorpSync.status).toBe("synced");
+    expect(db.appointment.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ notes: "Avaliar possibilidade de implante", serviceType: "Avaliação" }),
+    }));
+    const [, init] = fetchMock.mock.calls.find(([url]) => url.pathname.endsWith("/create_appointment_by_api"))!;
+    const body = JSON.parse(String(init.body));
+    expect(body.Procedures).toBe("Avaliação\nAvaliar possibilidade de implante");
+    expect(body).not.toHaveProperty("Notes");
   });
 
   it.each([null, [], {}, [{ Status: "CREATED" }], [{ Status: "ERROR", id: 7 }], { error: "recusado" }])("não registra sucesso para resposta 200 sem criação válida: %j", async (body) => {
@@ -396,7 +471,8 @@ describe("agendamento do chat de teste", () => {
     expect(body()).not.toHaveProperty("MobilePhone");
     expect(body()).not.toHaveProperty("Patient_PersonId");
     expect(body().PatientName).toContain("TESTE");
-    expect(body().Notes).toContain("chat de teste");
+    expect(body().Procedures).toContain("chat de teste");
+    expect(body()).not.toHaveProperty("Notes");
     expect(db.clinicorpIntegration.update).not.toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ lastError: expect.stringContaining("telefone") }) }));
   });
 
@@ -428,6 +504,50 @@ describe("aviso de falha com o motivo", () => {
       : json({ message: "Profissional sem agenda neste horário" }, 400));
     expect(await pushAppointmentToClinicorp("tenant-1", event)).toMatchObject({ error: expect.stringContaining("Profissional sem agenda neste horário") });
     expect(lastError()).toContain('erro 400: "Profissional sem agenda neste horário"');
+  });
+
+  it.each([200, 204])("explica resposta HTTP %i vazia e mantém uma única reserva local", async (status) => {
+    integration.categoryDescription = null;
+    fetchMock.mockImplementation(async (url: URL) => url.pathname.endsWith("/patient/get")
+      ? json({ PatientId: 33 }) : new Response(status === 204 ? null : "", { status }));
+    const result = await createAppointment({
+      tenantId: "tenant-1", leadId: "lead-1", title: event.title,
+      startsAt: event.startsAt, durationMinutes: 15, source: "agent", timezone: event.timeZone,
+    });
+    expect(result).toMatchObject({ id: "appointment-local", clinicorpAppointmentId: null, clinicorpSync: { status: "failed" } });
+    expect(lastError()).toContain(`Resposta HTTP ${status} sem conteúdo`);
+    expect(db.appointment.create).toHaveBeenCalledOnce();
+    expect(db.appointment.updateMany).not.toHaveBeenCalled();
+    expect(fetchMock.mock.calls.filter(([url]) => url.pathname.endsWith("/create_appointment_by_api"))).toHaveLength(1);
+    expect(console.error).toHaveBeenCalledWith("[clinicorp] criar agendamento sem confirmação", expect.objectContaining({
+      httpStatus: status, emptyBody: true, responseType: "null", responseFields: [],
+    }));
+  });
+
+  it("mostra motivo em resposta 200 sem id e registra só a estrutura sem dados privados", async () => {
+    integration.categoryDescription = null;
+    const response = { Message: "Cadastro do paciente obrigatório", PatientName: "Nome privado", MobilePhone: "11999990000", token: "token-privado" };
+    fetchMock.mockImplementation(async (url: URL) => url.pathname.endsWith("/patient/get")
+      ? json({ PatientId: 33 }) : json(response));
+    const result = await pushAppointmentToClinicorp("tenant-1", event);
+    expect(result).toMatchObject({ status: "failed", error: expect.stringContaining('Motivo informado: "Cadastro do paciente obrigatório"') });
+    expect(lastError()).toContain("Cadastro do paciente obrigatório");
+    const diagnostics = vi.mocked(console.error).mock.calls.find(([label]) => label === "[clinicorp] criar agendamento sem confirmação")!;
+    expect(diagnostics[1]).toMatchObject({ httpStatus: 200, responseType: "object", hasId: false });
+    const logged = JSON.stringify(diagnostics);
+    for (const privateValue of [response.PatientName, response.MobilePhone, response.token, credentials.apiUser, credentials.apiToken]) {
+      expect(logged).not.toContain(privateValue);
+    }
+  });
+
+  it("distingue status sem confirmação de identificador ausente", async () => {
+    integration.categoryDescription = null;
+    fetchMock.mockImplementation(async (url: URL) => url.pathname.endsWith("/patient/get")
+      ? json({ PatientId: 33 }) : json([{ Status: "PENDING", id: 7 }]));
+    const result = await pushAppointmentToClinicorp("tenant-1", event);
+    expect(result).toMatchObject({ status: "failed", error: expect.stringContaining("O status retornado não confirma a criação") });
+    expect(lastError()).toContain('status "PENDING"');
+    expect(lastError()).not.toContain("não contém um identificador");
   });
 
   it("repassa o motivo de uma recusa em 200 e ignora página HTML", async () => {

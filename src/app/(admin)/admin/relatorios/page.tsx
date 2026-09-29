@@ -30,7 +30,7 @@ export default async function MonthlyReportsPage({ searchParams }: { searchParam
 
   return (
     <div className="space-y-6">
-      <PageHeader eyebrow="Mavellium" title="Relatórios mensais de ROI" />
+      <PageHeader eyebrow="Mavellium" title="Relatórios" />
       <MonthPicker value={month} href="/admin/relatorios" />
       <Card>
         <CardTitle action={<Badge>Por clientes</Badge>}>Acompanhamento dos relatórios</CardTitle>

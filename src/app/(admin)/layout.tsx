@@ -6,7 +6,7 @@ import type { NavItem } from "@/components/shell/ShellNav";
 
 const NAV: NavItem[] = [
   { href: "/admin/contas", label: "Contas", icon: "Building2" },
-  { href: "/admin/relatorios", label: "ROI mensal", icon: "BarChart3" },
+  { href: "/admin/relatorios", label: "Relatórios", icon: "BarChart3" },
   { href: "/admin/perguntas", label: "Perguntas", icon: "CircleHelp" },
   { href: "/admin/agentes", label: "Agentes", icon: "Bot" },
   { href: "/admin/logs", label: "Logs", icon: "ScrollText" },

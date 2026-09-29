@@ -102,7 +102,7 @@ beforeEach(() => {
 });
 
 describe("follow-up com consulta marcada", () => {
-  it("a regra pura recusa contato com consulta atual ou futura", () => {
+  it("a regra pura recusa contato com consulta marcada ou realizada, futura ou passada", () => {
     expect(nextFollowUp({ ...conversation(), lastMessage: { role: "assistant", createdAt: ago(119) }, hasActiveAppointment: true }, ESTEIRA)).toBeNull();
   });
 
@@ -115,7 +115,7 @@ describe("follow-up com consulta marcada", () => {
       where: expect.objectContaining({
         lead: {
           appointments: {
-            none: { status: "scheduled", endsAt: { gt: NOW } },
+            none: { status: { in: ["scheduled", "done"] } },
           },
         },
       }),

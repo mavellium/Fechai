@@ -213,7 +213,8 @@ Regressões: `tests/follow-up-agendamento.test.ts` (varredura),
 `tests/follow-up-intervalo.test.ts` (config) e `tests/follow-up-compose.test.ts` (IA).
 
 **Consulta marcada encerra o reengajamento.** O worker ignora a conversa quando
-o lead tem um `Appointment` com status `scheduled` que ainda não terminou. A
+o lead tem um `Appointment` com status `scheduled` ou `done`, futuro **ou passado**
+(só consulta cancelada não conta). A
 checagem é pelo `leadId`, e não só por `conversationId`, para cobrir também uma
 consulta marcada manualmente em `/agenda`. A tool `follow_up` faz a mesma
 checagem antes de pôr o contato na esteira de recusa ("pediu para parar" vale

@@ -135,6 +135,7 @@ model Tenant {
   broadcasts       BroadcastCampaign[]
   broadcastReceipts BroadcastReceipt[]
   monthlyRoiReports MonthlyRoiReport[]
+  monthlyRoiAiChats MonthlyRoiAiChat[]
   reportEvents      ReportEvent[]
   knowledgeGaps     KnowledgeGap[]
   knowledgeGapSettings KnowledgeGapSettings?
@@ -259,6 +260,21 @@ model MonthlyRoiReport {
 
   @@unique([tenantId, month])
   @@index([month, status])
+}
+
+/// Histórico da conversa "Fazer com I.A" de uma competência. Fica separado de
+/// `MonthlyRoiReport` porque a conversa começa antes de a revisão ser salva.
+model MonthlyRoiAiChat {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  month     String // YYYY-MM
+  messages  Json     @default("[]")
+  updatedBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, month])
 }
 
 /// Eventos explícitos, sem inferir qualificação ou desconhecimento do texto.

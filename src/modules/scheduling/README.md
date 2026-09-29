@@ -376,13 +376,30 @@ Base: `https://api.clinicorp.com/rest/v1`. Quase todo endpoint pede
   que o dono vê o fluxo inteiro. Só muda o paciente: o telefone do sandbox é
   sintético (`sandbox:<agente>`), então o envio vai **sem telefone e sem
   cadastro de paciente**, com `PatientName` "TESTE fechai" e nota dizendo que
-  pode excluir. Exigir telefone gravava "Vincule um contato com telefone" no
+  pode excluir em `Procedures`. Exigir telefone gravava "Vincule um contato com telefone" no
   card; usar os dígitos do id criava paciente com celular inventado.
 - **`IgnoreSameName: "X"` ao criar paciente.** Sem isso o Clinicorp recusa quando
   já existe alguém com o mesmo nome — e "João Silva" repetido é rotina numa base
   de pacientes. O telefone é o que de fato distingue, e ele já foi consultado
   antes (`GET /patient/get?Phone=`, que aceita qualquer formato; mandamos só
-  dígitos).
+  dígitos com DDD, sem o código brasileiro `55`). A normalização remove esse
+  prefixo apenas de números com 12–13 dígitos; um DDD 55 em um número nacional
+  de 10–11 dígitos permanece. O telefone do contato no Fechai não é alterado.
+- **Criar paciente não promete retornar `PatientId`.** O contrato de
+  `/patient/create` mostra os dados do cadastro; se não vier ID, consulte
+  `/patient/get` pelo mesmo telefone para obter `PatientId`, sem repetir a
+  criação. Busca que falhou não autoriza criar outro paciente.
+- **Procedimento e observações do agendamento vão em `Procedures`**, o campo
+  documentado de `/appointment/create_appointment_by_api`; `Notes` continua
+  sendo campo do cadastro de paciente. `serviceType` e `notes` da consulta
+  seguem para esse campo também no reagendamento e na reposição do horário
+  anterior. A instrução da tool pede registrar o procedimento/queixa informado
+  mesmo quando o tipo de duração é apenas “avaliação”.
+- **HTTP bem-sucedido sem confirmação nunca vira envio confirmado.** O painel
+  preserva o motivo informado pela API ou avisa sobre corpo vazio. O console
+  registra apenas código HTTP, estrutura da resposta e presença dos campos de
+  paciente enviados, sem corpo, headers ou valores de dados pessoais. Não há
+  reenvio automático para esse resultado incerto.
 - **Falha na consulta de disponibilidade devolve `null`.** Com a checagem
   habilitada, uma falha, credencial ilegível ou resposta incompleta não prova que
   o horário esteja livre. Nenhuma reserva nova é confirmada até conseguir

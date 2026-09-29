@@ -30,7 +30,7 @@ export default async function MonthlyRoiPage({ params, searchParams }: {
   const caseCandidates = report.status === "ready" ? [] : await loadMonthlyCaseCandidates(tenantId, month, report.assumptions);
   const sources = { ...monthlyAccountPrice(tenant), agents: agents.map(monthlyAgentSource) };
   return <div className="space-y-6">
-    <PageHeader eyebrow="ROI mensal" title={report.tenantName} description="Confira o retorno, revise as premissas e prepare a entrega ao decisor." />
+    <PageHeader eyebrow="Relatórios" title={report.tenantName} description="Confira o retorno, revise as premissas e prepare a entrega ao decisor." />
     <div className="flex flex-wrap items-center justify-between gap-3"><MonthPicker value={month} href={`/admin/relatorios/${tenantId}`} /><ButtonLink href={`/admin/relatorios?mes=${month}`} size="sm" variant="ghost"><ArrowLeft size={14} aria-hidden />Todos os clientes</ButtonLink></div>
     {requested && /^20\d{2}-(0[1-9]|1[0-2])$/.test(requested) && requested < month && <Alert>A conta foi criada em {month.split("-").reverse().join("/")}. Abrimos a primeira competência com dados deste cliente.</Alert>}
     <MonthlyRoiSummary report={report} />

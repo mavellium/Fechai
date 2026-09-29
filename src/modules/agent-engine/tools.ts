@@ -265,7 +265,7 @@ const TOOLS: Record<ActionKey, ToolDef> = {
           date: { type: "string", description: "Data no formato AAAA-MM-DD" },
           time: { type: "string", description: "Hora de início no formato HH:MM (24h)" },
           patientName: { type: "string", description: "Nome da pessoa que será atendida. Se o contato marcar para outra pessoa, use o nome dessa pessoa, não o nome do contato. Pergunte se ainda não souber." },
-          notes: { type: "string", description: "Observações clínicas ou logísticas combinadas na conversa. Não use para guardar o nome do paciente." },
+          notes: { type: "string", description: "Registre sempre o procedimento, a queixa ou o motivo informado pelo paciente na conversa (ex.: avaliação para implante), além das observações clínicas ou logísticas combinadas. Não omita um procedimento já informado, mesmo quando o tipo de atendimento for apenas avaliação. Não use para guardar o nome do paciente." },
           tipoAtendimento: { type: "string", description: "Nome EXATO do tipo de atendimento, copiado da lista de tipos com duração própria do contexto. Define o tamanho do bloco. Omita quando o negócio não tiver tipos ou quando o contato não disse qual quer." },
           additionalAppointment: { type: "boolean", description: "True somente se o contato pediu explicitamente OUTRA consulta separada, mantendo a anterior. Nunca use para reagendamento." },
         },

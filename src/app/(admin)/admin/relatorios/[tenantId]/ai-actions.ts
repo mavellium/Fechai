@@ -7,6 +7,20 @@ import { computeMonthlyReport } from "@/modules/reports/monthly";
 import { monthlyAgentSource } from "@/modules/reports/monthly-import";
 import { monthlyAiRequestSchema, type MonthlyAiResponse } from "@/modules/reports/monthly-ai";
 import { answerMonthlyAi, monthlyAiMessages } from "@/modules/reports/monthly-ai-service";
+import { appendMonthlyAiChat, clearMonthlyAiChat, loadMonthlyAiChat, type MonthlyAiChatMessage } from "@/modules/reports/monthly-ai-chat";
+
+export async function loadMonthlyRoiAiChat(tenantId: string, month: string): Promise<MonthlyAiChatMessage[]> {
+  await requireSuperadmin();
+  if (monthKey(month) !== month) return [];
+  return loadMonthlyAiChat(tenantId, month);
+}
+
+export async function clearMonthlyRoiAiChat(tenantId: string, month: string): Promise<{ ok: boolean }> {
+  await requireSuperadmin();
+  if (monthKey(month) !== month) return { ok: false };
+  await clearMonthlyAiChat(tenantId, month);
+  return { ok: true };
+}
 
 export async function assistMonthlyRoi(tenantId: string, month: string, form: FormData): Promise<
   { ok: true; response: MonthlyAiResponse & { providerLabel: string } } | { ok: false; error: string }
@@ -31,7 +45,14 @@ export async function assistMonthlyRoi(tenantId: string, month: string, form: Fo
   try {
     const report = await computeMonthlyReport(tenantId, month, false, request.data.draft.assumptions);
     const messages = monthlyAiMessages(report, request.data, agents.map(monthlyAgentSource));
-    return { ok: true, response: await answerMonthlyAi(messages, request.data.draft) };
+    const response = await answerMonthlyAi(messages, request.data.draft);
+    // Guardar o histórico é conveniência: falha aqui não pode perder a resposta que a IA já deu.
+    const at = new Date().toISOString();
+    await appendMonthlyAiChat(tenantId, month, session.user.id, [
+      { role: "user", content: request.data.question, at },
+      { role: "assistant", content: response.reply, at, provider: response.providerLabel, ...(response.changes.length ? { changes: response.changes } : {}) },
+    ]).catch(() => {});
+    return { ok: true, response };
   } catch (error) {
     return { ok: false, error: error instanceof Error && (error.message.startsWith("Nenhum provedor") || error.message.startsWith("A IA não conseguiu") || error.message.startsWith("A IA demorou")) ? error.message : "Não foi possível consultar a IA. Tente novamente." };
   }
