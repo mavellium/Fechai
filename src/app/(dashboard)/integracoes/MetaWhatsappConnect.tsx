@@ -8,8 +8,7 @@ import { CopyButton } from "@/components/ui/copy-button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { reconnectMetaWhatsapp, saveMetaWhatsapp } from "./actions";
-import { WhatsappControls } from "./WhatsappControls";
-import { WhatsappBlocklist, type BlockedRow } from "./WhatsappBlocklist";
+import { DisconnectControl } from "./WhatsappControls";
 
 type Props = {
   connected: boolean;
@@ -20,12 +19,13 @@ type Props = {
   businessAccountId: string | null;
   webhookUrl: string;
   verifyToken: string | null;
-  agentName: string;
-  agentEnabled: boolean;
-  ignoreGroups: boolean;
-  blocked: BlockedRow[];
 };
 
+/**
+ * A conexão da API oficial da Meta, sozinha no cartão dela: convive com a do QR
+ * code, e o que é da conta (agente, grupos, bloqueios) mora no cartão de
+ * Atendimento, não aqui.
+ */
 export function MetaWhatsappConnect(props: Props) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -60,7 +60,7 @@ export function MetaWhatsappConnect(props: Props) {
   }
 
   return (
-    <>
+    <div className="space-y-5">
       {!props.encryptionConfigured && (
         <Alert tone="warn" title="Criptografia não configurada">
           O servidor precisa de ENCRYPTION_KEY para guardar o token e o App Secret com segurança.
@@ -113,6 +113,12 @@ export function MetaWhatsappConnect(props: Props) {
         </div>
       )}
 
+      <p className="max-w-prose text-sm text-white/55">
+        Use um número diferente do conectado por QR code: o mesmo número não atende pelas duas
+        conexões ao mesmo tempo. Cada conversa continua pelo número em que o contato escreveu, e
+        os Disparos saem por este.
+      </p>
+
       {warning && <Alert tone="warn">{warning}</Alert>}
       <FormFeedback error={error} info={info} />
 
@@ -122,15 +128,10 @@ export function MetaWhatsappConnect(props: Props) {
         recusados pela plataforma.
       </Alert>
 
-      <WhatsappControls
-        connected={props.connected}
-        provider="meta"
-        agentName={props.agentName}
-        agentEnabled={props.agentEnabled}
-        ignoreGroups={props.ignoreGroups}
-      />
-      <WhatsappBlocklist blocked={props.blocked} />
-    </>
+      {props.connected && (
+        <DisconnectControl provider="meta" className="border-t border-white/10 pt-6" />
+      )}
+    </div>
   );
 }
 

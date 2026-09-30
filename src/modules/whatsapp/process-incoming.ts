@@ -15,6 +15,7 @@ import { speakReply } from "@/modules/voice/reply";
 import { storeVoiceMessage } from "@/modules/voice/storage";
 import { audioDurationSeconds, UNTRANSCRIBED_AUDIO } from "@/modules/voice/received-audio";
 import { isPhoneBlocked } from "./blocklist";
+import { isWhatsappProviderName, setConversationChannel } from "./instances";
 import type { IncomingMessage, WhatsAppProvider } from "./provider";
 import { shouldPauseAgentForReaction } from "./reactions";
 
@@ -111,6 +112,13 @@ export async function processIncomingWhatsapp(
 
   const agent = await resolveAgent(tenantId);
 
+  // Com as duas conexões de pé, a conversa lembra por qual o contato fala: é
+  // desse número que saem a resposta manual, o follow-up e o lembrete.
+  const trackChannel = (conversation: { id: string; whatsappProvider?: string | null }) =>
+    isWhatsappProviderName(provider.name)
+      ? setConversationChannel(conversation, provider.name)
+      : Promise.resolve();
+
   if (incoming.isFromMe) {
     if (incoming.isGroup) {
       return ok({ ok: true, silent: "fromMe ignorado" });
@@ -130,6 +138,7 @@ export async function processIncomingWhatsapp(
           incoming.fromPhone,
           incoming.fromName,
         );
+        await trackChannel(conversation);
         await prisma.conversation
           .update({
             where: { id: conversation.id },
@@ -174,6 +183,8 @@ export async function processIncomingWhatsapp(
       });
       if (recentEcho) return ok({ ok: true, silent: "fromMe eco" });
     }
+    // Depois dos ecos: só o atendente escrevendo pelo próprio celular muda o canal.
+    await trackChannel(conversation);
 
     const received = incoming.hasAudio
       ? await receiveAudio({
@@ -208,6 +219,7 @@ export async function processIncomingWhatsapp(
     incoming.fromPhone,
     incoming.fromName,
   );
+  await trackChannel(conversation);
   if (incoming.messageKeyId) {
     const existing = await prisma.message.findUnique({
       where: { whatsappMessageId: incoming.messageKeyId },

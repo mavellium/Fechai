@@ -173,7 +173,10 @@ conta respondeu pelo painel em vez do agente" — usado por
 e `contatos/actions.ts` (`sendMessageToContact`, a partir de um lead); as duas
 telas faziam essa lógica em duplicado, cada uma só com metade do cuidado,
 antes desta função existir. Numa conversa real envia de verdade pelo
-`WhatsAppProvider`; numa de teste (sandbox) só grava, sem WhatsApp envolvido.
+`WhatsAppProvider` **do número em que o contato escreveu** (`Conversation.whatsappProvider`,
+ver `modules/whatsapp/instances.ts`): com a Evolution e a Meta conectadas, o número
+dele fora do ar vira erro na tela dizendo qual reconectar — nunca envio pelo
+outro número. Numa conversa de teste (sandbox) só grava, sem WhatsApp envolvido.
 
 Sempre grava com `sentBy: "human"` e liga `Conversation.agentPaused`.
 `runAgentTurn` checa `agentPaused` logo no início: se ligado, persiste a
@@ -296,7 +299,8 @@ IA nem grava o aviso como resposta ao lead.
 
 **Envio:** `WhatsAppProvider.sendGroupMessage` →
 `POST /message/sendText/{externalId}` com `{ number: groupId, text }` na
-Evolution. O método só aceita JID de grupo. A operação de inclusão de
+Evolution — sempre pela conexão do **QR**, mesmo que o contato tenha falado pela
+Meta (que não tem grupos). O método só aceita JID de grupo. A operação de inclusão de
 participantes foi removida do contrato e dos adapters. Nunca chamar
 `/group/updateParticipant` no fluxo de prioridade.
 

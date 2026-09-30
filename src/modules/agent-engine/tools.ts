@@ -17,6 +17,8 @@ import { ACTION_BY_KEY, type ActionKey } from "./actions";
 import { offerAlternativeSlots, runSchedulingTool, SCHEDULING_TOOLS, schedulingToolAllowed } from "./scheduling-tools";
 import { allVariableDefinitions, parseVariableDefinitions, rememberConversationVariables, type VariableDefinition } from "./variables";
 import { registerKnowledgeGap, type RegisterGapResult } from "@/modules/knowledge-gaps/register";
+import { recordLeadInsight } from "@/modules/lead-insights/record";
+import { LEAD_INSIGHT_TOOL, leadInsightToolResult, leadInsightToolSchema } from "@/modules/lead-insights/tool";
 
 export type ToolContext = {
   tenantId: string;
@@ -87,6 +89,9 @@ export function getToolSchemas(
       required: ["question"],
     },
   });
+  // Qualidade dos leads (cidade, dúvida, motivo de perda): registro interno,
+  // sem vaga de habilidade — vale para todo agente, como report_unanswered.
+  if (variableDefinitions) schemas.push(leadInsightToolSchema);
   return schemas;
 }
 
@@ -155,6 +160,19 @@ export async function runToolHandler(
         .catch((err) => console.error("[tools] transbordo da pergunta sem resposta falhou", err));
     }
     return unansweredToolResult(gap.status, handOff);
+  }
+  if (key === LEAD_INSIGHT_TOOL) {
+    // Nunca lança e nunca derruba o turno: o registro é um brinde do atendimento.
+    return leadInsightToolResult(await recordLeadInsight({
+      tenantId: ctx.tenantId,
+      conversationId: ctx.conversationId,
+      city: args.city,
+      procedure: args.procedure,
+      firstQuestionCategory: args.first_question_category,
+      firstQuestionText: args.first_question_text,
+      lossReasonCategory: args.loss_reason_category,
+      lossReasonText: args.loss_reason_text,
+    }));
   }
   if (key === "remember_variables") {
     try {

@@ -3,6 +3,7 @@ import { UsersRound, UserPlus, MessageSquare } from "lucide-react";
 import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { getWhatsAppProviderForInstance } from "@/modules/whatsapp/meta-config";
+import { isReadyChannel, listWhatsappChannels } from "@/modules/whatsapp/instances";
 import { Card } from "@/components/ui/card";
 import { ButtonLink } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -55,7 +56,7 @@ export default async function ContatosPage({
     ];
   }
 
-  const [leads, whatsapp, recentConvs] = await Promise.all([
+  const [leads, channels, recentConvs] = await Promise.all([
     prisma.lead.findMany({
       where,
       orderBy: { conversation: { updatedAt: "desc" } },
@@ -65,7 +66,7 @@ export default async function ContatosPage({
         },
       },
     }),
-    prisma.whatsappInstance.findUnique({ where: { tenantId } }),
+    listWhatsappChannels(tenantId),
     // Sugestões: as 3 conversas mais recentes (com número real) para continuar.
     prisma.conversation.findMany({
       where: { tenantId, isTest: false },
@@ -78,10 +79,10 @@ export default async function ContatosPage({
     }),
   ]);
 
-  const connected = Boolean(
-    whatsapp &&
-      getWhatsAppProviderForInstance(whatsapp).isConfigured() &&
-      whatsapp.status === "connected",
+  // Qualquer conexão de pé serve para a tela liberar o envio: por qual delas a
+  // mensagem sai é decidido por contato, em `sendManualReply`.
+  const connected = channels.some(
+    (c) => isReadyChannel(c) && getWhatsAppProviderForInstance(c).isConfigured(),
   );
 
   return (

@@ -26,7 +26,14 @@ export type BlockedRow = { id: string; phone: string; label: string | null };
  * aqui; esconder as linhas atrás de um clique é o que faz o suporte demorar
  * uma hora para achar o motivo.
  */
-export function WhatsappBlocklist({ blocked }: { blocked: BlockedRow[] }) {
+export function WhatsappBlocklist({
+  blocked,
+  as: Heading = "h2",
+}: {
+  blocked: BlockedRow[];
+  /** Nível do título, para caber na hierarquia de quem o hospeda. */
+  as?: "h2" | "h3";
+}) {
   const router = useRouter();
   const phoneId = useId();
   const labelId = useId();
@@ -61,7 +68,7 @@ export function WhatsappBlocklist({ blocked }: { blocked: BlockedRow[] }) {
           <Ban size={18} />
         </span>
         <div className="min-w-0">
-          <h2 className="font-display text-base font-semibold text-white">Números bloqueados</h2>
+          <Heading className="font-display text-base font-semibold text-white">Números bloqueados</Heading>
           <p className="mt-0.5 max-w-prose text-sm text-white/65">
             O agente ignora estes números por completo: nada é respondido e a mensagem não entra em
             Conversas. Quem está na lista não é avisado do bloqueio.

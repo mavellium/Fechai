@@ -2,6 +2,7 @@
 import { ArrowUpRight, Bot, FileText, MessagesSquare, TriangleAlert } from "lucide-react";
 import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
+import { getWhatsappStatus } from "@/modules/whatsapp/instances";
 import { getOnboardingSteps, requiredSteps, setupComplete } from "@/modules/tenants/onboarding";
 import { computeHomeSummary } from "@/modules/reports/service";
 import { planOf } from "@/modules/billing/plans";
@@ -137,7 +138,7 @@ export default async function InicioPage({
   }
 
   // ── Fase 2: a conta está no ar ──────────────────────────────────────────────
-  const [summary, needsHuman, recent, whatsapp, agentReady, usage] =
+  const [summary, needsHuman, recent, whatsappStatus, agentReady, usage] =
     await Promise.all([
       computeHomeSummary(tenantId, days),
       // `isTest: false` em toda a home: o chat de teste não é atendimento e
@@ -154,7 +155,8 @@ export default async function InicioPage({
         take: 5,
         include: { lead: true, messages: { orderBy: { createdAt: "desc" }, take: 1 } },
       }),
-      prisma.whatsappInstance.findUnique({ where: { tenantId }, select: { status: true } }),
+      // Conectada se QUALQUER conexão atende (QR ou API oficial).
+      getWhatsappStatus(tenantId),
       prisma.agent.findFirst({
         where: { tenantId, archived: false, NOT: { systemPrompt: "" } },
         select: { id: true },
@@ -184,7 +186,7 @@ export default async function InicioPage({
 
       <HealthStrip
         agentReady={Boolean(agentReady)}
-        whatsappStatus={whatsapp?.status ?? "disconnected"}
+        whatsappStatus={whatsappStatus}
         planName={plan.name}
         messagesUsed={usage.used}
         messageLimit={usage.limit}

@@ -131,6 +131,8 @@ export function describeResume(r: ResumeSummary): string {
     r.sent && `${r.sent} ${r.sent === 1 ? "contato recebeu" : "contatos receberam"} a resposta`,
     r.skipped && `${r.skipped} ${r.skipped === 1 ? "ficou" : "ficaram"} de fora`,
     r.failed && `${r.failed} sem confirmação de envio`,
+    r.waiting &&
+      `${r.waiting} ${r.waiting === 1 ? "aguarda" : "aguardam"} a reconexão do número por onde ${r.waiting === 1 ? "fala" : "falam"}`,
   ].filter(Boolean);
   return bits.length ? `${bits.join(", ")}.` : "Nenhum contato pendente para retomar.";
 }

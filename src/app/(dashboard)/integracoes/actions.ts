@@ -6,13 +6,14 @@ import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { payloadTooLarge } from "@/lib/rate-limit";
 import { randomBytes } from "node:crypto";
-import { getWhatsAppProvider, type WhatsAppProviderName } from "@/modules/whatsapp";
+import { getWhatsAppProvider } from "@/modules/whatsapp";
 import { MetaCloudProvider } from "@/modules/whatsapp/meta";
 import {
   getWhatsAppProviderForInstance,
   metaWebhookUrl,
   WHATSAPP_PROVIDER_SELECT,
 } from "@/modules/whatsapp/meta-config";
+import { isWhatsappProviderName, stampLegacyConversations } from "@/modules/whatsapp/instances";
 import {
   MAX_BLOCKED_NUMBERS,
   canonicalPhone,
@@ -66,38 +67,20 @@ async function tenantCanUseMetaWhatsapp(tenantId: string): Promise<boolean> {
 const META_WHATSAPP_NOT_ENABLED =
   "A API oficial da Meta ainda não foi habilitada pelo administrador para esta conta.";
 
-/** Troca o adapter ativo sem tocar na integração que está conectada. */
-export async function setWhatsappProvider(
-  requested: string,
-): Promise<WhatsappControlResult> {
-  const { tenantId } = await requireTenant();
-  if (requested !== "evolution" && requested !== "meta") {
-    return { ok: false, error: "Provedor de WhatsApp inválido." };
-  }
-  const provider = requested as WhatsAppProviderName;
-  if (provider === "meta" && !(await tenantCanUseMetaWhatsapp(tenantId))) {
-    return { ok: false, error: META_WHATSAPP_NOT_ENABLED };
-  }
-  const instance = await prisma.whatsappInstance.findUnique({ where: { tenantId } });
-  if (instance?.status === "connected" && instance.provider !== provider) {
-    return { ok: false, error: "Desconecte o número atual antes de trocar de provedor." };
-  }
+/**
+ * A conexão de um provedor da conta. Cada provedor tem a sua linha
+ * (`@@unique([tenantId, provider])`): a Evolution e a Meta ficam conectadas ao
+ * mesmo tempo, e mexer numa nunca toca na outra.
+ */
+const instanceKey = (tenantId: string, provider: "evolution" | "meta") => ({
+  tenantId_provider: { tenantId, provider },
+});
 
-  await prisma.whatsappInstance.upsert({
-    where: { tenantId },
-    create: { tenantId, provider, status: "disconnected" },
-    update: {
-      provider,
-      status: "disconnected",
-      externalId: provider === "meta" ? instance?.metaPhoneNumberId : null,
-    },
-  });
-  revalidatePath("/integracoes");
-  revalidatePath("/inicio");
-  return { ok: true };
-}
-
-/** Salva, valida e ativa a WhatsApp Cloud API oficial para a conta. */
+/**
+ * Salva, valida e ativa a WhatsApp Cloud API oficial para a conta. Não exige
+ * desconectar a Evolution: os dois números atendem juntos, e o contato é
+ * respondido pelo número em que escreveu (ver `modules/whatsapp/instances.ts`).
+ */
 export async function saveMetaWhatsapp(formData: FormData): Promise<MetaConnectResult> {
   const { tenantId } = await requireTenant();
   if (!(await tenantCanUseMetaWhatsapp(tenantId))) {
@@ -121,10 +104,9 @@ export async function saveMetaWhatsapp(formData: FormData): Promise<MetaConnectR
   }
 
   const { phoneNumberId, businessAccountId, accessToken, appSecret } = parsed.data;
-  const current = await prisma.whatsappInstance.findUnique({ where: { tenantId } });
-  if (current?.status === "connected" && current.provider !== "meta") {
-    return { ok: false, error: "Desconecte o número da Evolution antes de ativar a Meta." };
-  }
+  const current = await prisma.whatsappInstance.findUnique({
+    where: instanceKey(tenantId, "meta"),
+  });
   const provider = new MetaCloudProvider({ phoneNumberId, businessAccountId, accessToken });
   try {
     const profile = await provider.getPhoneProfile(phoneNumberId);
@@ -140,8 +122,11 @@ export async function saveMetaWhatsapp(formData: FormData): Promise<MetaConnectR
     }
 
     const previous = current;
+    // A segunda conexão da conta vai nascer: as conversas de antes ainda não
+    // dizem por onde falaram, e a linha que já existe é a resposta certa.
+    if (!previous) await stampLegacyConversations(tenantId);
     const row = await prisma.whatsappInstance.upsert({
-      where: { tenantId },
+      where: instanceKey(tenantId, "meta"),
       create: {
         tenantId,
         provider: "meta",
@@ -155,7 +140,6 @@ export async function saveMetaWhatsapp(formData: FormData): Promise<MetaConnectR
         metaVerifyTokenEncrypted: encryptSecret(verifyToken),
       },
       update: {
-        provider: "meta",
         status: "connected",
         externalId: phoneNumberId,
         metaPhoneNumberId: phoneNumberId,
@@ -167,11 +151,11 @@ export async function saveMetaWhatsapp(formData: FormData): Promise<MetaConnectR
       },
     });
 
-    if (previous?.status !== "connected" || previous.provider !== "meta") {
+    if (previous?.status !== "connected") {
       await recordAudit({
         event: "whatsapp.connected",
         target: { type: "WhatsappInstance", id: row.id, label: "WhatsApp oficial" },
-        before: { status: previous?.status ?? "disconnected", provider: previous?.provider },
+        before: { status: previous?.status ?? "disconnected", provider: "meta" },
         after: { status: "connected", provider: "meta" },
       });
     }
@@ -201,10 +185,10 @@ export async function reconnectMetaWhatsapp(): Promise<MetaConnectResult> {
     return { ok: false, error: META_WHATSAPP_NOT_ENABLED };
   }
   const instance = await prisma.whatsappInstance.findUnique({
-    where: { tenantId },
+    where: instanceKey(tenantId, "meta"),
     select: { id: true, status: true, metaDisplayPhone: true, ...WHATSAPP_PROVIDER_SELECT },
   });
-  if (!instance || instance.provider !== "meta") {
+  if (!instance) {
     return { ok: false, error: "Configure primeiro a API oficial da Meta." };
   }
   const provider = getWhatsAppProviderForInstance(instance);
@@ -218,7 +202,7 @@ export async function reconnectMetaWhatsapp(): Promise<MetaConnectResult> {
       console.error("[whatsapp meta] falha ao reinscrever WABA", err);
     });
     await prisma.whatsappInstance.update({
-      where: { tenantId },
+      where: instanceKey(tenantId, "meta"),
       data: { status: "connected", externalId: instance.metaPhoneNumberId },
     });
     revalidatePath("/integracoes");
@@ -246,10 +230,9 @@ export async function connectWhatsapp(): Promise<ConnectResult> {
   }
 
   try {
-    const existing = await prisma.whatsappInstance.findUnique({ where: { tenantId } });
-    if (existing?.provider === "meta") {
-      return { ok: false, error: "Selecione Evolution antes de gerar o código QR." };
-    }
+    const existing = await prisma.whatsappInstance.findUnique({
+      where: instanceKey(tenantId, "evolution"),
+    });
 
     // Instância que existe mas NÃO está conectada: desloga antes de pedir o QR.
     //
@@ -327,10 +310,13 @@ export async function connectWhatsapp(): Promise<ConnectResult> {
       console.error("[whatsapp] falha ao configurar webhook da instância", err);
     }
 
+    // Conta que só tinha a Meta ganha a segunda conexão agora: as conversas de
+    // antes ainda não dizem por onde falaram (ver `stampLegacyConversations`).
+    if (!existing) await stampLegacyConversations(tenantId);
     await prisma.whatsappInstance.upsert({
-      where: { tenantId },
+      where: instanceKey(tenantId, "evolution"),
       create: { tenantId, provider: "evolution", externalId: res.externalId, status: res.status },
-      update: { provider: "evolution", externalId: res.externalId, status: res.status },
+      update: { externalId: res.externalId, status: res.status },
     });
     revalidatePath("/integracoes");
     revalidatePath("/inicio");
@@ -342,17 +328,20 @@ export async function connectWhatsapp(): Promise<ConnectResult> {
 
 export async function refreshWhatsappStatus(): Promise<ConnectResult> {
   const { tenantId } = await requireTenant();
-  const instance = await prisma.whatsappInstance.findUnique({ where: { tenantId } });
+  // Só a linha da Evolution: a Meta não usa código QR e tem a sua própria.
+  const instance = await prisma.whatsappInstance.findUnique({
+    where: instanceKey(tenantId, "evolution"),
+  });
   if (!instance?.externalId) return { ok: false, error: "Nenhuma instância criada ainda." };
-  if (instance.provider === "meta") {
-    return { ok: false, error: "A conexão oficial da Meta não usa código QR." };
-  }
   const provider = getWhatsAppProvider("evolution");
   if (!provider.isConfigured()) return { ok: false, error: "Evolution API não configurada." };
 
   try {
     const res = await provider.getQrCode(instance.externalId);
-    await prisma.whatsappInstance.update({ where: { tenantId }, data: { status: res.status } });
+    await prisma.whatsappInstance.update({
+      where: instanceKey(tenantId, "evolution"),
+      data: { status: res.status },
+    });
 
     // Só a TRANSIÇÃO para conectado vira evento. Esta função é chamada em
     // laço enquanto a tela espera o QR ser lido; registrar cada passagem
@@ -377,14 +366,23 @@ export async function refreshWhatsappStatus(): Promise<ConnectResult> {
 type WhatsappControlResult = { ok: boolean; error?: string; info?: string };
 
 /**
- * Desloga o número da instância na Evolution e marca como desconectado no
- * banco. Alternativa ao "desligar" (que só cala o agente): aqui o WhatsApp
- * inteiro sai — volta a conectar exige novo QR. Se a Evolution falhar,
- * retorna o erro sem marcar como desconectado (senão enganaríamos a tela).
+ * Desconecta UMA das conexões da conta e marca como desconectada no banco — a
+ * outra segue atendendo. Alternativa ao "desligar" (que só cala o agente): aqui
+ * o número inteiro sai — na Evolution, voltar exige novo QR. Se o provedor
+ * falhar, retorna o erro sem marcar como desconectado (senão enganaríamos a
+ * tela).
+ *
+ * O provedor vem da tela e é validado aqui: Server Action é um endpoint
+ * público, e "qualquer string" cairia na conexão errada.
  */
-export async function disconnectWhatsapp(): Promise<WhatsappControlResult> {
+export async function disconnectWhatsapp(requested: string): Promise<WhatsappControlResult> {
   const { tenantId } = await requireTenant();
-  const instance = await prisma.whatsappInstance.findUnique({ where: { tenantId } });
+  if (!isWhatsappProviderName(requested)) {
+    return { ok: false, error: "Conexão de WhatsApp inválida." };
+  }
+  const instance = await prisma.whatsappInstance.findUnique({
+    where: instanceKey(tenantId, requested),
+  });
   if (!instance?.externalId) return { ok: false, error: "Nenhum número conectado." };
   const provider = getWhatsAppProviderForInstance(instance);
   if (!provider.isConfigured()) return { ok: false, error: "O provedor do WhatsApp não está configurado." };
@@ -414,7 +412,7 @@ export async function disconnectWhatsapp(): Promise<WhatsappControlResult> {
   }
 
   await prisma.whatsappInstance.update({
-    where: { tenantId },
+    where: instanceKey(tenantId, requested),
     data: { status: "disconnected" },
   });
 
@@ -423,9 +421,13 @@ export async function disconnectWhatsapp(): Promise<WhatsappControlResult> {
   // log não oferece desfazer para o que só o cliente consegue refazer.
   await recordAudit({
     event: "whatsapp.disconnected",
-    target: { type: "WhatsappInstance", id: instance.id, label: "WhatsApp" },
-    before: { status: instance.status },
-    after: { status: "disconnected" },
+    target: {
+      type: "WhatsappInstance",
+      id: instance.id,
+      label: requested === "meta" ? "WhatsApp oficial" : "WhatsApp",
+    },
+    before: { status: instance.status, provider: requested },
+    after: { status: "disconnected", provider: requested },
   });
 
   revalidatePath("/integracoes");

@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { PLAN_BY_KEY } from "@/modules/billing/plans";
 import { isStepNumber, parseDraft, FIRST_STEP } from "@/modules/tenants/onboarding-wizard";
 import { ensureTenantWidgetDeployed } from "@/lib/widget/deploy";
+import { summarizeWhatsappStatus } from "@/modules/whatsapp/instances";
 import { OnboardingWizard } from "./OnboardingWizard";
 
 /**
@@ -25,7 +26,7 @@ export default async function OnboardingPage() {
       onboardingCompleted: true,
       onboardingStep: true,
       onboardingDraft: true,
-      whatsappInstance: { select: { status: true } },
+      whatsappInstances: { select: { status: true } },
     },
   });
 
@@ -69,7 +70,7 @@ export default async function OnboardingPage() {
       actionLimit={PLAN_BY_KEY[tenant.planKey].maxActiveActions}
       agentId={agent.id}
       knowledgeDocuments={agent.knowledgeDocs}
-      whatsappStatus={tenant.whatsappInstance?.status ?? "disconnected"}
+      whatsappStatus={summarizeWhatsappStatus(tenant.whatsappInstances)}
       initialStep={isStepNumber(tenant.onboardingStep) ? tenant.onboardingStep : FIRST_STEP}
       initialDraft={parseDraft(tenant.onboardingDraft)}
     />

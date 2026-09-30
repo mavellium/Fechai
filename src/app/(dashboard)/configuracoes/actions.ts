@@ -12,6 +12,7 @@ import { createFeedback } from "@/modules/feedback/service";
 import { ensureAffiliate } from "@/modules/affiliates/service";
 import { getAccountRoles } from "@/modules/affiliates/roles";
 import { recordAudit, recordChange } from "@/modules/audit/log";
+import { getServiceArea, saveServiceArea } from "@/modules/lead-insights/service-area-store";
 
 const schema = z.object({
   message: z.string().trim().min(3, "Escreva um pouco mais"),
@@ -204,4 +205,30 @@ export async function updateAccountRoles(
   // navegação desatualizada até a próxima navegação cheia.
   revalidatePath("/", "layout");
   return { ok: true, info: "Preferências atualizadas." };
+}
+
+/**
+ * Área de atendimento: a cidade da clínica e as outras que ela atende. É a
+ * régua de "dentro/fora do raio" da qualidade dos leads. Mudar a área
+ * reclassifica os números na leitura — o que o agente registrou (a cidade que o
+ * contato disse) não é regravado.
+ */
+export async function saveServiceAreaAction(_prev: Result | null, formData: FormData): Promise<Result> {
+  const tooLarge = payloadTooLarge(formData);
+  if (tooLarge) return { ok: false, error: tooLarge };
+
+  const { session, tenantId } = await requireTenant();
+  const before = await getServiceArea(tenantId);
+  const saved = await saveServiceArea(tenantId, { baseCity: formData.get("baseCity"), cities: formData.get("cities") });
+  if (!saved.ok) return { ok: false, error: saved.error };
+
+  await recordChange({
+    event: "account.service_area_updated",
+    target: { type: "Tenant", id: tenantId, label: session.user.email },
+    before: before ?? {},
+    after: saved.area,
+  });
+  revalidatePath("/configuracoes");
+  revalidatePath("/relatorios");
+  return { ok: true, info: "Área de atendimento salva." };
 }

@@ -84,7 +84,7 @@ export async function createTenantWithOwner(input: CreateTenantWithOwnerInput) {
         businessSegmentOther: lead?.businessSegmentOther,
         referralSource: lead?.referralSource,
         referralSourceOther: lead?.referralSourceOther,
-        whatsappInstance: { create: { status: "disconnected" } },
+        whatsappInstances: { create: { provider: "evolution", status: "disconnected" } },
       },
     });
 

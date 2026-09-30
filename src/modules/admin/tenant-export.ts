@@ -45,13 +45,14 @@ export async function prepareTenantExport(tenantId: string) {
 
   async function* chunks() {
     const [whatsapp, calendar, calendarFeatures, clinicorp] = await Promise.all([
-      prisma.whatsappInstance.findUnique({ where: { tenantId }, omit: { metaAccessTokenEncrypted: true, metaAppSecretEncrypted: true, metaVerifyTokenEncrypted: true } }),
+      // Uma linha por conexão (QR e API oficial); `integrations.whatsapp` é uma lista desde a versão 2.
+      prisma.whatsappInstance.findMany({ where: { tenantId }, orderBy: { provider: "asc" }, omit: { metaAccessTokenEncrypted: true, metaAppSecretEncrypted: true, metaVerifyTokenEncrypted: true } }),
       prisma.calendarIntegration.findUnique({ where: { tenantId }, omit: { accessToken: true, refreshToken: true } }),
       prisma.calendarFeatures.findUnique({ where: { tenantId } }),
       getClinicorpStatus(tenantId),
     ]);
     yield "{\n\"metadata\":" + exportJson({
-      format: "fechai-tenant-export", version: 1, exportedAt: new Date().toISOString(),
+      format: "fechai-tenant-export", version: 2, exportedAt: new Date().toISOString(),
       tenantId, timezoneForDates: "UTC (ISO 8601); fusos de atendimento estão nas configurações",
       notes: [
         "Inclui todo o histórico disponível no banco, inclusive testes e registros arquivados, sem limite de quantidade.",

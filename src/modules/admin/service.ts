@@ -52,6 +52,30 @@ export function normalizePageSize(raw: string | undefined): number {
 }
 
 /**
+ * Filtro do painel por estado do WhatsApp. É o estado da conta em uma palavra
+ * (`summarizeWhatsappStatus`): conectada se QUALQUER conexão atende, aguardando
+ * leitura só se nenhuma atende, e "nunca conectou" é ausência de linha, não um
+ * status. A conta pode ter uma linha por provedor, então cada estado exclui os
+ * de cima.
+ */
+function whatsappStateFilter(state: string): Prisma.TenantWhereInput {
+  switch (state) {
+    case "none":
+      return { whatsappInstances: { none: {} } };
+    case "connected":
+      return { whatsappInstances: { some: { status: "connected" } } };
+    case "pending_qr":
+      return { whatsappInstances: { some: { status: "pending_qr" }, none: { status: "connected" } } };
+    case "disconnected":
+      return {
+        whatsappInstances: { some: {}, none: { status: { in: ["connected", "pending_qr"] } } },
+      };
+    default:
+      return { whatsappInstances: { some: { status: state } } };
+  }
+}
+
+/**
  * Contas da plataforma, com os filtros do painel.
  *
  * Filtrar no banco, e não no cliente: a lista é cortada por `take` e um filtro
@@ -68,13 +92,8 @@ export async function listTenants(filters: TenantFilters = {}) {
   if (plan?.length) where.planKey = { in: plan };
 
   if (whatsapp?.length) {
-    // "Nunca conectou" é ausência de linha, não um status — não cabe no mesmo
-    // `in` dos outros, daí o OR quando os dois tipos aparecem juntos.
-    const statuses = whatsapp.filter((w) => w !== "none");
-    const wantsNone = whatsapp.includes("none");
-    const clauses: Prisma.TenantWhereInput[] = [];
-    if (statuses.length) clauses.push({ whatsappInstance: { status: { in: statuses } } });
-    if (wantsNone) clauses.push({ whatsappInstance: { is: null } });
+    // Várias escolhas viram um OR: cada uma descreve um estado da conta.
+    const clauses = whatsapp.map(whatsappStateFilter);
     if (clauses.length === 1) Object.assign(where, clauses[0]);
     else where.OR = clauses;
   }
@@ -111,7 +130,7 @@ export async function listTenants(filters: TenantFilters = {}) {
       ? take
       : DEFAULT_TENANT_PAGE_SIZE,
     include: {
-      whatsappInstance: { select: { status: true } },
+      whatsappInstances: { select: { status: true } },
       users: { select: { id: true, email: true, role: true } },
       // `isTest: false` aqui pelo mesmo motivo do resto do produto: o sandbox
       // não é negócio. Sem o filtro, o admin mostrava um total de leads maior
@@ -133,7 +152,7 @@ export async function getTenantDetail(tenantId: string) {
     where: { id: tenantId },
     include: {
       users: { select: { email: true, role: true, createdAt: true } },
-      whatsappInstance: { select: { status: true } },
+      whatsappInstances: { select: { status: true } },
       _count: {
         select: {
           leads: { where: { isTest: false } },
@@ -270,7 +289,7 @@ export async function deleteTenant(tenantId: string): Promise<void> {
     where: { id: tenantId },
     select: {
       id: true,
-      whatsappInstance: { select: WHATSAPP_PROVIDER_SELECT },
+      whatsappInstances: { select: WHATSAPP_PROVIDER_SELECT },
       agents: { select: { voiceId: true, voiceSource: true } },
       knowledgeDocs: { select: { fileUrl: true } },
     },
@@ -288,16 +307,18 @@ export async function deleteTenant(tenantId: string): Promise<void> {
  */
 async function releaseExternalResources(tenant: {
   id: string;
-  whatsappInstance: WhatsappProviderInstance | null;
+  whatsappInstances: WhatsappProviderInstance[];
   agents: { voiceId: string | null; voiceSource: string | null }[];
   knowledgeDocs: { fileUrl: string | null }[];
 }): Promise<void> {
-  const externalId = tenant.whatsappInstance?.externalId;
-  if (externalId) {
+  // Uma conexão por provedor: a conta pode ter o QR e a API oficial de pé, e
+  // deixar uma delas para trás seria um número atendendo uma conta que sumiu.
+  for (const instance of tenant.whatsappInstances) {
+    if (!instance.externalId) continue;
     try {
       // Logout, não delete: derruba a sessão do WhatsApp para o número não
       // seguir conectado a uma conta que não existe mais.
-      await getWhatsAppProviderForInstance(tenant.whatsappInstance!).disconnect(externalId);
+      await getWhatsAppProviderForInstance(instance).disconnect(instance.externalId);
     } catch (err) {
       console.error("[admin] falha ao desconectar WhatsApp da conta excluída", tenant.id, err);
     }

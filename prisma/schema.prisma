@@ -118,7 +118,8 @@ model Tenant {
   agents           Agent[]
   knowledgeDocs    KnowledgeDocument[]
   actions          TenantAction[]
-  whatsappInstance WhatsappInstance?
+  /// Uma conexão por provedor (QR/Evolution e Meta). Ver `WhatsappInstance`.
+  whatsappInstances WhatsappInstance[]
   whatsappBlocked  WhatsappBlockedNumber[]
   leads            Lead[]
   conversations    Conversation[]
@@ -139,6 +140,8 @@ model Tenant {
   reportEvents      ReportEvent[]
   knowledgeGaps     KnowledgeGap[]
   knowledgeGapSettings KnowledgeGapSettings?
+  serviceArea       TenantServiceArea?
+  conversationInsights ConversationInsight[]
   reportTrackingStartedAt DateTime @default(now())
 }
 
@@ -233,6 +236,49 @@ model KnowledgeGapSettings {
   responders     String   @default("clinic") // clinic | mavellium | both
   lastDigestAt   DateTime?
   updatedAt      DateTime @updatedAt
+}
+
+/// Área de atendimento da clínica: a cidade-base e as outras cidades que ela
+/// atende, por NOME. Sem linha = não configurado, e "dentro/fora do raio" fica
+/// desconhecido — nunca chutado. Ver `src/modules/lead-insights/README.md`.
+model TenantServiceArea {
+  tenantId  String   @id
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  baseCity  String
+  /// Outras cidades atendidas (a base entra sempre). Nomes como a clínica digitou.
+  cities    String[] @default([])
+  updatedAt DateTime @updatedAt
+}
+
+/// O que o agente registrou da conversa (tool `record_lead_insight`): cidade,
+/// procedimento, primeira dúvida real e motivo de perda. Uma linha por conversa,
+/// só com o que o contato DISSE — nunca inferido. "Dentro/fora do raio" e o
+/// resultado (agendou, transbordou, perdeu) NÃO são gravados: são calculados na
+/// leitura, com a área e os dados de hoje. Chaves de categoria são String (o
+/// conjunto cresce com o que a equipe aprovar), não enum.
+model ConversationInsight {
+  id                String       @id @default(cuid())
+  tenantId          String
+  tenant            Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversationId    String       @unique
+  conversation      Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  /// Cidade como o contato disse (limpa, para exibição) e a chave normalizada
+  /// (minúsculas, sem acento, sem UF) usada para comparar com a área.
+  city              String?
+  cityKey           String?
+  procedure         String?
+  /// A PRIMEIRA dúvida real, depois da mensagem padrão do anúncio. Gravada uma
+  /// vez: as seguintes não sobrescrevem.
+  firstQuestionKey  String?
+  firstQuestionText String?
+  /// Último motivo de perda registrado pelo agente (o contato pode mudar de ideia).
+  lossReasonKey     String?
+  lossReasonText    String?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, cityKey])
 }
 
 /// Premissas e texto revisados pela Mavellium, por competência. O fechamento
@@ -603,9 +649,13 @@ model TenantAction {
   @@index([agentId])
 }
 
+/// Conexão de WhatsApp da conta. Uma linha por provedor: a Evolution (QR code) e
+/// a API oficial da Meta podem ficar conectadas ao mesmo tempo, cada uma com o
+/// seu número. Antes era uma linha só por conta e a troca de provedor
+/// sobrescrevia a anterior.
 model WhatsappInstance {
   id         String  @id @default(cuid())
-  tenantId   String  @unique
+  tenantId   String
   tenant     Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   status     String  @default("disconnected") // disconnected | pending_qr | connected
   /// `evolution` (padrão legado) ou `meta`. String para permitir acrescentar
@@ -625,6 +675,7 @@ model WhatsappInstance {
 
   updatedAt DateTime @updatedAt
 
+  @@unique([tenantId, provider])
   @@index([provider, externalId])
 }
 
@@ -684,6 +735,13 @@ model Conversation {
   /// Espelha `Lead.isTest` para as consultas de conversa não precisarem de join.
   isTest          Boolean   @default(false)
   lastInboundAt   DateTime?
+  /// Por qual conexão o contato falou por último: `evolution` (QR code) ou
+  /// `meta` (API oficial). Com as duas conectadas, é o que decide de qual número
+  /// saem a resposta manual, o follow-up e o lembrete — o contato só conhece o
+  /// número em que escreveu, e um primeiro contato pelo outro leva ao bloqueio
+  /// (QR) ou à recusa da Meta (fora da janela). Null = conversa anterior a esta
+  /// coluna, do site ou de teste. Ver `modules/whatsapp/instances.ts`.
+  whatsappProvider String?
   /// Última mensagem de follow-up enviada, de qualquer etapa. Relatório e
   /// painel leem como "recebeu follow-up"; o worker usa como ponto de partida
   /// da etapa seguinte.
@@ -718,6 +776,7 @@ model Conversation {
   appointments Appointment[]
   reportEvents ReportEvent[]
   knowledgeGapOccurrences KnowledgeGapOccurrence[]
+  insight      ConversationInsight?
 
   @@index([tenantId])
   @@index([agentId])

@@ -1,8 +1,6 @@
 import { prisma } from "../../src/lib/prisma";
-import {
-  getWhatsAppProviderForInstance,
-  WHATSAPP_PROVIDER_SELECT,
-} from "../../src/modules/whatsapp/meta-config";
+import { getWhatsAppProviderForInstance } from "../../src/modules/whatsapp/meta-config";
+import { findWhatsappChannel } from "../../src/modules/whatsapp/instances";
 import {
   FOLLOWUP_STALE_AFTER_MINUTES,
   cumulativeDelays,
@@ -248,12 +246,11 @@ export async function scanAndSendFollowUps(now: Date = new Date()) {
 
     // Conexão antes da IA: não se paga uma mensagem gerada que não tem como
     // sair. Desconectado não consome a etapa — a próxima varredura tenta de
-    // novo até a etapa ficar velha (`isStale`).
-    const instance = await prisma.whatsappInstance.findUnique({
-      where: { tenantId: c.tenantId },
-      select: { status: true, ...WHATSAPP_PROVIDER_SELECT },
-    });
-    if (!instance?.externalId || instance.status !== "connected") continue;
+    // novo até a etapa ficar velha (`isStale`). Sai pelo número em que o
+    // contato escreveu: com as duas conexões, a dele fora do ar espera, não
+    // troca de número (ver `pickWhatsappChannel`).
+    const instance = await findWhatsappChannel(c.tenantId, c.whatsappProvider);
+    if (!instance?.externalId) continue;
     const provider = getWhatsAppProviderForInstance(instance);
     if (!provider.isConfigured()) continue;
 

@@ -647,8 +647,8 @@ export function TenantRow(t: Props) {
                 <div>
                   <p className="text-sm font-medium text-white/85">API oficial da Meta</p>
                   <p id={`${t.id}-meta-whatsapp-help`} className="mt-1 text-sm text-white/50">
-                    Quando ligada, a opção aparece em Integrações para esta conta. Ao desligar uma
-                    conexão Meta ativa, o canal é interrompido e volta para Evolution.
+                    Quando ligada, a conta pode conectar a API oficial em Integrações e mantê-la
+                    junto com o número por QR code. Ao desligar, só a conexão Meta é interrompida.
                   </p>
                 </div>
                 <Switch

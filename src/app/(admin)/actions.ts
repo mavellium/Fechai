@@ -340,10 +340,10 @@ export type TenantMetaWhatsappAccessResult = {
 /**
  * Libera ou recolhe a alternativa oficial da Meta para uma conta.
  *
- * Ao recolher, uma integração Meta ativa é desligada localmente e a seleção
- * volta para Evolution. Os segredos ficam preservados para uma reativação
- * futura; apagar credenciais aqui tornaria um toggle administrativo
- * desnecessariamente destrutivo.
+ * Ao recolher, só a conexão Meta da conta é desligada localmente: a Evolution
+ * (QR code) é outra linha e segue atendendo. Os segredos ficam preservados
+ * para uma reativação futura; apagar credenciais aqui tornaria um toggle
+ * administrativo desnecessariamente destrutivo.
  */
 export async function setTenantMetaWhatsappEnabled(
   tenantId: string,
@@ -359,12 +359,14 @@ export async function setTenantMetaWhatsappEnabled(
     select: {
       name: true,
       metaWhatsappEnabled: true,
-      whatsappInstance: { select: { provider: true, status: true } },
+      whatsappInstances: { select: { provider: true, status: true } },
     },
   });
   if (!before) return { ok: false, error: "Conta não encontrada." };
 
-  const disconnectingMeta = !enabled && before.whatsappInstance?.provider === "meta";
+  const disconnectingMeta =
+    !enabled &&
+    before.whatsappInstances.some((i) => i.provider === "meta" && i.status !== "disconnected");
   await prisma.$transaction([
     prisma.tenant.update({
       where: { id: tenantId },
@@ -374,7 +376,7 @@ export async function setTenantMetaWhatsappEnabled(
       ? [
           prisma.whatsappInstance.updateMany({
             where: { tenantId, provider: "meta" },
-            data: { provider: "evolution", status: "disconnected", externalId: null },
+            data: { status: "disconnected" },
           }),
         ]
       : []),

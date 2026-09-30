@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { canonicalPhone } from "@/modules/whatsapp/blocklist";
 import { MetaBroadcastRejected } from "@/modules/whatsapp/meta";
 import { getOrCreateConversation } from "@/modules/agent-engine/conversation";
+import { setConversationChannel } from "@/modules/whatsapp/instances";
 import { getBroadcastConnection } from "./connection";
 import { broadcastPhoneVariants } from "./phone";
 import { reconcileBroadcastReceipts } from "./receipts";
@@ -64,6 +65,11 @@ export async function sendBroadcastRecipient(
       recipient.phone,
       recipient.name ?? undefined,
     );
+    // Contato novo, vindo só do Disparo: a conversa é da Meta desde já, senão
+    // uma resposta manual antes de ele escrever sairia pelo QR — primeiro
+    // contato. Quem já fala por outro número continua nele: o template não
+    // abre a janela da Meta, e a conversa só muda quando o contato responder.
+    await setConversationChannel(conversation, "meta", { onlyIfUnset: true });
     const current = await prisma.broadcastCampaign.findFirst({
       where: { id: campaign.id, tenantId: campaign.tenantId },
       select: { status: true },

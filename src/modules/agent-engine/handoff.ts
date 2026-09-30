@@ -1,8 +1,11 @@
 import { prisma } from "@/lib/prisma";
+import { getWhatsAppProviderForInstance } from "@/modules/whatsapp/meta-config";
 import {
-  getWhatsAppProviderForInstance,
-  WHATSAPP_PROVIDER_SELECT,
-} from "@/modules/whatsapp/meta-config";
+  findWhatsappChannel,
+  isReadyChannel,
+  listWhatsappChannels,
+  pickWhatsappChannel,
+} from "@/modules/whatsapp/instances";
 import type { WhatsAppGroup } from "@/modules/whatsapp/provider";
 
 /**
@@ -123,11 +126,19 @@ export type GroupListResult =
  */
 export async function listWhatsAppGroups(tenantId: string): Promise<GroupListResult> {
   try {
-    const instance = await prisma.whatsappInstance.findUnique({
-      where: { tenantId },
-      select: { status: true, ...WHATSAPP_PROVIDER_SELECT },
-    });
-    if (!instance?.externalId || instance.status !== "connected") {
+    // Grupo só existe no número conectado por QR code: com as duas conexões, é
+    // a Evolution que responde, e a Meta de pé não a substitui.
+    const channels = await listWhatsappChannels(tenantId);
+    const instance = pickWhatsappChannel(channels, "evolution");
+    if (!instance?.externalId) {
+      if (channels.some(isReadyChannel)) {
+        return {
+          ok: false,
+          reason: "unsupported",
+          error:
+            "Só a API oficial da Meta está conectada, e ela não dá acesso a grupos. Avisar a equipe em um grupo só funciona com o número conectado por QR code — conecte-o em Integrações.",
+        };
+      }
       return {
         ok: false,
         reason: "disconnected",
@@ -140,7 +151,7 @@ export async function listWhatsAppGroups(tenantId: string): Promise<GroupListRes
         ok: false,
         reason: "unsupported",
         error:
-          "Esta conta está conectada pela API oficial da Meta, que não dá acesso a grupos. Avisar a equipe em um grupo só funciona com o número conectado por QR code.",
+          "Esta conexão não dá acesso a grupos. Avisar a equipe em um grupo só funciona com o número conectado por QR code.",
       };
     }
     if (!provider.isConfigured()) {
@@ -220,11 +231,10 @@ export async function notifyHandoffGroup(
     const config = await getActiveHandoffConfig(tenantId, agentId);
     if (!config?.notifyGroup || !config.groupId) return;
 
-    const instance = await prisma.whatsappInstance.findUnique({
-      where: { tenantId },
-      select: { status: true, ...WHATSAPP_PROVIDER_SELECT },
-    });
-    if (!instance?.externalId || instance.status !== "connected") return;
+    // O grupo é do número conectado por QR code, seja qual for o número por
+    // onde o contato falou: a equipe recebe o aviso no grupo que já usa.
+    const instance = await findWhatsappChannel(tenantId, "evolution");
+    if (!instance?.externalId) return;
 
     const provider = getWhatsAppProviderForInstance(instance);
     if (!provider.sendGroupMessage || !provider.isConfigured()) return;

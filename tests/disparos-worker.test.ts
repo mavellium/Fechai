@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   block: vi.fn(),
   stop: vi.fn(),
   conversation: vi.fn(),
+  conversationUpdate: vi.fn(),
   message: vi.fn(),
   connection: vi.fn(),
   templates: vi.fn(),
@@ -32,7 +33,7 @@ vi.mock("@/lib/prisma", () => ({
       count: mocks.recipientCount,
     },
     whatsappBlockedNumber: { findUnique: mocks.block },
-    conversation: { findFirst: mocks.stop },
+    conversation: { findFirst: mocks.stop, update: mocks.conversationUpdate },
     message: { create: mocks.message },
     $transaction: mocks.transaction,
     $queryRaw: mocks.campaigns,
@@ -90,6 +91,7 @@ beforeEach(() => {
   mocks.recipientCount.mockResolvedValue(0);
   mocks.block.mockResolvedValue(null);
   mocks.stop.mockResolvedValue(null);
+  mocks.conversationUpdate.mockResolvedValue({});
   mocks.conversation.mockResolvedValue({
     conversation: { id: "conv-a" },
     lead: { status: "new" },
@@ -163,6 +165,22 @@ describe("fila de disparos", () => {
         data: expect.objectContaining({ status: "completed" }),
       }),
     );
+  });
+  it("contato novo do Disparo nasce como conversa da Meta: a resposta manual não sai pelo QR", async () => {
+    await scanBroadcasts();
+    expect(mocks.conversationUpdate).toHaveBeenCalledWith({
+      where: { id: "conv-a" },
+      data: { whatsappProvider: "meta" },
+    });
+  });
+  it("quem já fala pelo QR continua nele: o template não abre a janela da Meta", async () => {
+    mocks.conversation.mockResolvedValue({
+      conversation: { id: "conv-a", whatsappProvider: "evolution" },
+      lead: { status: "new" },
+    });
+    await scanBroadcasts();
+    expect(mocks.send).toHaveBeenCalled();
+    expect(mocks.conversationUpdate).not.toHaveBeenCalled();
   });
   it("não envia se outro worker já reservou o destinatário", async () => {
     mocks.recipientUpdate.mockResolvedValue({ count: 0 });

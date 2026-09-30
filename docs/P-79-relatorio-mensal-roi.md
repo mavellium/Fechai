@@ -87,7 +87,10 @@ A tela usa os componentes e tokens do painel: `PageHeader`, `Card`, `Badge`,
 oferece apenas competências publicadas. A navegação protege alterações não
 salvas. O retorno aparece antes da edição recolhível.
 
-O PDF A4 de uma página usa preto e cinza, com as imagens locais
+O PDF A4 tem uma página fixa e ganha uma **segunda página** só quando o mês tem
+leads analisados (bloco "Qualidade dos leads e melhorias para o tráfego",
+[contrato](./inteligencia-de-conversas.md)); sem o bloco continua de uma página.
+Ele usa preto e cinza, com as imagens locais
 `public/brand/fechai-black.png` e `public/brand/mavellium-black.png` no
 cabeçalho. Não busca logos externamente durante a exportação. Origem dos
 arquivos em [`public/brand/README.md`](../public/brand/README.md).

@@ -71,6 +71,11 @@ export const AUDIT_EVENTS = {
     group: "conta",
     revertible: true,
   },
+  "account.service_area_updated": {
+    label: "Atualizou a área de atendimento",
+    kind: "update",
+    group: "conta",
+  },
   "account.onboarding_completed": {
     label: "Concluiu o onboarding",
     kind: "update",

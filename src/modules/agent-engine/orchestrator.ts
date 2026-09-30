@@ -27,6 +27,7 @@ import { sanitizeUnresolvedPlaceholders } from "./reply-sanitizer";
 import { loadConversationVariables, parseVariableDefinitions, variablesSystemContext } from "./variables";
 import { INJECTION_GUARD } from "./injection-guard";
 import { unansweredRule, type Retrieved } from "./unanswered-rule";
+import { leadInsightRule } from "@/modules/lead-insights/tool";
 
 const MAX_TOOL_ITERATIONS = 3;
 const DEFAULT_SYSTEM =
@@ -196,6 +197,7 @@ export async function runAgentTurn(input: {
     agent ? variablesSystemContext(variableDefinitions, variableValues) : "",
     context,
     agent ? unansweredRule(retrieved) : "",
+    agent ? leadInsightRule() : "",
     INJECTION_GUARD,
   ]
     .filter(Boolean)

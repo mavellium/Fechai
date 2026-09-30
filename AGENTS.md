@@ -12,6 +12,10 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 Before adding a save/submit screen, read `src/components/ui/toast/TOASTS.md`. Todo retorno de salvar (carregando, sucesso, validação, rede/servidor, sessão expirada, permissão) vai ao topo pelo `ToastProvider` do `PanelShell`: formulário com `useActionState` usa `useActionToast(state, pending, { entity, action, gender })`, envio por `fetch` usa `useSaveFeedback` + `requestSave`. Só sucesso some sozinho; erro fica até fechar ou tentar de novo. Detalhe técnico nunca vai à tela (`sanitizeReason`). Formulário dentro de `<dialog>` modal **mantém o `FormFeedback` inline**, porque o diálogo deixa o toast inalcançável.
 
+## Working in inteligência de conversas (qualidade dos leads, /relatorios?visao=leads)
+
+Before touching lead-quality logic, read `src/modules/lead-insights/README.md`. O agente registra **só o que o contato disse** pela tool interna `record_lead_insight` (cidade, procedimento, primeira dúvida real, motivo de perda; sem vaga de habilidade), nunca inferido; registrar **nunca lança**, conversa de teste fica fora. **"Dentro/fora do raio" e o resultado (agendou, transbordou, perdeu, em andamento) são calculados na leitura, nunca gravados**: a área de atendimento (`TenantServiceArea`) é uma lista de cidades por nome, e sem ela o veredito é `unknown`, jamais "dentro" presumido. "Perdeu" só com sinal explícito ou 72h sem resposta. As sugestões de tráfego do relatório são **regra, não IA**, só com 10+ leads que informaram a cidade, e sempre "sugestão, não promessa". `MonthlyReport.leadQuality` é congelado no snapshot; o PDF segue de uma página e ganha uma **segunda só quando o mês tem leads**. Nenhuma consulta devolve nome, telefone ou texto de conversa. Schema novo: `db push` + `generate` nos dois processos (web e worker).
+
 ## Working in Disparos (/disparos, Excel/JSON, Meta templates)
 
 Before touching broadcasts, read `src/modules/broadcasts/README.md`. A página e
@@ -35,6 +39,10 @@ dá uma vaga por tenant e recua em falhas. Testes têm `isTest` no destinatário
 da campanha, nunca transformam a conversa real em sandbox. Resultados usam a
 última campanha antes da resposta, em sete dias; leia a regra no README antes
 de alterar a atribuição. Confirmação registra usuário/data/versão do consentimento.
+
+## Working in WhatsApp (Evolution + Meta ao mesmo tempo, /integracoes)
+
+Before touching connection or send logic, read `src/modules/whatsapp/README.md` ("Duas conexões ao mesmo tempo"). A conta tem **uma linha `WhatsappInstance` por provedor** (`@@unique([tenantId, provider])`): `findUnique({ where: { tenantId } })` não existe mais e "o provedor da conta" também não — use `listWhatsappChannels`/`pickWhatsappChannel` (`modules/whatsapp/instances.ts`). **Por onde falar com um contato é o número em que ele escreveu** (`Conversation.whatsappProvider`, gravado no webhook; a última mensagem vence): resposta a mensagem que chegou usa o provider do próprio webhook, e follow-up, lembrete, resposta manual e retomada de pergunta usam o registro da conversa. Com o número do contato fora do ar o envio **espera, nunca troca para o outro** — pelo QR seria primeiro contato (bloqueio do número da clínica) e pela Meta o texto livre fora das 24h é recusado. Grupos (aviso da transferência, perguntas sem resposta) são só do QR; Disparos só da Meta; pausar o agente, ignorar grupos e bloqueados são da **conta**. "Conectada" para a conta é **qualquer** conexão (`summarizeWhatsappStatus`). O monitor de saúde checa cada linha com o próprio provedor, **nunca religa uma Meta desconectada** (o token segue válido) e não usa silêncio como sinal da Meta. Desconectar/recolher a Meta mexe só na linha Meta. Os dois números precisam ser **diferentes**: o mesmo nos dois responderia duas vezes. Abrir `/integracoes` não pode criar instância na Evolution de conta que só usa a Meta (o QR só sai no clique). Mudança de schema pede `db push` + `generate` nos dois processos (web e worker).
 
 ## Working in /relatorios (relatórios + visão Financeira)
 

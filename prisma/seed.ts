@@ -37,7 +37,7 @@ async function upsertTenantWithOwner(opts: {
       // Contas de seed já vêm configuradas — não passam pelo wizard de /onboarding.
       onboardingCompleted: true,
       onboardingStep: 4,
-      whatsappInstance: { create: { status: "disconnected" } },
+      whatsappInstances: { create: { provider: "evolution", status: "disconnected" } },
       users: { create: { email: opts.email, passwordHash, role: opts.role } },
     },
   });

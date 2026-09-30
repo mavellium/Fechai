@@ -22,7 +22,7 @@ const db = vi.hoisted(() => ({
   knowledgeDocument: { findFirst: vi.fn() },
   agent: { findFirst: vi.fn() },
   message: { count: vi.fn() },
-  whatsappInstance: { findUnique: vi.fn() },
+  whatsappInstance: { findMany: vi.fn() },
   user: { findMany: vi.fn() },
   $transaction: vi.fn(async (ops: Promise<unknown>[]) => Promise.all(ops)),
   $executeRaw: vi.fn(async () => 1),
@@ -61,7 +61,7 @@ import { HIDDEN_NAME, HIDDEN_NUMBER, maskName, maskPhone, maskText } from "@/mod
 import { cleanQuestion, formatDuration, formatGapTime, formatGapTimeShort, normalizeQuestion } from "@/modules/knowledge-gaps/text";
 import { clinicAnswers, DEFAULT_GAP_SETTINGS, mavelliumAnswers, parseGapSettings } from "@/modules/knowledge-gaps/settings";
 import { registerKnowledgeGap } from "@/modules/knowledge-gaps/register";
-import { approveGapAnswer } from "@/modules/knowledge-gaps/answer";
+import { approveGapAnswer, describeResume } from "@/modules/knowledge-gaps/answer";
 import { resumeGapContacts } from "@/modules/knowledge-gaps/resume";
 import { formatGapNotice, sendGapNotices } from "@/modules/knowledge-gaps/notify";
 import { unansweredRule } from "@/modules/agent-engine/unanswered-rule";
@@ -311,7 +311,7 @@ describe("retomar quem ficou sem resposta", () => {
   });
 
   beforeEach(() => {
-    db.whatsappInstance.findUnique.mockResolvedValue({ status: "connected", externalId: "inst", provider: "evolution" });
+    db.whatsappInstance.findMany.mockResolvedValue([{ status: "connected", externalId: "inst", provider: "evolution" }]);
   });
 
   it("envia uma vez para quem pode e deixa de fora quem pediu para parar, saiu da janela ou já foi atendido", async () => {
@@ -334,7 +334,7 @@ describe("retomar quem ficou sem resposta", () => {
   });
 
   it("na Meta respeita a janela de 24h", async () => {
-    db.whatsappInstance.findUnique.mockResolvedValue({ status: "connected", externalId: "inst", provider: "meta" });
+    db.whatsappInstance.findMany.mockResolvedValue([{ status: "connected", externalId: "inst", provider: "meta" }]);
     db.knowledgeGapOccurrence.findMany.mockResolvedValue([occ("a", { lastInboundAt: hoursAgo(30) })]);
     const r = await resumeGapContacts(TENANT, "gap-1", "Olá!", now);
     expect(r.skipped).toBe(1);
@@ -352,11 +352,97 @@ describe("retomar quem ficou sem resposta", () => {
   });
 
   it("WhatsApp desconectado não consome ninguém", async () => {
-    db.whatsappInstance.findUnique.mockResolvedValue({ status: "disconnected", externalId: "inst", provider: "evolution" });
+    db.whatsappInstance.findMany.mockResolvedValue([{ status: "disconnected", externalId: "inst", provider: "evolution" }]);
     db.knowledgeGapOccurrence.findMany.mockResolvedValue([occ("a")]);
     const r = await resumeGapContacts(TENANT, "gap-1", "Olá!", now);
     expect(r.blocked).toMatch(/não está conectado/);
     expect(db.knowledgeGapOccurrence.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("retomar com as duas conexões (QR e Meta)", () => {
+  const now = new Date("2026-09-28T12:00:00Z");
+  const hoursAgo = (h: number) => new Date(now.getTime() - h * 3_600_000);
+  const QR = { status: "connected", externalId: "inst-qr", provider: "evolution" };
+  const META = { status: "connected", externalId: "phone-meta", provider: "meta" };
+  const occ = (id: string, whatsappProvider: string | null, hours = 1) => ({
+    id,
+    askedAt: hoursAgo(hours + 1),
+    conversation: {
+      id: `c-${id}`, isTest: false, lastInboundAt: hoursAgo(hours), followUpReason: null,
+      whatsappProvider, lead: { phone: `5514999990${id}`, isTest: false },
+    },
+  });
+
+  beforeEach(() => {
+    db.whatsappInstance.findMany.mockResolvedValue([QR, META]);
+    db.message.count.mockResolvedValue(0);
+  });
+
+  it("cada contato volta pelo número em que perguntou", async () => {
+    db.knowledgeGapOccurrence.findMany.mockResolvedValue([occ("01", "meta"), occ("02", "evolution")]);
+
+    const r = await resumeGapContacts(TENANT, "gap-1", "Aceitamos Unimed.", now);
+
+    expect(r).toEqual({ sent: 2, skipped: 0, failed: 0 });
+    expect(provider.sendMessage).toHaveBeenNthCalledWith(1, "phone-meta", "551499999001", "Aceitamos Unimed.");
+    expect(provider.sendMessage).toHaveBeenNthCalledWith(2, "inst-qr", "551499999002", "Aceitamos Unimed.");
+  });
+
+  it("o número do contato fora do ar deixa a retomada pendente — o outro não o substitui", async () => {
+    // Voltar pelo QR a quem só falou com o número oficial seria primeiro contato.
+    db.whatsappInstance.findMany.mockResolvedValue([QR, { ...META, status: "disconnected" }]);
+    db.knowledgeGapOccurrence.findMany.mockResolvedValue([occ("01", "meta"), occ("02", "evolution")]);
+
+    const r = await resumeGapContacts(TENANT, "gap-1", "Aceitamos Unimed.", now);
+
+    expect(r).toEqual({ sent: 1, skipped: 0, failed: 0, waiting: 1 });
+    expect(provider.sendMessage).toHaveBeenCalledOnce();
+    expect(provider.sendMessage).toHaveBeenCalledWith("inst-qr", "551499999002", "Aceitamos Unimed.");
+    // Quem espera não é reivindicado nem marcado: uma nova tentativa o encontra.
+    expect(db.knowledgeGapOccurrence.updateMany).not.toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ id: "01" }) }),
+    );
+  });
+
+  it("a janela é a do número do contato, mesmo com esse número desconectado", async () => {
+    db.whatsappInstance.findMany.mockResolvedValue([QR, { ...META, status: "disconnected" }]);
+    db.knowledgeGapOccurrence.findMany.mockResolvedValue([occ("01", "meta", 30)]);
+
+    const r = await resumeGapContacts(TENANT, "gap-1", "Olá!", now);
+
+    // 30h passou das 24h da Meta: sai da fila em vez de esperar para sempre.
+    expect(r).toEqual({ sent: 0, skipped: 1, failed: 0 });
+    expect(db.knowledgeGapOccurrence.updateMany.mock.calls[0][0].data.resumeNote).toMatch(/24h/);
+  });
+
+  it("contato do QR com 30h de silêncio ainda está na janela de 7 dias", async () => {
+    db.knowledgeGapOccurrence.findMany.mockResolvedValue([occ("02", "evolution", 30)]);
+
+    const r = await resumeGapContacts(TENANT, "gap-1", "Olá!", now);
+
+    expect(r).toEqual({ sent: 1, skipped: 0, failed: 0 });
+    expect(provider.sendMessage).toHaveBeenCalledWith("inst-qr", "551499999002", "Olá!");
+  });
+
+  it("nenhuma conexão de pé: ninguém é tentado, como antes", async () => {
+    db.whatsappInstance.findMany.mockResolvedValue([
+      { ...QR, status: "disconnected" },
+      { ...META, status: "disconnected" },
+    ]);
+    db.knowledgeGapOccurrence.findMany.mockResolvedValue([occ("01", "meta")]);
+
+    const r = await resumeGapContacts(TENANT, "gap-1", "Olá!", now);
+
+    expect(r.blocked).toMatch(/não está conectado/);
+    expect(db.knowledgeGapOccurrence.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("a tela diz quantos esperam a reconexão", () => {
+    expect(describeResume({ sent: 1, skipped: 0, failed: 0, waiting: 2 })).toMatch(
+      /1 contato recebeu a resposta, 2 aguardam a reconexão do número por onde falam./,
+    );
+    expect(describeResume({ sent: 0, skipped: 0, failed: 0, waiting: 1 })).toMatch(/1 aguarda a reconexão/);
   });
 });
 
@@ -389,6 +475,39 @@ describe("avisos para a equipe", () => {
     expect(sent.text).toContain("Aceita Unimed?");
     expect(sent.text).not.toContain("Pergunta velha?");
     expect(sent.text).not.toContain("estacionamento");
+  });
+});
+
+describe("aviso no grupo com as duas conexões", () => {
+  const now = new Date("2026-09-28T12:00:00Z");
+  const GRUPO = "120363012345678901@g.us";
+  const QR = { status: "connected", externalId: "inst-qr", provider: "evolution" };
+  const META = { status: "connected", externalId: "phone-meta", provider: "meta" };
+
+  beforeEach(() => {
+    db.knowledgeGap.findMany.mockResolvedValue([
+      { id: "g1", tenantId: "t1", question: "Aceita Unimed?", askedCount: 1, createdAt: now },
+    ]);
+    db.knowledgeGapSettings.findMany.mockResolvedValue([
+      { tenantId: "t1", notifyEmail: false, notifyWhatsapp: true, groupId: GRUPO },
+    ]);
+  });
+
+  it("o grupo é do número por QR code: sai por ele mesmo com a Meta também conectada", async () => {
+    db.whatsappInstance.findMany.mockResolvedValue([META, QR]);
+
+    expect(await sendGapNotices(now)).toBe(1);
+
+    expect(provider.sendGroupMessage).toHaveBeenCalledOnce();
+    expect(provider.sendGroupMessage).toHaveBeenCalledWith("inst-qr", GRUPO, expect.stringContaining("Aceita Unimed?"));
+  });
+
+  it("só a Meta de pé: não há grupo, e o aviso não é enviado por ela", async () => {
+    db.whatsappInstance.findMany.mockResolvedValue([META]);
+
+    expect(await sendGapNotices(now)).toBe(0);
+
+    expect(provider.sendGroupMessage).not.toHaveBeenCalled();
   });
 });
 
