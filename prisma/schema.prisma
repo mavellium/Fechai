@@ -296,6 +296,16 @@ model MonthlyRoiReport {
   /// Caso real do mês, escrito pela Mavellium só com o perfil genérico
   /// ("paciente de 74 anos"). Nome, telefone e e-mail são recusados ao salvar.
   featuredCase String @default("")
+  /// "Resumo do período" da página 1 do PDF (o nome da coluna é anterior).
+  /// Rascunho pode vir da IA, a partir só de agregados; a Mavellium confere e salva.
+  highlights   String @default("")
+  /// Próximas ações da página 1: até 3 `{ action, owner, indicator }`
+  /// (`monthly-next-actions.ts`). Substitui `nextMonth`, que fica para os
+  /// relatórios antigos.
+  nextActions  Json   @default("[]")
+  /// Explicação das limitações do fechamento. A LISTA das limitações não mora
+  /// aqui: é calculada (`monthly-limitations.ts`) e congelada no snapshot.
+  limitationsNote String @default("")
   status       String @default("draft") // draft | ready
   snapshot     Json?
   preparedBy   String?

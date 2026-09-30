@@ -5,9 +5,10 @@ import type { MonthlyMetrics } from "./monthly";
  * Central de pendências do fechamento mensal.
  *
  * `detectMonthlyPendencies` é a regra ÚNICA do que falta: `applyMonthlyOverrides`
- * gera `missing` a partir dela, e o bloqueio de "Fechar para entrega" lê
- * `missing`. Assim a central nunca diz "confirmado" para algo que trava o
- * fechamento (nem o contrário).
+ * gera `missing` a partir dela, e as limitações do fechamento
+ * (`monthly-limitations.ts`) também. Pendência não trava mais o fechamento:
+ * vira limitação que o admin confirma. Assim a central nunca diz "confirmado"
+ * para algo que o relatório entrega como "não verificado" (nem o contrário).
  *
  * A pendência é calculada na leitura, nunca gravada. O que a Mavellium registra
  * (quem responde, quando pediu, a resposta) mora em `MonthlyRoiPendency`, por

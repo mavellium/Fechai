@@ -135,9 +135,9 @@ describe("competência, fusos e validação", () => {
   });
 });
 describe("PDF mensal", () => {
-  it("gera exatamente uma página A4 com acentos e textos de revisão", async () => {
+  it("gera A4 com resumo executivo e análise detalhada, com acentos e textos de revisão", async () => {
     const doc = await PDFDocument.load(await generateMonthlyPdf(roiFixture()));
-    expect(doc.getPageCount()).toBe(1); expect(doc.getPage(0).getSize().width).toBeCloseTo(595.28);
+    expect(doc.getPageCount()).toBeGreaterThanOrEqual(2); expect(doc.getPage(0).getSize().width).toBeCloseTo(595.28);
   });
   it("comporta vários agentes, 12 procedimentos e os limites dos textos", async () => {
     const report = roiFixture();
@@ -145,6 +145,6 @@ describe("PDF mensal", () => {
     report.adjustments = "Revisamos a abordagem do agente e conferimos as informações. ".repeat(7).slice(0, 400);
     report.nextMonth = report.adjustments;
     report.assumptions.procedures = Array.from({ length: 12 }, (_, i) => ({ name: `Procedimento de avaliação com nome extenso e referência ${i}`, ticketCents: 100_000, conversionBps: 5000 }));
-    expect((await PDFDocument.load(await generateMonthlyPdf(report))).getPageCount()).toBe(1);
+    expect((await PDFDocument.load(await generateMonthlyPdf(report))).getPageCount()).toBeGreaterThanOrEqual(2);
   });
 });

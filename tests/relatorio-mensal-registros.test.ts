@@ -123,7 +123,7 @@ describe("painel e PDF", () => {
     const report = roiFixture(); delete report.quality; delete report.evidence;
     const html = render(report);
     expect(html).not.toContain("Ver registros"); expect(html).not.toContain("Verificado");
-    expect((await PDFDocument.load(await generateMonthlyPdf(report))).getPageCount()).toBe(1);
+    expect((await PDFDocument.load(await generateMonthlyPdf(report))).getPageCount()).toBeGreaterThanOrEqual(2);
   });
 });
 

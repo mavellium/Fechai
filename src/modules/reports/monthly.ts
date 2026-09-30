@@ -12,6 +12,8 @@ import { loadLeadQualityDetail } from "@/modules/lead-insights/queries";
 import type { LeadQuality } from "@/modules/lead-insights/summary";
 import { capEvidence, emptyEvidence, type AppointmentEvidence, type Bucket, type EventEvidence, type MonthlyEvidence } from "./monthly-evidence";
 import { monthlyQuality, type MonthlyQuality } from "./monthly-quality";
+import { monthlyLimitations, type MonthlyLimitation } from "./monthly-limitations";
+import { parseNextActions, type MonthlyNextAction } from "./monthly-next-actions";
 
 export type SplitCount = { inside: number; outside: number; unclassified: number };
 export type MonthlyMetrics = {
@@ -62,6 +64,17 @@ export type MonthlyReport = {
    */
   evidence?: MonthlyEvidence;
   quality?: MonthlyQuality;
+  /**
+   * Destaques (parte 3) e a explicação das limitações, escritos na revisão.
+   * `limitations` é a lista calculada (`monthly-limitations.ts`) do que ficou
+   * sem evidência; congelada no snapshot. Os três ausentes em fechamentos
+   * anteriores ao assistente de fechamento — o painel e o PDF escondem.
+   */
+  highlights?: string;
+  limitationsNote?: string;
+  /** Próximas ações da página 1; ausente em relatórios antigos, que usam `nextMonth`. */
+  nextActions?: MonthlyNextAction[];
+  limitations?: MonthlyLimitation[];
   status: string; finalizedAt: string | null; sentAt: string | null; meetingAt: string | null;
 };
 
@@ -229,7 +242,7 @@ export function evaluateMonthlyMetrics(input: MonthlyInput): { metrics: MonthlyM
     const remote = appointment.clinicorpAppointmentId ? external.get(appointment.clinicorpAppointmentId) : undefined;
     const row: AppointmentEvidence = { appointmentId: appointment.id, conversationId: conversation?.id ?? appointment.conversationId,
       createdAt: appointment.createdAt.toISOString(), startsAt: appointment.startsAt.toISOString(), createdInMonth, startsInMonth,
-      serviceType: appointment.serviceType, status: appointment.status, procedure: procedureName(appointment, conversation),
+      serviceType: appointment.serviceType, kind: appointment.kind ?? null, status: appointment.status, procedure: procedureName(appointment, conversation),
       clinicorp: { linked: Boolean(appointment.clinicorpAppointmentId), statusType: remote?.statusType ?? null },
       arrivalAt: iso(origin), bucket: bucketOf(origin, config), scheduled: "other_month", attended: "other_month" };
     evidence.appointments.push(row);
@@ -363,6 +376,7 @@ export async function computeMonthlyReport(tenantId: string, month: string, useS
     clinicorpError: clinicorp.error, clinicorpStatusTypes: clinicorp.statusTypes, clinicorpIntegrationState: clinicorp.integrationState,
     adjustments: saved?.adjustments ?? "", nextMonth: saved?.nextMonth ?? "", decisionMaker: saved?.decisionMaker ?? "",
     featuredCase: saved?.featuredCase ?? "",
+    highlights: saved?.highlights ?? "", limitationsNote: saved?.limitationsNote ?? "", nextActions: parseNextActions(saved?.nextActions),
     ...(lead ? { leadQuality: lead.quality } : {}),
     evidence,
     status: saved?.status ?? "draft", finalizedAt: saved?.finalizedAt?.toISOString() ?? null,
@@ -370,6 +384,8 @@ export async function computeMonthlyReport(tenantId: string, month: string, useS
   // Calculado aqui, com as correções já aplicadas, para o snapshot congelar o
   // selo junto com o número: o PDF e o painel leem o mesmo.
   report.quality = monthlyQuality(report);
+  // Mesma regra, mesmo momento: o fechamento congela a lista que o admin confirmou.
+  report.limitations = monthlyLimitations(report);
   return report;
 }
 

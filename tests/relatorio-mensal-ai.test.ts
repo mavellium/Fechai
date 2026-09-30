@@ -13,7 +13,7 @@ import { roiFixture } from "./fixtures/monthly-roi";
 
 const draft = (): MonthlyAiDraft => {
   const report = roiFixture();
-  return { assumptions: report.assumptions, metricOverrides: { current: { handoffs: 7, conversations: { inside: 11 } }, previous: {} }, adjustments: "Ajuste conferido", nextMonth: "Texto manual", decisionMaker: "Decisor" };
+  return { assumptions: report.assumptions, metricOverrides: { current: { handoffs: 7, conversations: { inside: 11 } }, previous: {} }, adjustments: "Ajuste conferido", nextMonth: "Texto manual", decisionMaker: "Decisor", highlights: "", limitationsNote: "", nextActions: [] };
 };
 beforeEach(() => { vi.resetAllMocks(); ai.secret.mockResolvedValue("server-secret"); ai.usage.mockResolvedValue(undefined); });
 

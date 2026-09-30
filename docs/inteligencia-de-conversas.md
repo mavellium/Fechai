@@ -79,7 +79,7 @@ processos** (web e worker) e reiniciar ambos (no Windows, feche o `next dev`
 antes do `generate`). Não há migração de dados: contas sem linha em
 `TenantServiceArea` ficam "não configuradas". A tool passa a existir para todo
 agente no primeiro turno depois do deploy. Relatórios mensais já fechados
-continuam de uma página, sem o bloco.
+continuam sem o bloco.
 
 Validação: `tests/lead-insights.test.ts` (cidade, área, resultado, agregação,
 sugestões), `tests/lead-insights-record.test.ts` (registro, tool, isolamento) e

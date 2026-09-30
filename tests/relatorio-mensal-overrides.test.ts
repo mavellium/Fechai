@@ -42,13 +42,13 @@ describe("correções manuais dos indicadores", () => {
     expect(parseMonthlyOverrides(roiConfig())).toEqual({ current: {}, previous: {} });
     expect(parseMonthlyOverrides({ metricOverrides: { current: { newContacts: 12 }, previous: { newContacts: 6 } } })).toEqual({ current: { newContacts: 12 }, previous: { newContacts: 6 } });
   });
-  it("exporta A4 de uma página incorporando imagens das duas marcas e horas manuais", async () => {
+  it("exporta A4 incorporando imagens das duas marcas e horas manuais", async () => {
     const report = roiFixture(); report.metricOverrides = { current: { assumedHours: 7.5 }, previous: {} };
     report.current = applyMonthlyOverrides(report.current, report.metricOverrides.current, report.assumptions);
     const doc = await PDFDocument.load(await generateMonthlyPdf(report));
-    expect(doc.getPageCount()).toBe(1);
-    // Cada marca é um XObject independente, com sua própria imagem incorporada.
-    const resources = doc.getPage(0).node.Resources();
+    expect(doc.getPageCount()).toBeGreaterThanOrEqual(2);
+    // Cada marca é um XObject independente. A página 1 leva a faixa com o nome em texto; as marcas vão no cabeçalho do detalhe.
+    const resources = doc.getPage(1).node.Resources();
     expect(resources?.toString().match(/\/Image-/g)?.length).toBe(2);
   });
 });

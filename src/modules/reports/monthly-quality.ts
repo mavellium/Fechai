@@ -22,13 +22,23 @@ export const QUALITY_KEYS = [
 export type QualityKey = typeof QUALITY_KEYS[number];
 export type MonthlyQuality = Partial<Record<QualityKey, MetricQuality>>;
 
+// `pending` se lê "não verificado": um relatório pode fechar com cobertura
+// parcial, e aí o número sem evidência é entregue assim, nunca como "virá depois".
 export const QUALITY_LABEL: Record<QualityStatus, string> = {
-  verified: "Verificado", estimated: "Estimado", partial: "Cobertura parcial", pending: "Pendente", inconsistent: "Inconsistente",
+  verified: "Verificado", estimated: "Estimado", partial: "Cobertura parcial", pending: "Não verificado", inconsistent: "Inconsistente",
 };
 /** Uma linha para a legenda do painel e do PDF. */
-export const QUALITY_LEGEND = "Verificado: contado registro a registro. Estimado: usa premissas. Cobertura parcial: há registros sem o dado que classifica. Pendente: falta dado para calcular. Inconsistente: o valor não bate com os registros.";
+export const QUALITY_LEGEND = "Verificado: contado registro a registro. Estimado: usa premissas. Cobertura parcial: há registros sem o dado que classifica. Não verificado: falta dado para calcular. Inconsistente: o valor não bate com os registros.";
 /** A mesma legenda numa linha, para o rodapé do PDF. */
-export const QUALITY_FOOTER = "Qualidade: verificado = registro a registro · estimado = premissas · cobertura parcial = registros sem o dado · pendente = falta dado · inconsistente = diverge dos registros. Registros no painel.";
+export const QUALITY_FOOTER = "Qualidade: verificado = registro a registro · estimado = premissas · cobertura parcial = registros sem o dado · não verificado = falta dado · inconsistente = diverge dos registros. Registros no painel.";
+/** Nome de cada indicador nas listas de limitação ("não verificados: …"). */
+export const QUALITY_KEY_LABEL: Record<QualityKey, string> = {
+  newContacts: "Novos contatos", conversations: "Conversas dentro/fora do horário", firstResponse: "Primeira resposta média",
+  qualified: "Leads qualificados", scheduled: "Avaliações agendadas dentro/fora", attended: "Avaliações realizadas dentro/fora",
+  handoffs: "Transbordos", unanswered: "Perguntas sem resposta", gapAnswer: "Tempo para a equipe responder",
+  audios: "Áudios ouvidos", textMessages: "Mensagens de texto", assumedHours: "Horas devolvidas", revenue: "Receita estimada",
+  savings: "Economia estimada", investment: "Investimento mensal", roi: "ROI do mês", peaks: "Horários de pico", leads: "Qualidade dos leads",
+};
 
 // Da pior para a melhor: o selo é a pior situação encontrada.
 const SEVERITY: QualityStatus[] = ["inconsistent", "pending", "partial", "estimated", "verified"];

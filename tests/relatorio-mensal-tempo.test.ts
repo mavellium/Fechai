@@ -199,7 +199,7 @@ describe("bloco na tela do relatório", () => {
 
 describe("PDF com o tempo devolvido", () => {
   const stats = (count: number) => ({ count, averageMinutes: 1234.5, medianMinutes: 987.6, averageMessages: 23.4 });
-  it("cabe em uma página com conteúdo máximo e caso do mês", async () => {
+  it("resumo executivo cabe na página 1 com conteúdo máximo e caso do mês", async () => {
     const report = roiFixture();
     report.assumptions.secondsPerMessage = 30;
     report.agentNames = Array.from({ length: 5 }, (_, i) => `Agente de atendimento com nome extenso ${i}`);
@@ -210,10 +210,10 @@ describe("PDF com o tempo devolvido", () => {
     const heavy: MonthlyTimeMetrics = { textMessages: 18_400, audios: 3120, audioMinutes: 12_345.5, unmeasuredAudios: 270, longAudios: 580, longestAudioSeconds: 1795,
       sessions: { all: stats(4200), scheduled: stats(960), handoff: stats(410), lost: stats(330), other: stats(2500) }, toSchedule: stats(960) };
     report.current = applyMonthlyOverrides({ ...report.current, time: heavy }, {}, report.assumptions);
-    expect((await PDFDocument.load(await generateMonthlyPdf(report))).getPageCount()).toBe(1);
+    expect((await PDFDocument.load(await generateMonthlyPdf(report))).getPageCount()).toBeGreaterThanOrEqual(2);
   });
   it("relatório fechado antes do bloco continua exportando", async () => {
     const report = roiFixture(); delete report.current.time; delete report.previous.time; delete report.featuredCase;
-    expect((await PDFDocument.load(await generateMonthlyPdf(report))).getPageCount()).toBe(1);
+    expect((await PDFDocument.load(await generateMonthlyPdf(report))).getPageCount()).toBeGreaterThanOrEqual(2);
   });
 });

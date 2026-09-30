@@ -2,6 +2,28 @@
 
 Uma linha por milestone concluído (mais recente no topo).
 
+## ROI mensal: fechamento guiado, cobertura parcial, IA que investiga e resumo executivo — 2026-09-30
+
+Regras em `src/app/(dashboard)/relatorios/README.md` ("Assistente de fechamento",
+"Assistente que investiga os registros", "PDF: resumo executivo + análise detalhada").
+**Schema:** `MonthlyRoiReport.highlights`, `limitationsNote`, `nextActions` — `db push` + `generate` na web e no worker.
+
+- **Fechamento em 5 etapas** no admin: importar e conferir, resolver pendências,
+  validar resultados, análise com IA, aprovar e entregar (com prévia do PDF).
+  Um formulário só; nenhuma etapa trava a outra.
+- **Fecha com cobertura parcial**: pendência vira limitação explícita
+  (`monthly-limitations.ts`), confirmada pela lista exata que o admin viu. Número
+  sem evidência sai como **"não verificado"**, nunca estimado no lugar.
+- **Análise com IA** redige resumo do período, limitações, melhorias executadas
+  (só com alteração registrada no agente) e até 3 próximas ações; é rascunho.
+- **Assistente com ferramentas só de leitura** (`monthly-ai-tools.ts`):
+  agendamentos, conversas, eventos, linha do tempo de uma conversa, configuração
+  e integrações, da mesma passada dos números, sem texto nem dado de paciente.
+  Mostra as evidências consultadas; lista de conferência só com confirmação.
+- **PDF e painel**: página 1 = resumo executivo (4 números, resumo do período,
+  próximas ações com responsável e indicador); análise detalhada nas páginas
+  seguintes, que fluem. Acabou o teto de uma página.
+
 ## WhatsApp: Evolution (QR) e API oficial da Meta conectadas ao mesmo tempo — 2026-09-29
 
 Regras em `src/modules/whatsapp/README.md` ("Duas conexões ao mesmo tempo").

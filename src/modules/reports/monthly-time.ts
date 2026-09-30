@@ -221,13 +221,27 @@ export function featuredCaseProblem(text: string, contactNames: (string | null)[
   if (text.length > FEATURED_CASE_MAX) return `Use até ${FEATURED_CASE_MAX} caracteres no caso do mês para caber em uma página.`;
   if (/\S+@\S+\.\S+/.test(text)) return "Tire o e-mail do caso do mês: use só o perfil genérico do paciente.";
   if (/(?:\d[\s().-]*){8,}/.test(text)) return "Tire telefone ou documento do caso do mês: use só o perfil genérico do paciente.";
+  const word = contactNameIn(text, contactNames);
+  return word ? `O caso do mês cita "${word}", que é nome de um contato atendido neste mês. Use só o perfil genérico (ex.: "paciente de 74 anos").` : null;
+}
+
+/** A primeira palavra do nome de um contato do mês que aparece no texto, ou null. */
+export function contactNameIn(text: string, contactNames: (string | null)[]): string | null {
   const used = new Set(words(text));
   for (const name of contactNames) {
     for (const word of words(name ?? "")) {
-      if (word.length >= 3 && !GENERIC_WORDS.has(word) && used.has(word)) {
-        return `O caso do mês cita "${word}", que é nome de um contato atendido neste mês. Use só o perfil genérico (ex.: "paciente de 74 anos").`;
-      }
+      if (word.length >= 3 && !GENERIC_WORDS.has(word) && used.has(word)) return word;
     }
   }
   return null;
+}
+
+/**
+ * Destaques e limitações também vão ao decisor e ao PDF, mas falam de números
+ * (R$ 12.345, 1.200 mensagens): só e-mail e nome de contato são recusados.
+ */
+export function reviewTextProblem(label: string, text: string, contactNames: (string | null)[]): string | null {
+  if (/\S+@\S+\.\S+/.test(text)) return `Tire o e-mail de "${label}": o texto vai para o decisor da clínica.`;
+  const word = contactNameIn(text, contactNames);
+  return word ? `"${label}" cita "${word}", que é nome de um contato atendido neste mês. Fale do resultado, sem identificar pacientes.` : null;
 }

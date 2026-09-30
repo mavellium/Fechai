@@ -17,12 +17,24 @@ a especificação citada no Obsidian não estava disponível.
    é usado para inferir comparecimento. `CONFIRMED` não comprova realização.
 4. Nos agendamentos históricos sem tipo, só habilita a classificação como
    avaliação depois de conferir. Essa decisão fica nas premissas do mês.
-5. Escreve **O que ajustamos no agente**, **Próximo mês** e o nome do decisor.
+5. Escreve **O que ajustamos no agente**, o **Resumo do período**, até três
+   **Próximas ações** (cada uma com responsável e indicador) e o nome do decisor.
 6. Salva, confere o relatório e fecha após o término do mês. Pendências de
-   dados e premissas bloqueiam o fechamento. Eventos históricos com cobertura
-   parcial exigem ciência explícita; o aviso continua no PDF e no painel.
-7. Exporta o PDF A4 de uma página, envia ao decisor e usa **Registrar envio ao
+   dados e premissas **não bloqueiam**: o relatório pode fechar com cobertura
+   parcial, desde que o admin confirme a lista de limitações (calculada pela
+   mesma regra das pendências, mais histórico anterior à implantação, Clinicorp
+   fora do ar, chegada sem horário e áudio sem duração). Os indicadores sem
+   evidência continuam sem valor e são entregues como **não verificado**; nada é
+   estimado no lugar. As limitações ficam explícitas no painel e em
+   "Cobertura dos indicadores" no PDF, com aviso na página 1.
+7. Visualiza o PDF, aprova, envia ao decisor e usa **Registrar envio ao
    decisor**. Depois da reunião curta, usa **Registrar reunião**.
+
+A revisão é guiada em cinco etapas (importar e conferir, resolver pendências,
+validar resultados, análise com IA, aprovar e entregar). Na quarta, a IA redige
+o resumo do período, as limitações, as melhorias executadas e as próximas ações a partir de
+agregados, do selo de cada número e do log de alterações do agente no mês; o
+texto preenche a revisão não salva e a Mavellium confere antes de salvar.
 
 O painel registra o envio e a reunião feitos pela equipe. Não há disparo
 automático de e-mail/WhatsApp nem automação de apresentação. O cliente vê a
@@ -87,9 +99,13 @@ A tela usa os componentes e tokens do painel: `PageHeader`, `Card`, `Badge`,
 oferece apenas competências publicadas. A navegação protege alterações não
 salvas. O retorno aparece antes da edição recolhível.
 
-O PDF A4 tem uma página fixa e ganha uma **segunda página** só quando o mês tem
-leads analisados (bloco "Qualidade dos leads e melhorias para o tráfego",
-[contrato](./inteligencia-de-conversas.md)); sem o bloco continua de uma página.
+O PDF A4 abre com o **resumo executivo** (página 1: contatos atendidos,
+conversas só com IA, mensagens respondidas, ROI estimado, resumo do período e
+até três próximas ações com responsável e indicador) e segue com a **análise
+detalhada** (dados de atendimento, funil, tempo devolvido, procedimentos,
+ajustes, qualidade dos leads quando o mês tem leads —
+[contrato](./inteligencia-de-conversas.md) —, premissas, cobertura dos
+indicadores e metodologia), que ocupa quantas páginas precisar.
 Ele usa preto e cinza, com as imagens locais
 `public/brand/fechai-black.png` e `public/brand/mavellium-black.png` no
 cabeçalho. Não busca logos externamente durante a exportação. Origem dos
@@ -146,9 +162,15 @@ Sem provedor disponível, mostra erro de configuração; não usa demonstração
 O consumo de tokens entra no uso da plataforma, sem criar mensagens de
 atendimento ou consumir a cota de mensagens do cliente.
 
-Só são enviados agregados, premissas e textos da revisão e os horários
-estruturados dos agentes selecionados. Não são enviados históricos de
-pacientes, telefones, variáveis individuais, prompts dos agentes ou segredos.
+O contexto leva agregados, premissas e textos da revisão e os horários
+estruturados dos agentes selecionados. Para perguntas sobre a composição de
+um número, o assistente consulta os registros individuais por ferramentas
+**somente de leitura** (agendamentos, conversas, eventos, linha do tempo de
+uma conversa, configuração e integrações), no escopo do relatório, e mostra
+as **evidências consultadas** anotadas pelo servidor. Não são enviados texto
+de mensagens, nomes, telefones, prompts dos agentes ou segredos. Uma lista de
+agendamentos para conferir com a recepção pode ser proposta, mas só aparece
+depois da confirmação de quem está revisando.
 O histórico da ajuda fica na tela, limitado a 12 mensagens, sem tabela nova.
 
 Respostas estruturadas passam por validação de campos, unidades, limites e
@@ -337,7 +359,7 @@ pacientes.
 - `src/modules/reports/monthly-import.ts`: preço da conta, competência inicial,
   leitura de grades cadastradas e união dos horários dos agentes.
 - `src/modules/reports/events.ts`: registro explícito, best-effort e idempotente.
-- `src/modules/reports/monthly-pdf.ts`: PDF de uma página.
+- `src/modules/reports/monthly-pdf.ts`: PDF com resumo executivo (página 1) e análise detalhada.
 - `src/modules/reports/monthly-time.ts`: tempo devolvido, duração dos
   atendimentos, formatação, frase do bloco e checagem do caso do mês.
 - `src/modules/voice/received-audio.ts`: duração do OGG e marcador de áudio
@@ -351,7 +373,7 @@ pacientes.
   seleção de agentes e importação de prévia para conferência.
 - `src/app/(admin)/admin/relatorios/[tenantId]/actions.ts`: gravação,
   fechamento, reabertura e registro de envio/reunião, com autorização.
-- `src/app/(dashboard)/relatorios/MonthlyView.tsx`: apresentação das cinco partes.
+- `src/app/(dashboard)/relatorios/MonthlyView.tsx`: resumo executivo (`MonthlyRoiSummary`) e análise detalhada.
 - `src/components/ui/month-picker.tsx`: navegação entre competências.
 - `src/components/ui/data-table.tsx`: tabela compartilhada; `headerAlign` e
   `columnAlign` permitem o alinhamento local sem mudar o padrão das outras telas.
@@ -370,7 +392,7 @@ worker; depois `npx tsx scripts/mede-audios-recebidos.ts` (prévia) e
 `--apply` para medir o histórico desde 23/09/2026.
 
 Validação: testes de fórmula, limites/fusos, presença, isolamento, autorização,
-snapshot, concorrência e PDF A4 de uma página. Typecheck, lint e inspeção visual
+snapshot, concorrência e PDF A4 (página 1 com conteúdo máximo). Typecheck, lint e inspeção visual
 dos PDFs de demonstração e de conteúdo máximo.
 
 No banco local consultado em 27/09/2026, não havia tenant com “sorriso” no nome.

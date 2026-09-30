@@ -17,6 +17,15 @@ Cada `continue` que tira da conta grava o motivo. Nunca montar a lista com outra
 <Stat compact label="Receita estimada" value={money(a.revenueCents)} footer={<StatSource report={r} metric="revenue" />} />
 ```
 
+## Fechar com cobertura parcial (cliente)
+```tsx
+finalizeMonthlyRoi(tenantId, r.month, acknowledged ? limitationFingerprint(r.limitations ?? []) : [])
+```
+A lista confirmada é a que o admin viu; mudou no servidor → recusa.
+
+## Etapa nova no assistente (`MonthlyRoiEditor.tsx`)
+Seção dentro do mesmo `<UnsavedForm>` com `hidden={step !== N}`; sem `required` nativo (validação no `onSubmit`); o que tem formulário próprio vai fora do form.
+
 ## Fixture de teste com selo
 ```typescript
 const { metrics: current, evidence } = evaluateMonthlyMetrics(roiInput());

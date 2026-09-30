@@ -99,9 +99,9 @@ e-mail/telefone antes de gravar e ainda não aparece em tela (base da fase 2).
 `computeMonthlyReport` calcula `MonthlyReport.leadQuality` **só do mês** (sem
 comparativo), no escopo de agentes da revisão, e o snapshot o congela. Ausente
 em relatórios fechados antes do bloco = "sem registro", nunca zero; falha na
-consulta tira o bloco, não o relatório. O PDF continua de **uma página**; com
-`leadQuality.leads > 0` ganha uma **segunda página** (e "Página 1 de 2" no
-rodapé da primeira). Mês sem leads ou relatório antigo não muda o arquivo.
+consulta tira o bloco, não o relatório. No PDF, o bloco entra na **análise
+detalhada** (páginas seguintes ao resumo executivo) só com `leadQuality.leads > 0`;
+a página 1 não muda. Mês sem leads ou relatório antigo não ganha o bloco.
 
 O relatório usa `loadLeadQualityDetail`, que devolve o mesmo agregado e, lead a
 lead, o que o compôs (`MonthlyEvidence.leads`: id do lead e da conversa, data,

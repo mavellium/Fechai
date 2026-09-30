@@ -12,6 +12,11 @@ export const monthlyAiChatMessageSchema = z.object({
   at: z.string(),
   provider: z.string().max(120).optional(),
   changes: monthlyAiResponseSchema.shape.changes.optional(),
+  /** "Evidências consultadas": o que as ferramentas leram, anotado pelo servidor. */
+  consulted: z.array(z.object({ tool: z.string().max(40), label: z.string().max(200), count: z.number().int().min(0) }).strict()).max(40).optional(),
+  /** Lista de conferência proposta; o conteúdo só aparece depois da confirmação. */
+  review: z.object({ title: z.string().max(120), question: z.string().max(240),
+    rows: z.array(z.object({ appointmentId: z.string().max(100), conversationId: z.string().max(100).nullable(), when: z.string().max(120), issues: z.array(z.string().max(200)).max(5) }).strict()).max(100) }).strict().optional(),
 });
 export type MonthlyAiChatMessage = z.infer<typeof monthlyAiChatMessageSchema>;
 
@@ -21,8 +26,8 @@ export function parseMonthlyAiChat(raw: unknown): MonthlyAiChatMessage[] {
   return raw.flatMap((item) => {
     const parsed = monthlyAiChatMessageSchema.safeParse(item);
     if (parsed.success) return [parsed.data];
-    // Sugestão fora do contrato atual: mantém o texto e descarta só os campos.
-    const text = monthlyAiChatMessageSchema.omit({ changes: true }).safeParse(item);
+    // Sugestão fora do contrato atual: mantém o texto e descarta só os extras.
+    const text = monthlyAiChatMessageSchema.omit({ changes: true, consulted: true, review: true }).safeParse(item);
     return text.success ? [text.data] : [];
   });
 }

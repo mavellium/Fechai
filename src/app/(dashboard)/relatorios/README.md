@@ -29,8 +29,8 @@ com cabeçalhos centralizados: Cliente, Data de entrada do cliente, Revisão e
 Ação. A entrada é `Tenant.createdAt`, em data curta de Brasília. O texto sobre
 prazo/reunião e as colunas Entrega/Reunião foram retirados da listagem;
 seus registros permanecem na revisão individual.
-O PDF A4 tem uma página e as cinco partes
-solicitadas. Leia [`docs/P-79-relatorio-mensal-roi.md`](../../../../docs/P-79-relatorio-mensal-roi.md)
+O PDF A4 abre com o **resumo executivo** (página 1) e segue com a **análise
+detalhada** (ver "PDF: resumo executivo + análise detalhada"). Leia [`docs/P-79-relatorio-mensal-roi.md`](../../../../docs/P-79-relatorio-mensal-roi.md)
 antes de alterar a nova visão: **não usa a regra do Financeiro legado**.
 Receita só vem de avaliações realizadas cuja primeira chegada foi fora do
 expediente humano; economia usa o tempo medido (áudio ouvido + mensagens × tempo
@@ -57,6 +57,119 @@ mostra "Sem registro", mês sem aprovação mostra "Nenhuma aprovada"). Formata�
 única em `formatGapTime`/`formatGapTimeShort` (`modules/knowledge-gaps/text.ts`);
 no PDF o tempo vai na célula de perguntas sem resposta para não aumentar a página.
 
+#### Assistente de fechamento (admin, 5 etapas)
+
+`MonthlyCloseWizard` (`admin/relatorios/[tenantId]/MonthlyRoiEditor.tsx`) guia a
+revisão em rascunho: **1 Importar e conferir** (escopo de agentes, cobertura dos
+dados, indicadores e correções), **2 Resolver pendências** (central de
+pendências, expediente, agendamentos e comparecimentos, investimento/equipe,
+ticket e conversão), **3 Validar resultados** (receita, economia e ROI com as
+premissas por extenso; "Recalcular" usa a prévia do servidor + as correções não
+salvas, via `draftAnalysisBase`), **4 Análise com IA** (resumo do período, limitações,
+melhorias, até 3 próximas ações, decisor e caso do mês) e **5 Aprovar e entregar** (prévia
+do PDF em `?ver=1`, confirmação das limitações, fechamento, envio e reunião).
+
+- **Um formulário só.** As etapas ocultam seções com `hidden`, então "Salvar
+  revisão" grava tudo de qualquer etapa. Campo `required` em seção oculta
+  impediria o envio sem aviso: a validação é do código (`onSubmit`/`readAssumptions`).
+- **A etapa mora fora do editor.** O editor remonta a cada revisão salva (a
+  chave tem `revision`); o `MonthlyCloseWizard` guarda a etapa. A central de
+  pendências tem formulários próprios e é renderizada fora do formulário.
+- **Nada trava o avanço.** O status de cada etapa é calculado do relatório e só
+  orienta; a etapa inicial é a primeira que precisa de atenção.
+- **Fecha com cobertura parcial.** `finalizeMonthlyRoi(tenantId, month, acknowledged)`
+  recebe `limitationFingerprint` da lista que o admin viu; se `monthlyLimitations`
+  (recalculada no clique) mudou — inclusive a contagem no texto —, recusa.
+  Continuam travando: mês em andamento, decisor/ajustes/próximo mês e
+  concorrência. Número sem evidência segue `null` e o selo `pending` se lê
+  **"Não verificado"**; em relatório fechado as células vazias também.
+- **Limitações** (`modules/reports/monthly-limitations.ts`, pura): pendências
+  por tópico + histórico anterior à implantação, erro do Clinicorp, chegada sem
+  horário (com expediente) e áudio sem duração. Mês anterior sem premissas não
+  entra (limita o comparativo, não o mês). Anexada em `computeMonthlyReport` e
+  congelada no snapshot; fechados antes dela não a têm e caem no `missing` antigo.
+- **Análise com IA** (`modules/reports/monthly-analysis.ts` + `generateMonthlyRoiAnalysis`):
+  agregados, selo, limitações, qualidade dos leads (manchete) e o log de
+  auditoria `agent.*`/`knowledge.*` do mês, agrupado (nome do evento e do alvo;
+  `knowledge.gap_*` vai sem alvo, porque o alvo é a pergunta de um contato).
+  Travas depois da resposta: sem alteração registrada, contexto ou texto já
+  escrito, "melhorias" volta vazio; sem limitação, a explicação volta vazia.
+  Mesmo limite de chamadas do assistente lateral; nada é salvo.
+- **Textos novos**: `MonthlyRoiReport.highlights` (240) e `limitationsNote`
+  (400), com a mesma recusa de e-mail e nome de contato do caso do mês
+  (`reviewTextProblem`; números longos são permitidos, são o assunto).
+- **PDF**: o resumo do período abre a página 1; as limitações ficam em
+  "Cobertura dos indicadores", na análise detalhada, com uma linha de aviso na
+  página 1. A numeração "Página X de N" é desenhada no fim.
+
+#### PDF: resumo executivo + análise detalhada
+
+O decisor recebe primeiro o valor entregue; o técnico fica nas páginas
+seguintes, para consulta e validação. `generateMonthlyPdf` tem duas partes:
+
+- **Página 1 — Resumo executivo** (layout fixo): faixa escura "Fechai ·
+  relatório mensal / Resultados de {mês} / {clínica}" (o nome da marca vai em
+  texto; as logos pretas ficam no cabeçalho das páginas seguintes), quatro
+  cartões (contatos atendidos = conversas respondidas; conversas só com IA;
+  mensagens respondidas = texto + áudio respondidos pelo agente, "Não medido"
+  em snapshot sem `time`; ROI com selo "premissas incompletas" quando não há
+  valor), a linha receita · economia · mensalidade, a frase do tempo devolvido,
+  **Resumo do período** (`highlights`, até 600), aviso de cobertura parcial e
+  **Próximas ações** (até 3, com responsável e indicador). O conteúdo é
+  limitado pelos campos; estourar lança erro, e o teste de conteúdo máximo
+  (`relatorio-mensal-fechamento.test.ts`) prova que cabe.
+- **Páginas seguintes — Análise detalhada** (fluem com `ensure`/`newPage`):
+  dados de atendimento com selo e comparativo, funil de conversão (contatos →
+  qualificados → agendadas → realizadas, com a ressalva de que as etapas não
+  são o mesmo grupo), tempo devolvido e caso do mês, procedimentos e picos, o
+  que ajustamos no agente, qualidade dos leads (se houver), premissas
+  financeiras, cobertura dos indicadores (selo e motivo de cada um + as
+  limitações) e metodologia. Não há mais teto de uma página: conteúdo longo
+  quebra de página.
+- **Próximas ações** (`modules/reports/monthly-next-actions.ts`): lista Zod de
+  até 3 `{ action ≤120, owner ≤60, indicator ≤100 }`, todas obrigatórias por
+  linha, em `MonthlyRoiReport.nextActions` (Json). Responsável é área ou
+  função, nunca paciente (`reviewTextProblem` recusa nome de contato). Sem
+  ações, painel e PDF mostram o texto antigo `nextMonth`; fechar exige ações
+  ou esse texto (`hasNextPlan`). A análise da IA propõe as ações.
+- O painel segue a mesma ordem: `MonthlyRoiSummary` é o resumo executivo e
+  `MonthlyView` abre "Análise detalhada" logo depois.
+- Testes: `tests/relatorio-mensal-fechamento.test.ts`, "fechamento com
+  cobertura parcial" em `relatorio-mensal-access.test.ts` e "análise do mês" em
+  `relatorio-mensal-ai-access.test.ts`.
+
+#### Assistente que investiga os registros (admin, "Perguntar à I.A")
+
+Pergunta do tipo "por que dez agendamentos, se oito estão sem tipo?" é
+respondida consultando os registros individuais, não o resumo. O laço fica em
+`completeMonthlyAi` (`monthly-ai-service.ts`): até 5 voltas, 6 consultas por
+volta, 90 s no total; cada modelo da cadeia recomeça do zero (`toolbox.reset`).
+
+- **Ferramentas** (`modules/reports/monthly-ai-tools.ts`, só leitura):
+  `list_appointments` (filtros `scheduled`, `attended`, `untyped`, `bucket`),
+  `list_conversations`, `list_events`, `get_conversation` (linha do tempo:
+  quem falou e quando, texto/áudio e duração, canal, agendamentos e eventos
+  dela), `get_configuration` (premissas + agendamento dos agentes do escopo:
+  ligado e tipos que o agente registra) e `get_integrations` (Clinicorp,
+  Google Agenda e WhatsApp, só estado). Até 60 linhas por chamada, total sempre.
+- **Mesma passada.** As listas vêm de `report.evidence`, calculado com as
+  premissas do rascunho. Consultar o banco com outra regra reabriria a
+  divergência que os registros existem para explicar.
+- **Permissão e escopo.** A action exige SUPERADMIN; o tenant e a competência
+  vêm dela, nunca dos argumentos da IA (argumento fora do contrato é
+  recusado). `get_conversation` só abre conversa presente nos registros.
+- **LGPD.** Nenhuma ferramenta devolve nome, telefone, e-mail, texto de
+  mensagem ou credencial; da conversa sai só a variável de procedimento, que
+  o relatório já usa.
+- **Evidências consultadas** = `consulted`, anotado pelo servidor a cada
+  chamada ("8 registros de agendamento sem tipo"), gravado no histórico.
+- **Confirmação humana.** A IA pode propor `proposal: review_list`; o servidor
+  descarta id que nenhuma ferramenta devolveu naquela resposta e monta as
+  linhas (`monthlyReviewRows`: data e hora da consulta e o que conferir, sem
+  paciente). O painel mostra "Aguardando confirmação humana" até "Gerar
+  lista"; confirmar só revela e copia, não grava nada.
+- Testes: `tests/relatorio-mensal-ai-tools.test.ts`.
+
 #### Central de pendências do fechamento (admin)
 
 Na revisão individual em rascunho, `MonthlyPendencyCenter` mostra o que falta
@@ -66,9 +179,10 @@ por responsável (Recepção, Agenda, Financeiro, Mavellium), com as métricas
 que cada falta segura. Regras que não se quebram:
 
 - **Uma regra só.** `detectMonthlyPendencies` (`modules/reports/monthly-pendencies.ts`)
-  gera o `missing` em `applyMonthlyOverrides` e a receita só é bloqueada pelos
-  tópicos que afetam receita (`blocksRevenue`). A central nunca diz
-  "confirmado" para algo que trava "Fechar para entrega".
+  gera o `missing` em `applyMonthlyOverrides` e as limitações do fechamento, e
+  a receita só é bloqueada pelos tópicos que afetam receita (`blocksRevenue`).
+  A central nunca diz "confirmado" para algo que o relatório entrega como
+  "não verificado".
 - **Pendência é calculada, acompanhamento é gravado.** `MonthlyRoiPendency`
   (um por tenant + mês + tópico) guarda só quem responde, quando pediu e a
   resposta. Fica fora de `MonthlyRoiReport` para não mexer no `updatedAt`
@@ -117,8 +231,9 @@ classificação de horário e oito sem tipo, sem como mostrar a composição.
   `quality` (calculado depois das correções); o fechamento grava os dois.
   Relatório fechado antes deles não tem nenhum dos dois e o painel/PDF escondem
   selo e registros (mesma regra de `time` e `leadQuality`). O editor do admin
-  recebe o relatório sem `evidence` (não usa e dobraria o payload), e o
-  assistente de IA continua só com agregados (`editableMonthlyMetrics`).
+  recebe o relatório sem `evidence` (não usa e dobraria o payload). O
+  assistente de IA lê os registros pelo servidor, com as ferramentas de
+  leitura (ver "Assistente que investiga os registros").
 - **PDF**: coluna "Qualidade" na tabela (x=250, entre o rótulo mais longo e o
   valor), selo sob o ROI e ao lado de receita/economia/investimento, selo dos
   leads na 2ª página. A legenda vai numa linha de **rodapé** (y=14, corpo
@@ -163,14 +278,14 @@ trabalho da recepção assumido pelo agente. Regras que não se quebram:
   snapshots fechados antes deles não os têm, e a tela/PDF escondem o bloco.
 - No PDF, o bloco fica logo abaixo do quadro do ROI (explica a "Economia") e
   **substitui a linha "Horas assumidas"** da tabela; a duração por resultado só
-  aparece no painel. Com conteúdo máximo sobram ~2pt na página — qualquer linha
-  nova no PDF precisa tirar outra (teste em `tests/relatorio-mensal-tempo.test.ts`).
+  aparece no painel. Na página 1, a frase do tempo devolvido; o bloco inteiro
+  (áudios, até agendar, caso do mês) fica na análise detalhada.
 
 `/relatorios` tem **três visões do produto**, trocadas por um toggle no topo (querystring `?visao=`), além da visão de afiliados para participantes do programa:
 
 - **Operacional** (padrão): KPIs com delta vs. período anterior, gráficos (fluxo, resultados, atendimento IA×humano, leads fechados IA×humano, donut por agente, leads por status, funil de conversão, resolução autônoma, recuperação por follow-up, horários de pico, tempo até a primeira resposta, comparecimento/no-show — compareceu × faltou pelo horário da consulta, com "não verificado" na tabela; cancelada não entra) e exportação CSV.
 - **Financeiro**: retorno financeiro **estimado** do investimento no projeto — KPIs (Retorno, Investido, ROI, Ponto de equilíbrio), gráfico de retorno acumulado × investido, retorno por agente, retorno mês a mês e custo por lead fechado. O valor por lead é definido manualmente pelo dono da conta; sem ele, os gráficos que dependem desse valor mostram um estado vazio com a chamada para definir, nunca uma série de zeros. No fim da visão fica **"O que o agente filtrou"** (triagem): contatos que o agente encerrou por não serem clientes em potencial, e o tempo/dinheiro que isso poupou.
-- **ROI mensal** (`mensal`): competência mensal fechada pela Mavellium, com receita somente de avaliações realizadas de contatos que chegaram fora do horário humano, economia estimada, premissas por procedimento e PDF de uma página. Contrato em `docs/P-79-relatorio-mensal-roi.md`.
+- **ROI mensal** (`mensal`): competência mensal fechada pela Mavellium, com receita somente de avaliações realizadas de contatos que chegaram fora do horário humano, economia estimada, premissas por procedimento e PDF com resumo executivo (página 1) e análise detalhada. Contrato em `docs/P-79-relatorio-mensal-roi.md`.
 
 Tudo começa na `page.tsx`, que resolve a janela (`?periodo=`/`?de=&ate=`), computa os dados no servidor e entrega a props serializáveis aos componentes client.
 
@@ -205,7 +320,7 @@ Tudo começa na `page.tsx`, que resolve a janela (`?periodo=`/`?de=&ate=`), comp
 | --- | --- |
 | `page.tsx` | Server Component: lê `?periodo/de/ate/visao/mes`, resolve janela e publicações, computa sob demanda e renderiza Operacional, Financeiro, ROI mensal ou afiliados conforme papel/visão. |
 | `MonthlyEvidence.tsx` / `EvidenceDialog.tsx` | Selo de qualidade (`QualityBadge`) e "Ver registros"/"Ver cálculo" de cada indicador do ROI mensal: tabelas montadas no servidor a partir de `report.evidence`, abertas num `Modal` (`size="full"`) que só monta o conteúdo aberto. |
-| `MonthlyView.tsx` | Cinco partes do ROI mensal, bloco "Tempo que o Fechai devolveu" (`TimeReturnedCard`), comparação, premissas, fontes e link para exportação do snapshot em PDF. |
+| `MonthlyView.tsx` | Resumo executivo (`MonthlyRoiSummary`: 4 números, resumo do período, próximas ações) e "Análise detalhada", bloco "Tempo que o Fechai devolveu" (`TimeReturnedCard`), comparação, premissas, fontes e link para exportação do snapshot em PDF. |
 | `RangePicker.tsx` | `<details>` com presets de período + intervalo custom; **preserva `?visao=`** nos links e no form (hidden input). |
 | `FinancialView.tsx` | "use client": linha de KPIs, card "Retorno estimado" + "Valor do lead" com `<dialog>` (campo com máscara `CurrencyInput`), delega os gráficos a `FinancialCharts.tsx`. |
 | `TriagePanel.tsx` | "use client": KPIs da triagem (filtrados / tempo / economia), quebra por motivo e `<dialog>` do custo do atendimento. |
@@ -330,8 +445,8 @@ O toggle é `FilterTabs` (links, querystring) — preserva `periodo/de/ate` e se
 - Cada contagem, tempo de resposta, horas assumidas, procedimento e pico pode ser corrigido. Receita/economia/ROI continuam derivados pela regra definida, sem permitir que uma porcentagem arbitrária substitua a fórmula. Presenças fora do expediente devem bater com a soma por procedimento antes do fechamento.
 - O comparativo usa o snapshot fechado do mês anterior quando existir. Uma correção do comparativo é local à revisão atual. Reabrir uma revisão preserva os indicadores que estavam no snapshot; relatórios já enviados continuam preservados.
 - `updatedAt` identifica a revisão carregada pelo formulário e protege contra sobrescrita concorrente. Correções entram na auditoria e no snapshot de fechamento; o painel e o PDF avisam quando existem ajustes manuais.
-- PDF: imagens locais em `public/brand`, tinta preta/cinza, uma página A4. Nunca depende de uma chamada externa para buscar logos ao exportar.
-- **Fazer com I.A** na revisão administrativa em rascunho abre ajuda em `SidePanel`. Usa a cadeia e as credenciais de Admin → IA, explica campos e propõe preencher dados informados. `monthly-ai.ts` valida campos/unidades e mescla sugestões; `monthly-ai-service.ts` envia somente agregados e a revisão atual, sem conversas de pacientes. `ai-actions.ts` exige SUPERADMIN, valida agentes do tenant e limita perguntas. As sugestões são aplicadas por botão, preservam os outros campos e precisam de **Salvar revisão**. Não alteram fórmula/publicação/presença; expediente sugerido perde a confirmação. Mudanças posteriores no formulário invalidam a sugestão. Contrato detalhado na P-79.
+- PDF: imagens locais em `public/brand`, tinta preta/cinza (faixa escura só no título da página 1), A4 com resumo executivo + análise detalhada. Nunca depende de uma chamada externa para buscar logos ao exportar.
+- **Fazer com I.A** na revisão administrativa em rascunho abre ajuda em `SidePanel`. Usa a cadeia e as credenciais de Admin → IA, explica campos e propõe preencher dados informados. `monthly-ai.ts` valida campos/unidades e mescla sugestões; `monthly-ai-service.ts` envia os agregados e a revisão atual e deixa a IA consultar os registros pelas ferramentas de leitura (`monthly-ai-tools.ts`), nunca com texto de conversa ou dado de paciente. `ai-actions.ts` exige SUPERADMIN, valida agentes do tenant e limita perguntas. As sugestões são aplicadas por botão, preservam os outros campos e precisam de **Salvar revisão**. Não alteram fórmula/publicação/presença; expediente sugerido perde a confirmação. Mudanças posteriores no formulário invalidam a sugestão. Contrato detalhado na P-79.
 
 - Dev server: `npm run dev` (porta 3001).
 - Typecheck: `npx tsc --noEmit`.

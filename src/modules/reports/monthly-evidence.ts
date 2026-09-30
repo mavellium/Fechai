@@ -36,6 +36,8 @@ export type AppointmentEvidence = {
   appointmentId: string; conversationId: string | null;
   createdAt: string; startsAt: string; createdInMonth: boolean; startsInMonth: boolean;
   serviceType: string | null; status: string; procedure: string | null;
+  /** Tipo explícito (`Appointment.kind`); vence `serviceType`. Ausente em snapshot antigo. */
+  kind?: string | null;
   /** Vínculo com o Clinicorp e o status lido lá (id do tipo de status), quando há. */
   clinicorp: { linked: boolean; statusType: string | null };
   arrivalAt: string | null; bucket: Bucket;

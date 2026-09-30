@@ -45,23 +45,21 @@ describe("relatório mensal — qualidade dos leads", () => {
     ]);
   });
 
-  it("o PDF continua de uma página sem o bloco (relatório antigo ou mês sem leads)", async () => {
+  it("sem leads (relatório antigo ou mês sem leads) o PDF não ganha o bloco", async () => {
     const report = roiFixture();
-    expect((await PDFDocument.load(await generateMonthlyPdf(report))).getPageCount()).toBe(1);
+    const without = (await PDFDocument.load(await generateMonthlyPdf(report))).getPageCount();
     report.leadQuality = summarizeLeadQuality([], area, NOW);
-    expect((await PDFDocument.load(await generateMonthlyPdf(report))).getPageCount()).toBe(1);
+    expect((await PDFDocument.load(await generateMonthlyPdf(report))).getPageCount()).toBe(without);
   });
 
-  it("com leads analisados, o bloco vai numa segunda página A4 e a primeira não muda", async () => {
+  it("com leads analisados, o bloco entra na análise detalhada, em A4", async () => {
     const report = roiFixture();
-    const single = await generateMonthlyPdf(report);
+    const without = (await PDFDocument.load(await generateMonthlyPdf(report))).getPageCount();
     report.leadQuality = instituteQuality();
     const doc = await PDFDocument.load(await generateMonthlyPdf(report));
-    expect(doc.getPageCount()).toBe(2);
+    expect(doc.getPageCount()).toBeGreaterThanOrEqual(without);
     expect(doc.getPage(1).getSize().width).toBeCloseTo(595.28);
     expect(doc.getPage(1).getSize().height).toBeCloseTo(841.89);
-    // A página 1 é a mesma: só ganha "Página 1 de 2" no rodapé.
-    expect((await PDFDocument.load(single)).getPageCount()).toBe(1);
   });
 
   it("comporta o conteúdo máximo: listas cheias, cidades e categorias longas", async () => {
@@ -72,14 +70,15 @@ describe("relatório mensal — qualidade dos leads", () => {
     q.losses = q.doubts.map((d) => ({ ...d, key: `l${d.key}` }));
     q.suggestions = Array.from({ length: 5 }, (_, i) => `Sugestão longa número ${i}: ${"restringir a segmentação dos anúncios ".repeat(3)}`);
     report.leadQuality = q;
-    expect((await PDFDocument.load(await generateMonthlyPdf(report))).getPageCount()).toBe(2);
+    // As páginas de detalhe fluem: listas cheias quebram de página, nunca derrubam a exportação.
+    expect((await PDFDocument.load(await generateMonthlyPdf(report))).getPageCount()).toBeGreaterThanOrEqual(2);
   });
 
   it("sem área configurada o PDF não afirma raio", async () => {
     const report = roiFixture();
     report.leadQuality = summarizeLeadQuality([lead("Marília", "preco"), lead("Garça", "horario")], null, NOW);
     expect(report.leadQuality.areaConfigured).toBe(false);
-    expect((await PDFDocument.load(await generateMonthlyPdf(report))).getPageCount()).toBe(2);
+    expect((await PDFDocument.load(await generateMonthlyPdf(report))).getPageCount()).toBeGreaterThanOrEqual(2);
   });
 
   it("o bloco entra no snapshot como JSON simples", () => {

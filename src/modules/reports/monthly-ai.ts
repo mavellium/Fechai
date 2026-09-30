@@ -2,11 +2,16 @@ import { z } from "zod";
 import { formatBRL } from "@/lib/format";
 import { monthlyAssumptionsSchema, normalizeLabel } from "./monthly-config";
 import { monthlyMetricOverrideSchema, monthlyOverridesSchema, timeOverrideSchema } from "./monthly-overrides";
+import { HIGHLIGHTS_MAX, LIMITATIONS_NOTE_MAX } from "./monthly-limitations";
+import { nextActionsSchema } from "./monthly-next-actions";
 
 export const monthlyAiDraftSchema = z.object({
   assumptions: monthlyAssumptionsSchema,
   metricOverrides: monthlyOverridesSchema,
   adjustments: z.string().max(400), nextMonth: z.string().max(400), decisionMaker: z.string().max(100),
+  // `default` porque o painel lateral antigo mandava o rascunho sem os dois.
+  highlights: z.string().max(HIGHLIGHTS_MAX).default(""), limitationsNote: z.string().max(LIMITATIONS_NOTE_MAX).default(""),
+  nextActions: nextActionsSchema.default([]),
 }).strict();
 export type MonthlyAiDraft = z.infer<typeof monthlyAiDraftSchema>;
 export const monthlyAiRequestSchema = z.object({
@@ -35,6 +40,8 @@ const fields: Record<string, z.ZodType> = {
   "assumptions.procedures": procedurePatch,
   adjustments: monthlyAiDraftSchema.shape.adjustments, nextMonth: monthlyAiDraftSchema.shape.nextMonth,
   decisionMaker: monthlyAiDraftSchema.shape.decisionMaker,
+  highlights: z.string().max(HIGHLIGHTS_MAX), limitationsNote: z.string().max(LIMITATIONS_NOTE_MAX),
+  nextActions: nextActionsSchema,
 };
 for (const period of ["current", "previous"]) {
   for (const [key, schema] of Object.entries(monthlyMetricOverrideSchema.shape)) {
@@ -45,8 +52,21 @@ for (const period of ["current", "previous"]) {
     } else fields[`${period}.${key}`] = schema;
   }
 }
+/**
+ * Ação que a IA propõe e só acontece com confirmação humana. Hoje, uma: a
+ * lista de agendamentos para conferir com a recepção, montada pelo servidor.
+ */
+export const monthlyAiProposalSchema = z.object({
+  kind: z.literal("review_list"),
+  title: z.string().trim().min(1).max(120),
+  question: z.string().trim().min(1).max(240),
+  appointmentIds: z.array(z.string().trim().min(1).max(100)).min(1).max(100),
+}).strict();
+export type MonthlyAiProposal = z.infer<typeof monthlyAiProposalSchema>;
+
 export const monthlyAiResponseSchema = z.object({
   reply: z.string().trim().min(1).max(5000),
+  proposal: monthlyAiProposalSchema.nullable().optional(),
   changes: z.array(z.object({ field: z.string(), value: z.unknown(), reason: z.string().trim().min(1).max(240) }).strict()).max(30)
     .superRefine((changes, ctx) => {
       const used = new Set<string>();
@@ -95,6 +115,7 @@ const names: Record<string, string> = {
   minutesPerConversation: "Tempo humano por conversa", procedureVariable: "Variável do procedimento",
   evaluationTypes: "Tipos considerados avaliações", procedures: "Procedimentos", peaks: "Horários de pico",
   adjustments: "O que ajustamos no agente", nextMonth: "Próximo mês", decisionMaker: "Nome do decisor",
+  highlights: "Resumo do período", limitationsNote: "Limitações do fechamento", nextActions: "Próximas ações",
   newContacts: "Novos contatos", firstResponseSeconds: "Primeira resposta média", qualified: "Leads qualificados",
   handoffs: "Transbordos", unanswered: "Perguntas sem resposta", aiOnlyConversations: "Conversas sem resposta humana",
   assumedHours: "Horas assumidas", conversations: "Conversas atendidas", scheduled: "Avaliações agendadas",
@@ -113,6 +134,7 @@ export function describeMonthlyAiChange(change: MonthlyAiChange): { label: strin
   else if (change.field === "assumptions.procedures") value = procedurePatch.parse(change.value).map((p) => `${p.name}${p.ticketCents !== undefined ? ` · ticket ${p.ticketCents === null ? "pendente" : formatBRL(p.ticketCents)}` : ""}${p.conversionBps !== undefined ? ` · conversão ${p.conversionBps === null ? "pendente" : `${p.conversionBps / 100}%`}` : ""}`).join("\n");
   else if (key === "humanHours" && Array.isArray(change.value)) value = change.value.map((day: { start: number; end: number }[], i: number) => `${["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"][i]}: ${day.map((p) => `${time(p.start)}–${time(p.end)}`).join(", ") || "fechado"}`).join("; ");
   else if (key === "evaluationTypes" && Array.isArray(change.value)) value = change.value.join(", ");
+  else if (key === "nextActions" && Array.isArray(change.value)) value = change.value.map((a: { action: string; owner: string; indicator: string }, i: number) => `${i + 1}. ${a.action} · ${a.owner} · ${a.indicator}`).join("\n");
   else if (key === "procedures" && Array.isArray(change.value)) value = change.value.map((p: { name: string; qualified: number; attendedOutside: number }) => `${p.name}: ${p.qualified} qualificados, ${p.attendedOutside} realizadas fora`).join("\n");
   else if (key === "peaks" && Array.isArray(change.value)) value = change.value.map((p: { hour: number; messages: number }) => `${p.hour}h: ${p.messages} mensagens`).join(", ");
   else if (typeof change.value === "number") value = `${change.value.toLocaleString("pt-BR")}${key === "attendantMonthlyHours" || key === "assumedHours" ? " h" : key === "minutesPerConversation" || key === "audioMinutes" ? " min" : ["firstResponseSeconds", "secondsPerMessage", "longestAudioSeconds"].includes(key) ? " s" : ""}`;

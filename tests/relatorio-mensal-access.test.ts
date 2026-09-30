@@ -25,6 +25,7 @@ import { saveMonthlyRoi, finalizeMonthlyRoi, reopenMonthlyRoi, recordMonthlyDeli
 import { GET as ownerPdf } from "@/app/(dashboard)/relatorios/mensal/pdf/route";
 import { GET as adminPdf } from "@/app/(admin)/admin/relatorios/[tenantId]/pdf/route";
 import { roiConfig, roiFixture, roiInput } from "./fixtures/monthly-roi";
+import { limitationFingerprint } from "@/modules/reports/monthly-limitations";
 
 beforeEach(() => {
   vi.resetAllMocks(); vi.useFakeTimers(); vi.setSystemTime(new Date("2026-10-06T12:00:00Z"));
@@ -89,7 +90,7 @@ describe("autorização e isolamento do relatório mensal", () => {
   it("recusa ações de revisão antes de qualquer acesso ao banco para não-admin", async () => {
     guards.superadmin.mockRejectedValue(new Error("Forbidden"));
     const form = new FormData(); form.set("assumptions", JSON.stringify(roiConfig()));
-    for (const action of [() => saveMonthlyRoi("other", "2026-09", null, form), () => finalizeMonthlyRoi("other", "2026-09", true),
+    for (const action of [() => saveMonthlyRoi("other", "2026-09", null, form), () => finalizeMonthlyRoi("other", "2026-09", []),
       () => reopenMonthlyRoi("other", "2026-09"), () => recordMonthlyDelivery("other", "2026-09", "sent"), () => previewMonthlyRoiImport("other", "2026-09", form)]) {
       await expect(action()).rejects.toThrow("Forbidden");
     }
@@ -197,9 +198,10 @@ describe("fechamento e entrega", () => {
     const saved = { id: "r", month: "2026-09", status: "draft", assumptions: roiConfig(), adjustments: "Ajustes", nextMonth: "Plano", decisionMaker: "Decisor", updatedAt: new Date("2026-10-01T12:00:00Z") };
     db.monthlyRoiReport.findUnique.mockImplementation(async ({ where }) => where.tenantId_month.month === "2026-09" ? saved : null);
     vi.setSystemTime(new Date("2026-09-29T12:00:00Z"));
-    expect((await finalizeMonthlyRoi("own", "2026-09", true)).ok).toBe(false); expect(db.monthlyRoiReport.updateMany).not.toHaveBeenCalled();
+    expect((await finalizeMonthlyRoi("own", "2026-09", [])).ok).toBe(false); expect(db.monthlyRoiReport.updateMany).not.toHaveBeenCalled();
     vi.setSystemTime(new Date("2026-10-06T12:00:00Z")); db.monthlyRoiReport.updateMany.mockResolvedValueOnce({ count: 0 });
-    const result = await finalizeMonthlyRoi("own", "2026-09", true);
+    const seen = limitationFingerprint((await computeMonthlyReport("own", "2026-09", false)).limitations ?? []);
+    const result = await finalizeMonthlyRoi("own", "2026-09", seen);
     expect(result.error).toContain("mudou");
     expect(db.monthlyRoiReport.updateMany.mock.calls[0][0].where).toMatchObject({ tenantId: "own", status: "draft", updatedAt: saved.updatedAt });
   });
@@ -234,5 +236,42 @@ describe("caso do mês", () => {
   it("sem caso não consulta contatos", async () => {
     expect((await saveMonthlyRoi("own", "2026-09", null, form(""))).ok).toBe(true);
     expect(db.lead.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("fechamento com cobertura parcial", () => {
+  const saved = () => ({ id: "r", month: "2026-09", status: "draft", assumptions: { ...roiConfig(), attendantMonthlyCents: null },
+    adjustments: "Ajustes", nextMonth: "Plano", decisionMaker: "Decisor", highlights: "", limitationsNote: "Falta o custo da recepção.", updatedAt: new Date("2026-10-01T12:00:00Z") });
+  beforeEach(() => {
+    const row = saved();
+    db.monthlyRoiReport.findUnique.mockImplementation(async ({ where }) => where.tenantId_month.month === "2026-09" ? row : null);
+  });
+  it("fecha com pendência depois de confirmar a lista, e congela o número sem evidência como não verificado", async () => {
+    const seen = limitationFingerprint((await computeMonthlyReport("own", "2026-09", false)).limitations ?? []);
+    expect(seen.some((l) => l.startsWith("team|"))).toBe(true);
+    const result = await finalizeMonthlyRoi("own", "2026-09", seen);
+    expect(result.ok).toBe(true); expect(result.info).toContain("cobertura parcial");
+    const snapshot = db.monthlyRoiReport.updateMany.mock.calls[0][0].data.snapshot;
+    expect(snapshot.status).toBe("ready");
+    expect(snapshot.current.savingsCents).toBeNull(); expect(snapshot.current.roiPercent).toBeNull();
+    expect(snapshot.quality.savings.status).toBe("pending"); expect(snapshot.limitations.map((l: { key: string }) => l.key)).toContain("team");
+    expect(snapshot.limitationsNote).toBe("Falta o custo da recepção.");
+    // Receita tem evidência: não é derrubada pela falta do custo da equipe.
+    expect(snapshot.current.revenueCents).not.toBeNull();
+  });
+  it("recusa sem confirmação e quando a lista mudou desde a conferência", async () => {
+    expect((await finalizeMonthlyRoi("own", "2026-09", [])).error).toContain("Confirme as limitações");
+    expect((await finalizeMonthlyRoi("own", "2026-09", ["team|2 presenças pendentes."])).error).toContain("mudaram");
+    expect(db.monthlyRoiReport.updateMany).not.toHaveBeenCalled();
+  });
+  it("destaques e limitações não podem citar contato do mês", async () => {
+    db.monthlyRoiReport.findUnique.mockResolvedValue(null); db.lead.findMany.mockResolvedValue([{ name: "Maria Aparecida" }]);
+    const data = new FormData(); data.set("assumptions", JSON.stringify(roiConfig()));
+    data.set("highlights", "A Maria agendou implante fora do horário.");
+    const result = await saveMonthlyRoi("own", "2026-09", null, data);
+    expect(result.ok).toBe(false); expect(result.error).toContain("Resumo do período");
+    data.set("highlights", "R$ 12.345,67 estimados em 1.234.567 mensagens."); data.set("limitationsNote", "Faltou o custo.");
+    expect((await saveMonthlyRoi("own", "2026-09", null, data)).ok).toBe(true);
+    expect(db.monthlyRoiReport.create.mock.calls[0][0].data).toMatchObject({ highlights: "R$ 12.345,67 estimados em 1.234.567 mensagens.", limitationsNote: "Faltou o custo." });
   });
 });

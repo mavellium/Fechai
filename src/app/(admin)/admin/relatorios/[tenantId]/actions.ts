@@ -5,8 +5,10 @@ import { prisma } from "@/lib/prisma";
 import { requireSuperadmin } from "@/lib/session";
 import { payloadTooLarge } from "@/lib/rate-limit";
 import { monthlyAssumptionsSchema, monthKey, monthlyWindow } from "@/modules/reports/monthly-config";
-import { FEATURED_CASE_MAX, featuredCaseProblem } from "@/modules/reports/monthly-time";
+import { FEATURED_CASE_MAX, featuredCaseProblem, reviewTextProblem } from "@/modules/reports/monthly-time";
+import { HIGHLIGHTS_MAX, LIMITATIONS_NOTE_MAX, sameLimitations, unverifiedMetrics } from "@/modules/reports/monthly-limitations";
 import { computeMonthlyReport, type MonthlyReport } from "@/modules/reports/monthly";
+import { hasNextPlan, nextActionsSchema, type MonthlyNextAction } from "@/modules/reports/monthly-next-actions";
 import { monthlyOverridesSchema, parseMonthlyOverrides, editableMonthlyMetrics } from "@/modules/reports/monthly-overrides";
 import { recordAudit } from "@/modules/audit/log";
 
@@ -58,17 +60,33 @@ export async function saveMonthlyRoi(tenantId: string, month: string, _previous:
   }
   const text = (key: string) => String(form.get(key) ?? "").trim();
   const adjustments = text("adjustments"), nextMonth = text("nextMonth"), decisionMaker = text("decisionMaker"), featuredCase = text("featuredCase");
+  const highlights = text("highlights"), limitationsNote = text("limitationsNote");
+  // Ausente no formulário = mantém as salvas (mesma regra dos indicadores).
+  let nextActions: MonthlyNextAction[] | undefined;
+  if (form.has("nextActions")) {
+    let raw: unknown;
+    try { raw = JSON.parse(String(form.get("nextActions"))); } catch { return { ok: false, error: "Próximas ações inválidas." }; }
+    const parsedActions = nextActionsSchema.safeParse(raw);
+    if (!parsedActions.success) return { ok: false, error: parsedActions.error.issues[0]?.message ?? "Revise as próximas ações." };
+    nextActions = parsedActions.data;
+  }
   if (adjustments.length > 400 || nextMonth.length > 400 || decisionMaker.length > 100) return { ok: false, error: "Use até 400 caracteres em cada bloco e 100 no decisor para caber em uma página." };
   if (featuredCase.length > FEATURED_CASE_MAX) return { ok: false, error: `Use até ${FEATURED_CASE_MAX} caracteres no caso do mês para caber em uma página.` };
+  if (highlights.length > HIGHLIGHTS_MAX || limitationsNote.length > LIMITATIONS_NOTE_MAX) return { ok: false, error: `Use até ${HIGHLIGHTS_MAX} caracteres no resumo do período e ${LIMITATIONS_NOTE_MAX} nas limitações.` };
   const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { id: true } });
   if (!tenant) return { ok: false, error: "Clínica não encontrada." };
-  if (featuredCase) {
-    // O caso vai para o decisor e para o PDF: nenhum contato atendido no mês
+  const actionsText = (nextActions ?? []).map((a) => `${a.action} ${a.owner} ${a.indicator}`).join(" ");
+  if (featuredCase || highlights || limitationsNote || actionsText) {
+    // Os textos vão para o decisor e para o PDF: nenhum contato atendido no mês
     // pode ser reconhecido pelo nome, telefone ou e-mail.
     const window = monthlyWindow(month, parsed.data.timezone);
     const contacts = await prisma.lead.findMany({ where: { tenantId, isTest: false, name: { not: null },
       conversation: { messages: { some: { createdAt: { gte: window.start, lt: window.end } } } } }, select: { name: true } });
-    const problem = featuredCaseProblem(featuredCase, contacts.map((c) => c.name));
+    const names = contacts.map((c) => c.name);
+    const problem = (featuredCase && featuredCaseProblem(featuredCase, names))
+      || (highlights && reviewTextProblem("Resumo do período", highlights, names))
+      || (limitationsNote && reviewTextProblem("Limitações do fechamento", limitationsNote, names))
+      || (actionsText && reviewTextProblem("Próximas ações", actionsText, names));
     if (problem) return { ok: false, error: problem };
   }
   if (!await validAgents(tenantId, parsed.data.agentIds)) return { ok: false, error: "Selecione somente agentes deste cliente." };
@@ -77,33 +95,44 @@ export async function saveMonthlyRoi(tenantId: string, month: string, _previous:
     const existing = await tx.monthlyRoiReport.findUnique({ where: { tenantId_month: { tenantId, month } } });
     if (existing && form.has("revision") && String(form.get("revision")) !== existing.updatedAt.toISOString()) return false;
     const metricOverrides = overrides?.success ? overrides.data : parseMonthlyOverrides(existing?.assumptions);
-    const data = { assumptions: { ...parsed.data, metricOverrides }, adjustments, nextMonth, decisionMaker, featuredCase, preparedBy: session.user.id };
+    const data = { assumptions: { ...parsed.data, metricOverrides }, adjustments, nextMonth, decisionMaker, featuredCase, highlights, limitationsNote,
+      ...(nextActions ? { nextActions } : {}), preparedBy: session.user.id };
     if (!existing) { await tx.monthlyRoiReport.create({ data: { tenantId, month, ...data } }); return true; }
     const updated = await tx.monthlyRoiReport.updateMany({ where: { id: existing.id, tenantId, status: "draft", updatedAt: existing.updatedAt }, data });
     return updated.count === 1;
   });
   if (!saved) return { ok: false, error: "O relatório está fechado ou mudou durante a edição. Atualize e reabra a revisão antes de alterar." };
-  await recordAudit({ event: "report.monthly_saved", tenantId, target: { type: "MonthlyRoiReport", id: `${tenantId}:${month}`, label: month }, after: { assumptions: parsed.data, metricOverrides: overrides?.success ? overrides.data : undefined, adjustments, nextMonth, decisionMaker, featuredCase } });
+  await recordAudit({ event: "report.monthly_saved", tenantId, target: { type: "MonthlyRoiReport", id: `${tenantId}:${month}`, label: month }, after: { assumptions: parsed.data, metricOverrides: overrides?.success ? overrides.data : undefined, adjustments, nextMonth, decisionMaker, featuredCase, highlights, limitationsNote, nextActions } });
   invalidate(tenantId);
   return { ok: true, info: "Indicadores, premissas e revisão salvos para este mês." };
 }
-export async function finalizeMonthlyRoi(tenantId: string, month: string, acknowledgePartial: boolean): Promise<Result> {
+/**
+ * Fecha a competência. Pendência não bloqueia mais: o relatório pode sair com
+ * cobertura parcial, desde que o admin confirme exatamente a lista de
+ * limitações que viu (`acknowledged`, de `limitationFingerprint`). Os números
+ * sem evidência seguem nulos e vão congelados como "não verificado".
+ */
+export async function finalizeMonthlyRoi(tenantId: string, month: string, acknowledged: string[]): Promise<Result> {
   await requireSuperadmin();
   if (!validMonth(month)) return { ok: false, error: "Competência inválida." };
+  if (!Array.isArray(acknowledged) || acknowledged.length > 50 || !acknowledged.every((v) => typeof v === "string" && v.length <= 1000)) return { ok: false, error: "Confirmação inválida." };
   const saved = await prisma.monthlyRoiReport.findUnique({ where: { tenantId_month: { tenantId, month } } });
   if (!saved || saved.status !== "draft") return { ok: false, error: "Salve e revise o rascunho primeiro." };
   const report = await computeMonthlyReport(tenantId, month, false);
   if (report.partial) return { ok: false, error: "O mês ainda está em andamento. O fechamento fica disponível no mês seguinte." };
-  if (report.current.missing.length) return { ok: false, error: "Resolva as pendências dos dados e das premissas antes de fechar." };
-  if (!report.current.trackingComplete && !acknowledgePartial) return { ok: false, error: "Confirme a cobertura parcial dos eventos históricos." };
-  if (!report.decisionMaker || !report.adjustments || !report.nextMonth) return { ok: false, error: "Preencha decisor, ajustes e próximo mês." };
+  const limitations = report.limitations ?? [];
+  if (limitations.length && !acknowledged.length) return { ok: false, error: "Confirme as limitações do fechamento antes de fechar." };
+  if (!sameLimitations(acknowledged, limitations)) return { ok: false, error: "As limitações mudaram desde a sua conferência. Revise a lista e confirme de novo." };
+  if (!report.decisionMaker || !report.adjustments || !hasNextPlan(report)) return { ok: false, error: "Preencha decisor, ajustes e as próximas ações." };
   const finalizedAt = new Date();
   const updated = await prisma.monthlyRoiReport.updateMany({ where: { id: saved.id, tenantId, status: "draft", updatedAt: saved.updatedAt },
     data: { status: "ready", finalizedAt, snapshot: JSON.parse(JSON.stringify({ ...report, status: "ready", finalizedAt: finalizedAt.toISOString() })) as Prisma.InputJsonValue } });
   if (!updated.count) return { ok: false, error: "A revisão mudou durante o fechamento. Atualize e confira novamente." };
-  await recordAudit({ event: "report.monthly_finalized", tenantId, target: { type: "MonthlyRoiReport", id: saved.id, label: month }, meta: { acknowledgePartial } });
+  await recordAudit({ event: "report.monthly_finalized", tenantId, target: { type: "MonthlyRoiReport", id: saved.id, label: month }, meta: { limitations: limitations.map((l) => l.key), unverified: unverifiedMetrics(report) } });
   invalidate(tenantId);
-  return { ok: true, info: "Relatório fechado. Os números e as premissas foram congelados para entrega." };
+  return { ok: true, info: limitations.length
+    ? "Relatório fechado com cobertura parcial. As limitações e os números não verificados foram congelados para entrega."
+    : "Relatório fechado. Os números e as premissas foram congelados para entrega." };
 }
 export async function reopenMonthlyRoi(tenantId: string, month: string): Promise<Result> {
   await requireSuperadmin();

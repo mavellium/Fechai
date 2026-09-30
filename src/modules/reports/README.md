@@ -17,7 +17,7 @@ controle de publicação.
   odontológico P-79, separado do Financeiro legado. Premissas mensais revisadas
   pelo superadmin, comparecimento confirmado, receita apenas da chegada fora
   do horário humano, economia estimada declarada, fechamento em snapshot e
-  PDF A4 de uma página. Contrato: [`docs/P-79-relatorio-mensal-roi.md`](../../../docs/P-79-relatorio-mensal-roi.md).
+  PDF A4 com resumo executivo (página 1) e análise detalhada. Contrato: [`docs/P-79-relatorio-mensal-roi.md`](../../../docs/P-79-relatorio-mensal-roi.md).
 - `monthly.ts` também recebe `gaps` (perguntas da fila P-87 aprovadas na
   janela: `agentId`, `firstAskedAt`, `answeredAt`) e calcula
   `gapsAnswered`/`gapAnswerSeconds` no mês da aprovação, no escopo de agentes.
@@ -25,11 +25,20 @@ controle de publicação.
   [`knowledge-gaps/README.md`](../knowledge-gaps/README.md).
 - `monthly.ts` também carrega `leadQuality` (qualidade dos leads do mês, de
   `modules/lead-insights`, congelada no snapshot; opcional em fechamentos
-  antigos). O PDF ganha uma segunda página só quando `leadQuality.leads > 0`.
+  antigos). O PDF inclui o bloco na análise detalhada só quando `leadQuality.leads > 0`.
   Ver [`lead-insights/README.md`](../lead-insights/README.md).
 - `monthly-evidence.ts` e `monthly-quality.ts`: os registros por trás de cada
   número e o selo de qualidade de cada indicador — ver "Registros e selo de
   qualidade" no [README da seção](../../app/(dashboard)/relatorios/README.md).
+- `monthly-next-actions.ts`: até 3 próximas ações `{ action, owner, indicator }` da
+  página 1 (`parseNextActions` nunca lança; `hasNextPlan` aceita o `nextMonth` antigo).
+- `monthly-limitations.ts`: limitações do fechamento (pendências + cobertura),
+  indicadores não verificados e a impressão digital que o fechamento confere.
+  Fechar com cobertura parcial exige confirmar a lista exata.
+- `monthly-analysis.ts`: etapa 4 do assistente de fechamento — prompt da
+  análise (resumo do período, limitações, melhorias, até 3 próximas ações), parse e travas
+  deterministas; `draftMonthlyAnalysis` em `monthly-ai-service.ts` percorre a
+  cadeia de IA.
 - `monthly-overrides.ts`: valida `assumptions.metricOverrides` para o mês e o
   comparativo, aplica correções manuais e recalcula receita/economia/ROI.
   Correções não são herdadas ao copiar premissas para outro mês.
@@ -43,8 +52,12 @@ controle de publicação.
 - `monthly-ai.ts`: contrato de pergunta/resposta do assistente, lista de
   campos permitidos, limites e mesclagem de sugestões na revisão não salva.
 - `monthly-ai-service.ts`: contexto com agregados/premissas e chamada da
-  cadeia de IA configurada, com fallback, registro de tokens e cancelamento
-  em 60 segundos. Não lê conversas/pacientes nem altera o relatório.
+  cadeia de IA configurada, com fallback, registro de tokens, laço de
+  ferramentas e cancelamento (60 s; 90 s com ferramentas). Não altera o relatório.
+- `monthly-ai-tools.ts`: ferramentas só de leitura do assistente sobre
+  `report.evidence`, a linha do tempo de uma conversa do mês, a configuração e
+  as integrações; anota as evidências consultadas e monta a lista de
+  conferência proposta. Sem texto de conversa nem dado de paciente.
 
 - `service.ts`:
   - `computeTenantReport(tenantId)` — totais desde o início da conta (legado).
