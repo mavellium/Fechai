@@ -5,7 +5,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { LoadingDots } from "@/components/ui/loading-dots";
 import { connectWhatsapp, refreshWhatsappStatus } from "./actions";
-import { WhatsappControls } from "./WhatsappControls";
+import { DisconnectControl, WhatsappControls } from "./WhatsappControls";
 import { WhatsappBlocklist, type BlockedRow } from "./WhatsappBlocklist";
 
 /**
@@ -40,21 +40,7 @@ const STEPS = [
   </>,
 ];
 
-/**
- * Conexão do número. A tela é orientada a estado: conectada, ela não tem motivo
- * para mostrar código nenhum; desconectada, o código é a única coisa que importa
- * — e por isso é gerado sozinho, sem exigir um clique antes.
- */
-export function WhatsappConnect({
-  initialStatus,
-  configured,
-  connectedSince,
-  inboundLast7,
-  agentName,
-  agentEnabled,
-  ignoreGroups,
-  blocked,
-}: {
+type CommonProps = {
   initialStatus: string;
   /** Sem Evolution API configurada não há o que conectar nem o que consultar. */
   configured: boolean;
@@ -62,14 +48,41 @@ export function WhatsappConnect({
   connectedSince?: string;
   /** Mensagens recebidas de clientes nos últimos 7 dias. */
   inboundLast7?: number;
-  /** Agente que atende o número (o principal, ou o mais antigo). */
-  agentName: string;
-  agentEnabled: boolean;
-  /** Se o agente ignora mensagens de grupos do WhatsApp. */
-  ignoreGroups: boolean;
-  /** Números que o agente ignora por completo (ver modules/whatsapp/blocklist). */
-  blocked: BlockedRow[];
-}) {
+  /**
+   * Gera o código sozinho ao abrir a tela. Desligado, espera o clique: numa conta
+   * que só usa a API oficial, abrir a tela não pode criar uma instância na
+   * Evolution nem gastar o limite de códigos dela.
+   */
+  autoStart?: boolean;
+};
+
+/**
+ * `single` (padrão): o cartão é o WhatsApp inteiro da conta — conexão, atendimento
+ * e bloqueios. `channel`: a conta tem as duas conexões, e este componente é só a
+ * do QR code; atendimento e bloqueios são da conta e vivem num cartão à parte.
+ */
+type Props = CommonProps &
+  (
+    | {
+        layout?: "single";
+        /** Agente que atende o número (o principal, ou o mais antigo). */
+        agentName: string;
+        agentEnabled: boolean;
+        /** Se o agente ignora mensagens de grupos do WhatsApp. */
+        ignoreGroups: boolean;
+        /** Números que o agente ignora por completo (ver modules/whatsapp/blocklist). */
+        blocked: BlockedRow[];
+      }
+    | { layout: "channel" }
+  );
+
+/**
+ * Conexão do número. A tela é orientada a estado: conectada, ela não tem motivo
+ * para mostrar código nenhum; desconectada, o código é a única coisa que importa
+ * — e por isso é gerado sozinho, sem exigir um clique antes.
+ */
+export function WhatsappConnect(props: Props) {
+  const { initialStatus, configured, connectedSince, inboundLast7, autoStart = true } = props;
   const [status, setStatus] = useState(initialStatus);
   const [qr, setQr] = useState<string | null>(null);
   const [secondsLeft, setSecondsLeft] = useState(0);
@@ -97,11 +110,11 @@ export function WhatsappConnect({
   // Gera o código sozinho ao abrir a tela. Era um clique a mais para fazer a
   // única coisa pela qual a pessoa entrou aqui.
   useEffect(() => {
-    if (autoRan.current || !configured) return;
+    if (autoRan.current || !configured || !autoStart) return;
     if (initialStatus === "connected") return;
     autoRan.current = true;
     run(connectWhatsapp);
-  }, [configured, initialStatus, run]);
+  }, [autoStart, configured, initialStatus, run]);
 
   // Conta a validade do código na tela, em vez de deixá-lo expirar em silêncio.
   useEffect(() => {
@@ -262,16 +275,24 @@ export function WhatsappConnect({
         </div>
       )}
 
-      <WhatsappControls
-        connected={status === "connected"}
-        agentName={agentName}
-        agentEnabled={agentEnabled}
-        ignoreGroups={ignoreGroups}
-      />
+      {props.layout === "channel" ? (
+        status === "connected" && (
+          <DisconnectControl provider="evolution" className="mt-6 border-t border-white/10 pt-6" />
+        )
+      ) : (
+        <>
+          <WhatsappControls
+            connected={status === "connected"}
+            agentName={props.agentName}
+            agentEnabled={props.agentEnabled}
+            ignoreGroups={props.ignoreGroups}
+          />
 
-      {/* Fora do `connected`: bloquear um número é preparar o atendimento, e
-          quem está reconectando o WhatsApp não deveria perder a lista de vista. */}
-      <WhatsappBlocklist blocked={blocked} />
+          {/* Fora do `connected`: bloquear um número é preparar o atendimento, e
+              quem está reconectando o WhatsApp não deveria perder a lista de vista. */}
+          <WhatsappBlocklist blocked={props.blocked} />
+        </>
+      )}
     </>
   );
 }

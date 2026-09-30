@@ -1,7 +1,13 @@
 import { prisma } from "@/lib/prisma";
 import { appendMessage } from "@/modules/agent-engine/conversation";
 import { isPhoneBlocked } from "@/modules/whatsapp/blocklist";
-import { getWhatsAppProviderForInstance, WHATSAPP_PROVIDER_SELECT } from "@/modules/whatsapp/meta-config";
+import { getWhatsAppProviderForInstance } from "@/modules/whatsapp/meta-config";
+import {
+  channelProvider,
+  isReadyChannel,
+  listWhatsappChannels,
+  pickWhatsappChannel,
+} from "@/modules/whatsapp/instances";
 
 /**
  * Até quando dá para voltar a quem perguntou. Na Meta é regra dela: fora das
@@ -17,6 +23,12 @@ export type ResumeSummary = {
   failed: number;
   /** Nada foi tentado (WhatsApp desconectado): os contatos continuam pendentes. */
   blocked?: string;
+  /**
+   * Com as duas conexões: contatos cujo número está fora do ar enquanto o outro
+   * atende. Continuam pendentes — voltar a eles pelo outro número seria primeiro
+   * contato. Ausente quando não há nenhum.
+   */
+  waiting?: number;
 };
 
 /**
@@ -46,7 +58,7 @@ export async function resumeGapContacts(tenantId: string, gapId: string, message
       askedAt: true,
       conversation: {
         select: {
-          id: true, isTest: true, lastInboundAt: true, followUpReason: true,
+          id: true, isTest: true, lastInboundAt: true, followUpReason: true, whatsappProvider: true,
           lead: { select: { phone: true, isTest: true } },
         },
       },
@@ -54,23 +66,27 @@ export async function resumeGapContacts(tenantId: string, gapId: string, message
   });
   if (!occurrences.length) return summary;
 
-  const instance = await prisma.whatsappInstance.findUnique({
-    where: { tenantId },
-    select: { status: true, ...WHATSAPP_PROVIDER_SELECT },
-  });
-  const provider = instance?.externalId && instance.status === "connected" ? getWhatsAppProviderForInstance(instance) : null;
-  if (!instance?.externalId || !provider?.isConfigured()) {
+  // Só as conexões de pé E utilizáveis (a Meta sem token legível não envia).
+  const usable = (await listWhatsappChannels(tenantId)).filter(
+    (c) => isReadyChannel(c) && getWhatsAppProviderForInstance(c).isConfigured(),
+  );
+  if (!usable.length) {
     return { ...summary, blocked: "O WhatsApp não está conectado: ninguém foi retomado. Tente de novo depois de reconectar." };
   }
-  const windowMs = (instance.provider === "meta" ? RESUME_WINDOW_HOURS.meta : RESUME_WINDOW_HOURS.evolution) * 3_600_000;
+  let waiting = 0;
 
   for (const occ of occurrences) {
     const c = occ.conversation;
+    // Cada contato volta pelo número em que perguntou. `null` = esse número
+    // está fora do ar e o outro não o substitui (primeiro contato).
+    const instance = pickWhatsappChannel(usable, c.whatsappProvider);
+    const isMeta = instance ? channelProvider(instance) === "meta" : c.whatsappProvider === "meta";
+    const windowMs = (isMeta ? RESUME_WINDOW_HOURS.meta : RESUME_WINDOW_HOURS.evolution) * 3_600_000;
     let skip: string | null = null;
     if (c.isTest || c.lead.isTest) skip = "Conversa de teste.";
     else if (c.followUpReason === "stop") skip = "O contato pediu para não receber mensagens.";
     else if (!c.lastInboundAt || now.getTime() - c.lastInboundAt.getTime() > windowMs) {
-      skip = instance.provider === "meta"
+      skip = isMeta
         ? "Passou da janela de 24h da Meta desde a última mensagem do contato."
         : "A última mensagem do contato tem mais de 7 dias.";
     } else if (await isPhoneBlocked(tenantId, c.lead.phone)) skip = "Número bloqueado na conta.";
@@ -87,6 +103,12 @@ export async function resumeGapContacts(tenantId: string, gapId: string, message
       continue;
     }
 
+    // O número deste contato está fora do ar: fica pendente, sem reivindicar.
+    if (!instance?.externalId) {
+      waiting++;
+      continue;
+    }
+
     const claim = await prisma.knowledgeGapOccurrence.updateMany({
       where: { id: occ.id, resumeStatus: null },
       data: { resumeStatus: "sending" },
@@ -95,7 +117,7 @@ export async function resumeGapContacts(tenantId: string, gapId: string, message
 
     let keyId: string | null;
     try {
-      keyId = await provider.sendMessage(instance.externalId, c.lead.phone, text);
+      keyId = await getWhatsAppProviderForInstance(instance).sendMessage(instance.externalId, c.lead.phone, text);
     } catch (err) {
       console.error("[knowledge-gaps] retomada sem confirmação", occ.id, err);
       await prisma.knowledgeGapOccurrence.update({
@@ -120,5 +142,6 @@ export async function resumeGapContacts(tenantId: string, gapId: string, message
     });
     summary.sent++;
   }
+  if (waiting) summary.waiting = waiting;
   return summary;
 }

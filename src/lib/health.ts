@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { isStripeConfigured } from "@/modules/billing/stripe";
 import { isEmbeddingConfigured } from "@/modules/knowledge-base/embeddings";
 import { getWhatsAppProvider } from "@/modules/whatsapp";
+import { getWhatsappStatus } from "@/modules/whatsapp/instances";
 import { AVAILABLE_ACTIONS } from "@/modules/agent-engine/actions";
 
 export type Check = {
@@ -32,7 +33,7 @@ export function integrationChecks(): Check[] {
 
 // Saúde do tenant — passos de configuração concluídos?
 export async function tenantChecks(tenantId: string): Promise<Check[]> {
-  const [agentWithPrompt, docs, actions, wa] = await Promise.all([
+  const [agentWithPrompt, docs, actions, whatsappStatus] = await Promise.all([
     prisma.agent.findFirst({
       where: { tenantId, archived: false, NOT: { systemPrompt: "" } },
       select: { id: true },
@@ -41,7 +42,7 @@ export async function tenantChecks(tenantId: string): Promise<Check[]> {
     prisma.tenantAction.count({
       where: { tenantId, enabled: true, key: { in: AVAILABLE_ACTIONS.map((a) => a.key) } },
     }),
-    prisma.whatsappInstance.findUnique({ where: { tenantId }, select: { status: true } }),
+    getWhatsappStatus(tenantId),
   ]);
 
   return [
@@ -50,8 +51,8 @@ export async function tenantChecks(tenantId: string): Promise<Check[]> {
     { label: "Ações ativas", ok: actions > 0, detail: `${actions} ativa(s)`, href: "/agentes" },
     {
       label: "WhatsApp conectado",
-      ok: wa?.status === "connected",
-      detail: wa?.status ?? "disconnected",
+      ok: whatsappStatus === "connected",
+      detail: whatsappStatus,
       href: "/integracoes",
     },
   ];

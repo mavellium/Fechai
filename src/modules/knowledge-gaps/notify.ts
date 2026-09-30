@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { sendMail } from "@/lib/mail";
-import { getWhatsAppProviderForInstance, WHATSAPP_PROVIDER_SELECT } from "@/modules/whatsapp/meta-config";
+import { getWhatsAppProviderForInstance } from "@/modules/whatsapp/meta-config";
+import { findWhatsappChannel } from "@/modules/whatsapp/instances";
 import { partsInZone, zonedTimeToUtc } from "@/modules/scheduling/time";
 import { clinicAnswers, mavelliumAnswers, parseGapSettings, type GapSettings } from "./settings";
 
@@ -91,11 +92,9 @@ async function deliver(tenantId: string, settings: GapSettings, subject: string,
   }
   if (settings.notifyWhatsapp && settings.groupId) {
     try {
-      const instance = await prisma.whatsappInstance.findUnique({
-        where: { tenantId },
-        select: { status: true, ...WHATSAPP_PROVIDER_SELECT },
-      });
-      if (instance?.externalId && instance.status === "connected") {
+      // Grupo é do número conectado por QR code (a Meta não tem grupos).
+      const instance = await findWhatsappChannel(tenantId, "evolution");
+      if (instance?.externalId) {
         const provider = getWhatsAppProviderForInstance(instance);
         if (provider.sendGroupMessage && provider.isConfigured()) {
           await provider.sendGroupMessage(instance.externalId, settings.groupId, text);

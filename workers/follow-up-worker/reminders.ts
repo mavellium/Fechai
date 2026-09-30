@@ -1,9 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../../src/lib/prisma";
-import {
-  getWhatsAppProviderForInstance,
-  WHATSAPP_PROVIDER_SELECT,
-} from "../../src/modules/whatsapp/meta-config";
+import { getWhatsAppProviderForInstance } from "../../src/modules/whatsapp/meta-config";
+import { findWhatsappChannel } from "../../src/modules/whatsapp/instances";
 import {
   parseScheduleConfig,
   isReminderTypeAllowed,
@@ -170,7 +168,12 @@ export async function scanAndSendReminders(now: Date = new Date()) {
         { reminderOverride: { not: Prisma.DbNull } },
       ],
     },
-    include: { lead: true, conversation: { select: { variables: true } } },
+    include: {
+      // A consulta marcada à mão não guarda `conversationId`: o canal do
+      // paciente também vem da conversa do lead.
+      lead: { include: { conversation: { select: { whatsappProvider: true } } } },
+      conversation: { select: { variables: true, whatsappProvider: true } },
+    },
   });
 
   // Consultas que já passaram e ainda tinham disparo pendente: fechar sem
@@ -245,11 +248,13 @@ export async function scanAndSendReminders(now: Date = new Date()) {
     let keyId: string | null = null;
     let delivered = false;
     {
-      const instance = await prisma.whatsappInstance.findUnique({
-        where: { tenantId: appt.tenantId },
-        select: { status: true, ...WHATSAPP_PROVIDER_SELECT },
-      });
-      if (instance?.externalId && instance.status === "connected") {
+      // Pelo número em que o paciente escreveu: com as duas conexões, a dele
+      // fora do ar espera (o disparo não é consumido), não troca de número.
+      const instance = await findWhatsappChannel(
+        appt.tenantId,
+        appt.conversation?.whatsappProvider ?? appt.lead?.conversation?.whatsappProvider,
+      );
+      if (instance?.externalId) {
         try {
           const provider = getWhatsAppProviderForInstance(instance);
           if (provider.isConfigured()) {

@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { AVAILABLE_ACTIONS } from "@/modules/agent-engine/actions";
+import { getWhatsappStatus } from "@/modules/whatsapp/instances";
 
 export type OnboardingStep = {
   key: string;
@@ -31,7 +32,7 @@ export function setupComplete(steps: OnboardingStep[]) {
 // Calcula o status de cada passo do onboarding a partir do estado real no banco.
 // Alguns passos (site/sandbox) só ficam "done" nos milestones seguintes.
 export async function getOnboardingSteps(tenantId: string): Promise<OnboardingStep[]> {
-  const [agentWithPrompt, docCount, enabledActions, whatsapp, messageCount] = await Promise.all([
+  const [agentWithPrompt, docCount, enabledActions, whatsappStatus, messageCount] = await Promise.all([
     // Basta UM agente configurado para o passo contar como feito — a conta
     // pode ter vários, e exigir todos travaria o checklist para sempre.
     prisma.agent.findFirst({
@@ -42,7 +43,7 @@ export async function getOnboardingSteps(tenantId: string): Promise<OnboardingSt
     prisma.tenantAction.count({
       where: { tenantId, enabled: true, key: { in: AVAILABLE_ACTIONS.map((a) => a.key) } },
     }),
-    prisma.whatsappInstance.findUnique({ where: { tenantId }, select: { status: true } }),
+    getWhatsappStatus(tenantId),
     prisma.message.count({ where: { conversation: { tenantId } } }),
   ]);
 
@@ -73,7 +74,7 @@ export async function getOnboardingSteps(tenantId: string): Promise<OnboardingSt
       title: "Conectar seu número de WhatsApp",
       description: "Aponte a câmera do celular para o código e pronto.",
       href: "/integracoes",
-      done: whatsapp?.status === "connected",
+      done: whatsappStatus === "connected",
     },
     {
       key: "site",

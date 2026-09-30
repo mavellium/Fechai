@@ -685,6 +685,12 @@ conversou com o número da clínica.
   número — e o bloqueio cala a clínica com todos os pacientes. O disparo fica
   **pendente** (não é fechado): se a pessoa escrever antes da consulta, sai.
   A tela de lembretes diz isso para contas no Evolution com Clinicorp.
+- **As duas conexões de pé**: a escolha é **por paciente**
+  (`chooseChannel` em `clinicorp-reminders.ts`). Quem já conversou pelo QR recebe
+  o texto por lá — é o número que conhece; quem nunca falou, ou fala pela Meta
+  (`Conversation.whatsappProvider`), recebe o template pela Meta. Nunca primeiro
+  contato pelo QR e nunca troca de número: sem canal para aquele paciente, o
+  disparo fica pendente.
 
 Outras regras:
 

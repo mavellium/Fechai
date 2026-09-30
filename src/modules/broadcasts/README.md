@@ -16,7 +16,11 @@ O arquivo original não é armazenado. O envio usa templates aprovados da Meta.
   (`whatsapp_business_management`) e enviar (`whatsapp_business_messaging`).
 - `getBroadcastConnection()` exige conexão Meta ativa, conta ativa, liberação
   e credenciais decifráveis. Tokens nunca chegam ao navegador nem à campanha.
-  Não há alternativa automática pela Evolution.
+  Não há alternativa automática pela Evolution — e ela **não precisa ser
+  desconectada** para os Disparos funcionarem: a conta mantém o QR e a Meta de
+  pé ao mesmo tempo (ver `modules/whatsapp/README.md`, "Duas conexões ao mesmo
+  tempo"). Contato novo criado pelo envio nasce como conversa da Meta; quem já
+  fala pelo QR continua nele até responder pela Meta.
 - Sem conexão, a página mantém o histórico e orienta a configuração.
 
 ## Passo a passo para usar

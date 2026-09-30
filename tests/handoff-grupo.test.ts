@@ -17,7 +17,7 @@ import { z } from "zod";
 
 const db = vi.hoisted(() => ({
   tenantAction: { findUnique: vi.fn(), upsert: vi.fn() },
-  whatsappInstance: { findUnique: vi.fn() },
+  whatsappInstance: { findMany: vi.fn() },
   conversation: { findFirst: vi.fn(), updateMany: vi.fn() },
 }));
 const provider = vi.hoisted(() => ({
@@ -81,10 +81,10 @@ function acaoConfigurada(over: { enabled?: boolean; notifyGroup?: boolean; group
 
 /** Número da conta conectado na Evolution. */
 function whatsappConectado() {
-  db.whatsappInstance.findUnique.mockResolvedValue({
+  db.whatsappInstance.findMany.mockResolvedValue([{
     externalId: "tenant_tenant-1",
     status: "connected",
-  });
+  }]);
 }
 
 describe("ID do grupo (normalizeGroupId)", () => {
@@ -282,20 +282,20 @@ describe("Grupos do número conectado (listWhatsAppGroups)", () => {
   });
 
   it("número desconectado: avisa em vez de tentar", async () => {
-    db.whatsappInstance.findUnique.mockResolvedValue({ externalId: "tenant_tenant-1", status: "disconnected" });
+    db.whatsappInstance.findMany.mockResolvedValue([{ externalId: "tenant_tenant-1", status: "disconnected" }]);
     await expect(listWhatsAppGroups(TENANT)).resolves.toMatchObject({ ok: false, reason: "disconnected" });
     expect(provider.listGroups).not.toHaveBeenCalled();
   });
 
   it("conexão da Meta: grupo não existe ali, e a tela não oferece o ID à mão", async () => {
-    db.whatsappInstance.findUnique.mockResolvedValue({
+    db.whatsappInstance.findMany.mockResolvedValue([{
       provider: "meta",
       externalId: "phone-1",
       status: "connected",
       metaPhoneNumberId: "phone-1",
       metaBusinessAccountId: null,
       metaAccessTokenEncrypted: null,
-    });
+    }]);
     await expect(listWhatsAppGroups(TENANT)).resolves.toMatchObject({ ok: false, reason: "unsupported" });
   });
 
@@ -407,7 +407,7 @@ describe("Avisar a equipe no grupo (notifyHandoffGroup)", () => {
 
   it("Meta não recebe tentativa de envio para grupo", async () => {
     acaoConfigurada();
-    db.whatsappInstance.findUnique.mockResolvedValue({ externalId: "phone-1", status: "connected", provider: "meta" });
+    db.whatsappInstance.findMany.mockResolvedValue([{ externalId: "phone-1", status: "connected", provider: "meta" }]);
     await notifyHandoffGroup(TENANT, AGENTE, CONVERSA);
     expect(provider.sendGroupMessage).not.toHaveBeenCalled();
     expect(db.conversation.findFirst).not.toHaveBeenCalled();
@@ -447,10 +447,10 @@ describe("Avisar a equipe no grupo (notifyHandoffGroup)", () => {
 
   it("NÃO avisa com o WhatsApp desconectado — não há conexão para enviar", async () => {
     acaoConfigurada();
-    db.whatsappInstance.findUnique.mockResolvedValue({
+    db.whatsappInstance.findMany.mockResolvedValue([{
       externalId: "tenant_tenant-1",
       status: "disconnected",
-    });
+    }]);
     await notifyHandoffGroup(TENANT, AGENTE, CONVERSA);
     expect(provider.sendGroupMessage).not.toHaveBeenCalled();
   });
@@ -472,6 +472,68 @@ describe("Avisar a equipe no grupo (notifyHandoffGroup)", () => {
     await expect(notifyHandoffGroup(TENANT, AGENTE, CONVERSA)).resolves.toBeUndefined();
     expect(log).toHaveBeenCalled();
     log.mockRestore();
+  });
+});
+
+describe("Transferência com a Evolution e a Meta conectadas", () => {
+  const QR = { provider: "evolution", externalId: "tenant_tenant-1", status: "connected" };
+  const META = {
+    provider: "meta", externalId: "phone-1", status: "connected",
+    metaPhoneNumberId: "phone-1", metaBusinessAccountId: null, metaAccessTokenEncrypted: null,
+  };
+
+  beforeEach(() => {
+    provider.isConfigured.mockReturnValue(true);
+    db.conversation.findFirst.mockResolvedValue(conversaReal());
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("o aviso vai pelo grupo do QR code, com a Meta também de pé", async () => {
+    acaoConfigurada();
+    db.whatsappInstance.findMany.mockResolvedValue([META, QR]);
+
+    await notifyHandoffGroup(TENANT, AGENTE, CONVERSA);
+
+    expect(provider.sendGroupMessage).toHaveBeenCalledOnce();
+    expect(provider.sendGroupMessage.mock.calls[0][0]).toBe("tenant_tenant-1");
+    expect(provider.sendGroupMessage.mock.calls[0][1]).toBe(GRUPO);
+  });
+
+  it("QR desconectado e Meta de pé: sem aviso (grupo não existe na Meta)", async () => {
+    acaoConfigurada();
+    db.whatsappInstance.findMany.mockResolvedValue([{ ...QR, status: "disconnected" }, META]);
+
+    await notifyHandoffGroup(TENANT, AGENTE, CONVERSA);
+
+    expect(provider.sendGroupMessage).not.toHaveBeenCalled();
+  });
+
+  it("a lista de grupos vem do QR, e a Meta de pé não a substitui", async () => {
+    db.whatsappInstance.findMany.mockResolvedValue([META, QR]);
+    provider.listGroups.mockResolvedValueOnce([{ id: GRUPO, name: "Recepção", size: 4 }]);
+
+    await expect(listWhatsAppGroups(TENANT)).resolves.toEqual({
+      ok: true,
+      groups: [{ id: GRUPO, name: "Recepção", size: 4 }],
+    });
+    expect(provider.listGroups).toHaveBeenCalledWith("tenant_tenant-1");
+  });
+
+  it("só a Meta conectada: a tela sabe que grupo não existe e manda conectar o QR", async () => {
+    db.whatsappInstance.findMany.mockResolvedValue([META]);
+
+    const res = await listWhatsAppGroups(TENANT);
+
+    expect(res).toMatchObject({ ok: false, reason: "unsupported" });
+    expect(res.ok ? "" : res.error).toMatch(/QR/);
+  });
+
+  it("nenhuma conexão de pé: desconectado, e a pessoa pode colar o ID depois", async () => {
+    db.whatsappInstance.findMany.mockResolvedValue([{ ...QR, status: "disconnected" }, { ...META, status: "disconnected" }]);
+
+    await expect(listWhatsAppGroups(TENANT)).resolves.toMatchObject({ ok: false, reason: "disconnected" });
   });
 });
 

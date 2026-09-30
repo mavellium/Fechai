@@ -1,8 +1,14 @@
 import { prisma } from "@/lib/prisma";
+import { getWhatsAppProviderForInstance } from "@/modules/whatsapp/meta-config";
 import {
-  getWhatsAppProviderForInstance,
-  WHATSAPP_PROVIDER_SELECT,
-} from "@/modules/whatsapp/meta-config";
+  channelProvider,
+  isReadyChannel,
+  isWhatsappProviderName,
+  listWhatsappChannels,
+  pickWhatsappChannel,
+  setConversationChannel,
+  type WhatsappChannel,
+} from "@/modules/whatsapp/instances";
 import { storeVoiceMessage } from "@/modules/voice/storage";
 
 /**
@@ -119,6 +125,21 @@ export async function appendMessage(
 export type SendManualReplyResult = { ok: true } | { ok: false; error: string };
 
 /**
+ * Por que não há por onde responder. Com as duas conexões, "o WhatsApp não está
+ * conectado" seria mentira quando só a do contato caiu — e a pessoa precisa
+ * saber QUAL reconectar, porque responder pelo outro número seria primeiro
+ * contato para o paciente.
+ */
+function noChannelMessage(channels: readonly WhatsappChannel[], preferred: string | null): string {
+  if (isWhatsappProviderName(preferred) && channels.some(isReadyChannel)) {
+    return preferred === "meta"
+      ? "Este contato fala pela API oficial da Meta, que está desconectada agora. Reconecte em Integrações para responder."
+      : "Este contato fala pelo número do QR code, que está desconectado agora. Reconecte em Integrações para responder.";
+  }
+  return "O WhatsApp não está conectado. Conecte na tela WhatsApp antes de enviar.";
+}
+
+/**
  * Núcleo de "um humano respondeu pelo painel" — compartilhado por
  * `conversas/actions.ts` (`sendManualMessage`, a partir de uma conversa já
  * aberta) e `contatos/actions.ts` (`sendMessageToContact`, a partir de um
@@ -126,7 +147,8 @@ export type SendManualReplyResult = { ok: true } | { ok: false; error: string };
  * existir, cada uma só com metade do cuidado: nenhuma marcava `sentBy` nem
  * pausava o agente por conversa.
  *
- * Numa conversa real, envia de verdade pelo `WhatsAppProvider`; numa de teste
+ * Numa conversa real, envia de verdade pelo `WhatsAppProvider` — do número em
+ * que o contato escreveu, quando a conta tem as duas conexões; numa de teste
  * (sandbox), só grava — sem WhatsApp real envolvido. Sempre grava com
  * `sentBy: "human"` e liga `agentPaused`, para `runAgentTurn` não responder
  * por cima na machine seguinte.
@@ -149,18 +171,17 @@ export async function sendManualReply(
 
   const conversation = await prisma.conversation.findFirst({
     where: { id: conversationId, tenantId },
-    select: { id: true, isTest: true, lead: { select: { phone: true } } },
+    select: { id: true, isTest: true, whatsappProvider: true, lead: { select: { phone: true } } },
   });
   if (!conversation) return { ok: false, error: "Conversa não encontrada." };
 
   let externalId: string | null = null;
   if (!conversation.isTest) {
-    const instance = await prisma.whatsappInstance.findUnique({
-      where: { tenantId },
-      select: { status: true, ...WHATSAPP_PROVIDER_SELECT },
-    });
-    if (!instance || instance.status !== "connected" || !instance.externalId) {
-      return { ok: false, error: "O WhatsApp não está conectado. Conecte na tela WhatsApp antes de enviar." };
+    // Sai pelo número em que o contato escreveu (ver `pickWhatsappChannel`).
+    const channels = await listWhatsappChannels(tenantId);
+    const instance = pickWhatsappChannel(channels, conversation.whatsappProvider);
+    if (!instance?.externalId) {
+      return { ok: false, error: noChannelMessage(channels, conversation.whatsappProvider) };
     }
     try {
       // Grava o key.id da mensagem que acabamos de enviar: o webhook reentrega
@@ -182,6 +203,9 @@ export async function sendManualReply(
           : "Não foi possível enviar pelo WhatsApp. Tente de novo.",
       };
     }
+    // Contato sem canal registrado (cadastrado à mão): o número por onde a
+    // primeira mensagem saiu passa a ser o dele, e o follow-up segue por ali.
+    await setConversationChannel(conversation, channelProvider(instance), { onlyIfUnset: true });
   }
 
   // Só guarda na CDN DEPOIS do envio: se o WhatsApp recusar, não sobra arquivo

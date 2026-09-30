@@ -12,7 +12,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const db = vi.hoisted(() => ({
   tenantAction: { findMany: vi.fn() },
   conversation: { findMany: vi.fn(), update: vi.fn() },
-  whatsappInstance: { findUnique: vi.fn() },
+  whatsappInstance: { findMany: vi.fn() },
   whatsappBlockedNumber: { findUnique: vi.fn() },
   message: { create: vi.fn() },
 }));
@@ -93,7 +93,7 @@ function acao(config: unknown = { delayMinutes: 60, message: "Posso ajudar?" }) 
 beforeEach(() => {
   vi.clearAllMocks();
   acao();
-  db.whatsappInstance.findUnique.mockResolvedValue({ externalId: "instancia-1", status: "connected" });
+  db.whatsappInstance.findMany.mockResolvedValue([{ externalId: "instancia-1", status: "connected" }]);
   db.message.create.mockResolvedValue({ id: "mensagem-1" });
   db.conversation.update.mockResolvedValue({});
   db.whatsappBlockedNumber.findUnique.mockResolvedValue(null);
@@ -311,7 +311,7 @@ describe("esteira (varredura)", () => {
 
   it("WhatsApp desconectado não consome a etapa: tenta de novo na próxima varredura", async () => {
     db.conversation.findMany.mockResolvedValue([conversation()]);
-    db.whatsappInstance.findUnique.mockResolvedValue({ externalId: "instancia-1", status: "disconnected" });
+    db.whatsappInstance.findMany.mockResolvedValue([{ externalId: "instancia-1", status: "disconnected" }]);
 
     await expect(scanAndSendFollowUps(NOW)).resolves.toEqual({ scanned: 1, sent: 0 });
     expect(db.message.create).not.toHaveBeenCalled();
@@ -357,10 +357,71 @@ describe("esteira (varredura)", () => {
   it("não compõe pela IA quando o WhatsApp não tem como entregar", async () => {
     acao({ ...ESTEIRA, noReply: { enabled: true, steps: [{ delayMinutes: 30, message: "Base.", ai: true }] } });
     db.conversation.findMany.mockResolvedValue([conversation()]);
-    db.whatsappInstance.findUnique.mockResolvedValue(null);
+    db.whatsappInstance.findMany.mockResolvedValue([]);
 
     await scanAndSendFollowUps(NOW);
 
     expect(compose.composeFollowUp).not.toHaveBeenCalled();
+  });
+});
+
+describe("follow-up com as duas conexões (QR e Meta)", () => {
+  const QR = { provider: "evolution", externalId: "instancia-qr", status: "connected" };
+  const META = { provider: "meta", externalId: "phone-meta", status: "connected" };
+
+  it("sai pelo número em que o contato escreveu: Meta", async () => {
+    db.conversation.findMany.mockResolvedValue([conversation({ whatsappProvider: "meta" })]);
+    db.whatsappInstance.findMany.mockResolvedValue([QR, META]);
+
+    await expect(scanAndSendFollowUps(NOW)).resolves.toEqual({ scanned: 1, sent: 1 });
+    expect(provider.sendMessage).toHaveBeenCalledWith("phone-meta", "5511999999999", "Posso ajudar?");
+  });
+
+  it("sai pelo número em que o contato escreveu: QR", async () => {
+    db.conversation.findMany.mockResolvedValue([conversation({ whatsappProvider: "evolution" })]);
+    db.whatsappInstance.findMany.mockResolvedValue([QR, META]);
+
+    await scanAndSendFollowUps(NOW);
+
+    expect(provider.sendMessage).toHaveBeenCalledWith("instancia-qr", "5511999999999", "Posso ajudar?");
+  });
+
+  it("sem canal registrado, com as duas de pé, vale o QR (o padrão de antes da Meta)", async () => {
+    db.conversation.findMany.mockResolvedValue([conversation({ whatsappProvider: null })]);
+    db.whatsappInstance.findMany.mockResolvedValue([META, QR]);
+
+    await scanAndSendFollowUps(NOW);
+
+    expect(provider.sendMessage).toHaveBeenCalledWith("instancia-qr", "5511999999999", "Posso ajudar?");
+  });
+
+  it("o número do contato fora do ar espera — nunca troca para o outro (seria primeiro contato)", async () => {
+    // Contato da Meta, Meta desconectada, QR de pé: mandar pelo QR seria uma
+    // mensagem de número desconhecido, que é o que bloqueia o número da clínica.
+    db.conversation.findMany.mockResolvedValue([conversation({ whatsappProvider: "meta" })]);
+    db.whatsappInstance.findMany.mockResolvedValue([QR, { ...META, status: "disconnected" }]);
+
+    await expect(scanAndSendFollowUps(NOW)).resolves.toEqual({ scanned: 1, sent: 0 });
+    expect(provider.sendMessage).not.toHaveBeenCalled();
+    // Não consome a etapa: volta a tentar quando a Meta reconectar.
+    expect(db.conversation.update).not.toHaveBeenCalled();
+    expect(db.message.create).not.toHaveBeenCalled();
+  });
+
+  it("e o contrário: contato do QR com o QR fora não vai pela Meta", async () => {
+    db.conversation.findMany.mockResolvedValue([conversation({ whatsappProvider: "evolution" })]);
+    db.whatsappInstance.findMany.mockResolvedValue([{ ...QR, status: "disconnected" }, META]);
+
+    await expect(scanAndSendFollowUps(NOW)).resolves.toEqual({ scanned: 1, sent: 0 });
+    expect(provider.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("conta só com a Meta: contato sem canal registrado ainda é atendido por ela", async () => {
+    db.conversation.findMany.mockResolvedValue([conversation({ whatsappProvider: null })]);
+    db.whatsappInstance.findMany.mockResolvedValue([META]);
+
+    await scanAndSendFollowUps(NOW);
+
+    expect(provider.sendMessage).toHaveBeenCalledWith("phone-meta", "5511999999999", "Posso ajudar?");
   });
 });

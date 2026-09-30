@@ -3,8 +3,10 @@
 ## O que faz
 
 Conecta o número de WhatsApp do tenant e troca mensagens atrás de uma interface
-que isola o provedor. Cada conta escolhe entre **Evolution API self-hosted** e
-**WhatsApp Cloud API oficial da Meta**; contas antigas continuam em Evolution.
+que isola o provedor. Uma conta tem até **uma conexão por provedor**:
+**Evolution API self-hosted** (QR code) e **WhatsApp Cloud API oficial da Meta**,
+e com a Meta liberada as duas ficam de pé **ao mesmo tempo**, cada uma com o seu
+número. Contas antigas continuam só com a Evolution.
 
 ## Arquivos
 
@@ -14,8 +16,13 @@ que isola o provedor. Cada conta escolhe entre **Evolution API self-hosted** e
   áudio, perfil do número, inscrição do app no WABA e parse de webhook).
 - `meta-config.ts` — resolve o adapter pela linha `WhatsappInstance`, decifra
   credenciais e valida `X-Hub-Signature-256` sem vazar segredo.
+- `instances.ts` — as conexões da conta e **por qual delas se fala com cada
+  contato** (`listWhatsappChannels`, `pickWhatsappChannel`,
+  `setConversationChannel`, `summarizeWhatsappStatus`). Ver "Duas conexões ao
+  mesmo tempo".
 - `process-incoming.ts` — fluxo comum depois que cada webhook foi autenticado e
-  normalizado: bloqueio, áudio, conversa, agente, voz e resposta.
+  normalizado: bloqueio, áudio, conversa, agente, voz e resposta. Anota em
+  `Conversation.whatsappProvider` por qual número o contato falou.
 - `index.ts` — factory dos adapters e nomes aceitos (`evolution | meta`).
 - `blocklist.ts` — números que o agente ignora (`isPhoneBlocked`,
   `canonicalPhone`, `listBlockedNumbers`). Ver abaixo.
@@ -48,14 +55,16 @@ o inbox cobre retornos anteriores ao commit. Textos também persistem o ID de
 entrada para deduplicar reentregas; controle de rajada na Meta pede reentrega.
 
 `Tenant.metaWhatsappEnabled` nasce `false` e só o superadmin altera em
-`/admin/contas`. Sem essa liberação a alternativa Meta não aparece em
-`/integracoes`, as Server Actions recusam seleção/conexão direta e o webhook
-oficial não aceita a conta. Desabilitar enquanto Meta está em uso volta a linha
-para Evolution desconectada, mas preserva as credenciais cifradas.
+`/admin/contas`. Sem essa liberação o cartão da Meta não aparece em
+`/integracoes`, as Server Actions recusam o cadastro/reconexão e o webhook
+oficial não aceita a conta. Desabilitar com a Meta conectada **desconecta só a
+linha Meta** (a Evolution é outra linha e segue atendendo) e preserva as
+credenciais cifradas.
 
-`WhatsappInstance.provider` nasce como `evolution`, portanto o `db push` não
-muda nenhuma conta existente. Para Meta, `externalId` é o **Phone Number ID** e
-os demais dados ficam na mesma linha:
+`WhatsappInstance` tem **uma linha por provedor e por conta**
+(`@@unique([tenantId, provider])`). `provider` nasce como `evolution`, e conta
+antiga tem uma linha só — o `db push` não muda nenhuma delas. Para Meta,
+`externalId` é o **Phone Number ID** e os demais dados ficam na linha dela:
 
 - Phone Number ID, WABA ID e telefone de exibição podem ficar legíveis;
 - access token, App Secret e verify token são cifrados com AES-256-GCM usando
@@ -63,8 +72,48 @@ os demais dados ficam na mesma linha:
 - credencial ilegível nunca vai crua/cifrada para um header: o adapter fica
   `isConfigured() === false` e a tela pede nova configuração.
 
-A troca de provider só é permitida com o atual desconectado. Assim não ficam
-Evolution e Meta processando o mesmo número em paralelo.
+### Duas conexões ao mesmo tempo
+
+Antes a conta tinha uma linha só, e trocar de provedor exigia desconectar a
+outra — para não terem Evolution e Meta processando o mesmo número. Agora as
+duas convivem, **com números diferentes** (o mesmo número não atende pelas duas
+conexões: a mensagem chegaria pelos dois webhooks e o agente responderia duas
+vezes). A tela diz isso no cartão da Meta.
+
+Como a mensagem sai depende de **por onde o contato fala**, e isso é decidido em
+um lugar só (`instances.ts`):
+
+- **Registro.** `Conversation.whatsappProvider` (`evolution` | `meta` | null) é
+  gravado por `processIncomingWhatsapp` a cada mensagem do contato — a última
+  vence — e também quando o atendente escreve pelo próprio celular. Eco da
+  própria resposta não conta. Disparos e o lembrete do Clinicorp criam a
+  conversa como da Meta (`onlyIfUnset`: quem já fala pelo QR não é tomado, porque
+  o template não abre a janela de 24h). A primeira resposta manual a um contato
+  cadastrado à mão também fixa o número por onde saiu.
+- **Escolha.** `pickWhatsappChannel(canais, conversa.whatsappProvider)`: com o
+  provedor do contato, só a conexão **dele**; sem registro (conversa antiga, do
+  site, contato novo), a única de pé ou, com as duas, a Evolution — o padrão de
+  antes da Meta existir.
+- **Nunca cruzar.** Com o número do contato fora do ar o envio **espera**, não
+  vai pelo outro: pelo QR seria primeiro contato (o que mais leva ao bloqueio do
+  número da clínica) e pela Meta o texto livre fora da janela é recusado. O
+  follow-up e o lembrete não consomem a etapa; a resposta manual mostra qual
+  conexão reconectar; a retomada de perguntas deixa o contato pendente
+  (`waiting`).
+- **Conversas anteriores à coluna.** Quando a segunda linha vai nascer,
+  `stampLegacyConversations` marca as conversas sem canal com o provedor da linha
+  que já existe (só ela existia). Cai no padrão (Evolution) se isso nunca rodou.
+- **O que é sempre de uma conexão só.** Grupos (aviso da transferência, aviso das
+  perguntas sem resposta, lista de grupos) são do QR: a Meta não os tem. Disparos
+  são da Meta (`getBroadcastConnection`). Pausar o agente, ignorar grupos e a
+  lista de bloqueados são da **conta**, não de um número.
+- **Lembretes do Clinicorp** escolhem por paciente: quem já conversou pelo QR
+  recebe o texto por lá; quem nunca falou, ou fala pela Meta, recebe o template
+  aprovado pela Meta. Nunca primeiro contato pelo QR.
+- **Estado em uma palavra** (início, onboarding, admin): conectada se **qualquer**
+  conexão atende (`summarizeWhatsappStatus`).
+- **Abrir `/integracoes` não cria instância na Evolution** de conta que só usa a
+  Meta: com a Meta liberada e sem instância do QR, o código só é gerado no clique.
 
 ## Webhook oficial da Meta
 
@@ -88,7 +137,8 @@ mostra um aviso se o token não tiver permissão para fazer essa inscrição.
 - Não existe QR nem sessão de aparelho. Conectar valida Phone Number ID + token.
 - A Cloud API oficial não oferece o envio ao grupo interno. A transferência
   para humano continua marcando a conversa, mas o extra "avisar a equipe no grupo"
-  só funciona com Evolution.
+  só funciona com Evolution — com as duas conexões, o aviso sai pelo grupo do
+  QR mesmo quando o contato falou pela Meta.
 - Texto livre obedece à janela de atendimento aberta pelo cliente. Fora dela a
   Meta exige template aprovado; follow-ups e lembretes em texto livre podem ser
   recusados. A tela avisa isso sem fingir paridade que a própria Meta não oferece.
@@ -270,6 +320,19 @@ Três cuidados que o código protege (e os testes travam):
 A varredura roda no worker (`workers/follow-up-worker`), junto com follow-up e
 lembretes: precisa acontecer mesmo quando **ninguém abre o painel** — o modo de
 falha que ela existe para pegar é exatamente o silêncio que ninguém vê.
+
+Com as duas conexões, cada **linha** é checada com o próprio provedor
+(`checkTenantWhatsapp(tenantId, now, provider)`), e três regras evitam alarme
+falso ou desfazer decisão de gente:
+
+- **O silêncio é sinal só da Evolution.** O "aberto que não recebe" é falha da
+  sessão dela; a Cloud API não tem sessão para morrer em silêncio, e a Meta
+  costuma servir aos Disparos e passar dias sem receber. E o silêncio do QR é
+  medido só entre as conversas que **não** falam pela Meta.
+- **Meta desconectada não é religada pelo monitor.** Desconectar é local e o token
+  segue válido; perguntar à Meta e sincronizar colocaria de volta no ar o que
+  alguém desligou. A Meta só desce para `disconnected` aqui, nunca sobe.
+- **Meta de conta sem a liberação do admin não é consultada.**
 
 `connectWhatsapp()` também consulta o estado vivo antes de decidir: instância
 apagada no provedor (`exists: false`) é **recriada** em vez de receber um pedido

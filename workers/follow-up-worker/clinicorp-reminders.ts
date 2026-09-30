@@ -14,10 +14,12 @@ import { renderBroadcast } from "../../src/modules/broadcasts/template";
 import { getOrCreateConversation } from "../../src/modules/agent-engine/conversation";
 import { parseConversationVariables } from "../../src/modules/agent-engine/variables";
 import { isPhoneBlocked } from "../../src/modules/whatsapp/blocklist";
+import { getWhatsAppProviderForInstance } from "../../src/modules/whatsapp/meta-config";
 import {
-  getWhatsAppProviderForInstance,
-  WHATSAPP_PROVIDER_SELECT,
-} from "../../src/modules/whatsapp/meta-config";
+  listWhatsappChannels,
+  pickWhatsappChannel,
+  setConversationChannel,
+} from "../../src/modules/whatsapp/instances";
 import { dueReminders, loadAccountScheduleConfigs } from "./reminders";
 
 /**
@@ -37,6 +39,9 @@ import { dueReminders, loadAccountScheduleConfigs } from "./reminders";
  *   é o que mais leva o WhatsApp a bloquear o número da clínica — e o bloqueio
  *   cala o atendimento de todos os pacientes. Esse disparo fica pendente, não é
  *   fechado: se a pessoa escrever antes da consulta, o lembrete ainda sai.
+ * - **As duas conexões de pé**: a escolha é por paciente (`chooseChannel`). Quem
+ *   já conversou pelo QR recebe por lá, no número que conhece; os demais, pela
+ *   Meta com o template. Quem fala pela Meta nunca cai no QR.
  *
  * O que já saiu fica em `ClinicorpReminder` (por id do Clinicorp). O que o
  * próprio fechai espelhou lá (`Appointment.clinicorpAppointmentId`) é pulado:
@@ -60,24 +65,60 @@ export function clinicorpWhatsappPhone(raw: string | null): string | null {
   return normalizeBroadcastPhone(digits.length === 10 || digits.length === 11 ? `55${digits}` : digits);
 }
 
-type Channel =
-  | { kind: "meta"; connection: NonNullable<Awaited<ReturnType<typeof getBroadcastConnection>>>; template: NonNullable<ScheduleConfig["metaReminderTemplate"]> }
-  | { kind: "evolution"; externalId: string; provider: ReturnType<typeof getWhatsAppProviderForInstance> };
+type MetaChannel = {
+  kind: "meta";
+  connection: NonNullable<Awaited<ReturnType<typeof getBroadcastConnection>>>;
+  template: NonNullable<ScheduleConfig["metaReminderTemplate"]>;
+};
+type EvolutionChannel = {
+  kind: "evolution";
+  externalId: string;
+  provider: ReturnType<typeof getWhatsAppProviderForInstance>;
+};
+type Channel = MetaChannel | EvolutionChannel;
+/** As conexões por onde a conta pode lembrar agora; cada uma existe só se estiver pronta. */
+type Channels = { evolution?: EvolutionChannel; meta?: MetaChannel };
 
-/** Por onde esta conta pode lembrar, ou null se não pode (desconectada, Meta sem template). */
-async function channelFor(tenantId: string, cfg: ScheduleConfig): Promise<Channel | null> {
-  const instance = await prisma.whatsappInstance.findUnique({
-    where: { tenantId },
-    select: { status: true, ...WHATSAPP_PROVIDER_SELECT },
-  });
-  if (!instance?.externalId || instance.status !== "connected") return null;
-  if (instance.provider === "meta") {
-    if (!cfg.metaReminderTemplate) return null;
-    const connection = await getBroadcastConnection(tenantId);
-    return connection ? { kind: "meta", connection, template: cfg.metaReminderTemplate } : null;
+/**
+ * Por onde esta conta pode lembrar, ou null se não pode (desconectada, Meta sem
+ * template). Com as duas conexões de pé, as duas entram e a escolha é por
+ * paciente (`chooseChannel`).
+ */
+async function channelsFor(tenantId: string, cfg: ScheduleConfig): Promise<Channels | null> {
+  const instances = await listWhatsappChannels(tenantId);
+  const channels: Channels = {};
+
+  const evolution = pickWhatsappChannel(instances, "evolution");
+  if (evolution?.externalId) {
+    const provider = getWhatsAppProviderForInstance(evolution);
+    if (provider.isConfigured()) {
+      channels.evolution = { kind: "evolution", externalId: evolution.externalId, provider };
+    }
   }
-  const provider = getWhatsAppProviderForInstance(instance);
-  return provider.isConfigured() ? { kind: "evolution", externalId: instance.externalId, provider } : null;
+
+  if (cfg.metaReminderTemplate && pickWhatsappChannel(instances, "meta")) {
+    const connection = await getBroadcastConnection(tenantId);
+    if (connection) channels.meta = { kind: "meta", connection, template: cfg.metaReminderTemplate };
+  }
+
+  return channels.evolution || channels.meta ? channels : null;
+}
+
+/**
+ * Por onde lembrar UM paciente. Quem já conversou pelo QR recebe por lá, com o
+ * texto do lembrete: é o número que ele conhece. Todo o resto — quem nunca
+ * falou com o número, ou fala pela Meta — só pela Meta, com o template
+ * aprovado. Nunca primeiro contato pelo QR, e nunca trocar de número para quem
+ * fala pela Meta: sem canal aqui o disparo fica pendente.
+ */
+function chooseChannel(
+  channels: Channels,
+  conversation: { lastInboundAt: Date | null; whatsappProvider: string | null } | null | undefined,
+): Channel | null {
+  if (channels.evolution && conversation?.lastInboundAt && conversation.whatsappProvider !== "meta") {
+    return channels.evolution;
+  }
+  return channels.meta ?? null;
 }
 
 export async function scanAndSendClinicorpReminders(now: Date = new Date()) {
@@ -91,9 +132,9 @@ export async function scanAndSendClinicorpReminders(now: Date = new Date()) {
   for (const [tenantId, cfg] of configs) {
     if (!cfg.reminderEnabled || cfg.reminders.length === 0) continue;
     try {
-      const channel = await channelFor(tenantId, cfg);
-      if (!channel) continue;
-      const counts = await remindTenant(tenantId, cfg, channel, now);
+      const channels = await channelsFor(tenantId, cfg);
+      if (!channels) continue;
+      const counts = await remindTenant(tenantId, cfg, channels, now);
       result.tenants++;
       result.scanned += counts.scanned;
       result.sent += counts.sent;
@@ -108,7 +149,7 @@ export async function scanAndSendClinicorpReminders(now: Date = new Date()) {
   return result;
 }
 
-async function remindTenant(tenantId: string, cfg: ScheduleConfig, channel: Channel, now: Date) {
+async function remindTenant(tenantId: string, cfg: ScheduleConfig, channels: Channels, now: Date) {
   const counts = { scanned: 0, sent: 0, firstContactSkipped: 0, typeSkipped: 0, unknownTypeSkipped: 0 };
 
   // Do dia de hoje até o último dia em que algum lembrete pode vencer agora —
@@ -180,7 +221,9 @@ async function remindTenant(tenantId: string, cfg: ScheduleConfig, channel: Chan
       where: { tenantId, isTest: false, phone: { in: broadcastPhoneVariants(phone) } },
       select: {
         phone: true,
-        conversation: { select: { id: true, lastInboundAt: true, followUpReason: true, variables: true } },
+        conversation: {
+          select: { id: true, lastInboundAt: true, followUpReason: true, variables: true, whatsappProvider: true },
+        },
       },
     });
     // Pediu para parar: vale para o lembrete como vale para Disparos.
@@ -196,6 +239,14 @@ async function remindTenant(tenantId: string, cfg: ScheduleConfig, channel: Chan
       hora: timeInZone(item.startsAt, cfg.timezone),
       local: cfg.location,
     };
+
+    // Sem canal para ESTE paciente (nunca falou pelo QR e a Meta não está
+    // pronta, ou fala pela Meta e ela está fora): fica pendente, não fecha.
+    const channel = chooseChannel(channels, known?.conversation);
+    if (!channel) {
+      counts.firstContactSkipped++;
+      continue;
+    }
 
     if (channel.kind === "evolution") {
       const conversation = known?.conversation;
@@ -249,6 +300,9 @@ async function remindTenant(tenantId: string, cfg: ScheduleConfig, channel: Chan
     // contexto ao agente quando o paciente responder "não vou poder".
     try {
       const { conversation } = await getOrCreateConversation(tenantId, known?.phone ?? phone, name || undefined);
+      // Paciente que só recebeu o template: se a equipe responder antes de ele
+      // escrever, tem que sair pela Meta — pelo QR seria primeiro contato.
+      await setConversationChannel(conversation, "meta", { onlyIfUnset: true });
       await prisma.message.create({
         data: {
           conversationId: conversation.id,

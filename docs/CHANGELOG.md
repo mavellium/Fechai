@@ -2,6 +2,43 @@
 
 Uma linha por milestone concluído (mais recente no topo).
 
+## WhatsApp: Evolution (QR) e API oficial da Meta conectadas ao mesmo tempo — 2026-09-29
+
+Regras em `src/modules/whatsapp/README.md` ("Duas conexões ao mesmo tempo").
+**Schema:** `db push` + `generate` na web e no worker.
+
+- **Conta com a Meta liberada tem dois cartões em `/integracoes`** — Número por
+  QR code e API oficial da Meta —, cada um com o próprio estado, credenciais e
+  "Desconectar". Conectar uma não derruba a outra; sumiu o seletor de provedor e
+  o "desconecte o número atual primeiro". Pausar o agente, ignorar grupos e a
+  lista de bloqueados ficaram num cartão de Atendimento, porque são da conta.
+- **Uma linha por provedor** (`WhatsappInstance @@unique([tenantId, provider])`)
+  e `Conversation.whatsappProvider`: por qual número o contato falou por último.
+- **Respostas, follow-ups, lembretes, resposta manual e retomada de perguntas
+  saem pelo número em que o contato escreveu**, e com esse número fora do ar
+  esperam — nunca trocam de número (pelo QR seria primeiro contato; na Meta, texto
+  livre fora das 24h é recusado). Grupos continuam só no QR, Disparos só na Meta.
+- **Lembretes do Clinicorp** escolhem por paciente: quem já conversou pelo QR
+  recebe o texto por lá; os demais, o template pela Meta.
+- **Saúde por conexão**: o silêncio é sinal só do QR; o monitor nunca religa uma
+  Meta desconectada (antes o token válido a colocava de volta no ar); o e-mail de
+  alerta diz qual conexão caiu.
+- Admin: filtro de WhatsApp por estado da conta (qualquer conexão de pé =
+  conectada), recolher a Meta desconecta só a linha Meta, excluir a conta
+  desconecta as duas, exportação lista todas as conexões (`version: 2`).
+- **Ao subir (schema antes do código):** o `db push` troca o índice único de
+  `tenantId` por `(tenantId, provider)` e cria `Conversation.whatsappProvider`,
+  sem perda de dados — mas o Prisma **recusa** o `db push` puro do `deploy.sh`
+  ("unique constraint ... will be added"; o aviso é falso aqui, o índice novo é
+  superconjunto do antigo). Aplique antes o SQL equivalente e o `db push` seguinte
+  não acha mais nada a fazer:
+  `DROP INDEX "WhatsappInstance_tenantId_key"; CREATE UNIQUE INDEX
+  "WhatsappInstance_tenantId_provider_key" ON "WhatsappInstance"("tenantId",
+  "provider"); ALTER TABLE "Conversation" ADD COLUMN "whatsappProvider" TEXT;`
+  (ou `db push --accept-data-loss`, que aceita **todo** aviso pendente do diff).
+  Por poucos segundos, o container antigo falha ao conectar WhatsApp (o `upsert`
+  dele depende do índice que sai). Use números **diferentes** nas duas conexões.
+
 ## Agenda com o Clinicorp: consultas de lá, ao vivo e com lembrete — 2026-09-28
 
 Decisões em [ADR-005](./decisions/ADR-005-agenda-clinicorp.md); regras em

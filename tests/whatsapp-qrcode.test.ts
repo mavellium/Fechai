@@ -19,6 +19,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   findUnique: vi.fn(),
+  findMany: vi.fn(),
+  updateMany: vi.fn(),
   upsert: vi.fn(),
   update: vi.fn(),
   disconnect: vi.fn(),
@@ -34,9 +36,11 @@ vi.mock("@/lib/prisma", () => ({
   prisma: {
     whatsappInstance: {
       findUnique: mocks.findUnique,
+      findMany: mocks.findMany,
       upsert: mocks.upsert,
       update: mocks.update,
     },
+    conversation: { updateMany: mocks.updateMany },
     agent: { findFirst: vi.fn(async () => null) },
     lead: { findFirst: vi.fn(async () => null) },
     clinicorpIntegration: { updateMany: vi.fn() },
@@ -82,6 +86,8 @@ beforeEach(() => {
   });
   mocks.ensureWebhook.mockResolvedValue(true);
   mocks.upsert.mockResolvedValue({});
+  mocks.findMany.mockResolvedValue([]);
+  mocks.updateMany.mockResolvedValue({ count: 0 });
 });
 
 describe("Gerar o QR de conexão (connectWhatsapp)", () => {
@@ -132,5 +138,59 @@ describe("Gerar o QR de conexão (connectWhatsapp)", () => {
     const res = await connectWhatsapp();
 
     expect(res).toMatchObject({ ok: true, qrCode: "data:image/png;base64,AAA" });
+  });
+});
+
+describe("QR com a API oficial da Meta também conectada", () => {
+  it("olha só a linha da Evolution, e grava só nela", async () => {
+    // A conta pode ter uma linha por provedor. Ler "a linha da conta" pegaria a
+    // da Meta (ou o contrário) e o QR sairia sobre o número errado.
+    instancia("disconnected");
+
+    await connectWhatsapp();
+
+    const key = { tenantId_provider: { tenantId: "tenant-1", provider: "evolution" } };
+    expect(mocks.findUnique).toHaveBeenCalledWith({ where: key });
+    expect(mocks.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: key,
+        create: expect.objectContaining({ provider: "evolution" }),
+      }),
+    );
+  });
+
+  it("não recusa o QR só porque a Meta está conectada", async () => {
+    // Antes: "Selecione Evolution antes de gerar o código QR."
+    mocks.findUnique.mockResolvedValue(null);
+    mocks.findMany.mockResolvedValue([{ provider: "meta" }]);
+
+    const res = await connectWhatsapp();
+
+    expect(res).toMatchObject({ ok: true, qrCode: "data:image/png;base64,AAA" });
+  });
+
+  it("conta que só tinha a Meta: as conversas antigas ficam com a Meta antes da segunda conexão nascer", async () => {
+    // Sem isto, uma conversa anterior à coluna ficaria sem canal e, com as duas
+    // conexões de pé, cairia no padrão (a Evolution) — o paciente que só
+    // conhece o número oficial receberia o follow-up por outro número.
+    mocks.findUnique.mockResolvedValue(null);
+    mocks.findMany.mockResolvedValue([{ provider: "meta" }]);
+
+    await connectWhatsapp();
+
+    expect(mocks.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { whatsappProvider: "meta" } }),
+    );
+    expect(mocks.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.upsert.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("religar a Evolution que já existe não mexe nas conversas", async () => {
+    instancia("disconnected");
+
+    await connectWhatsapp();
+
+    expect(mocks.updateMany).not.toHaveBeenCalled();
   });
 });

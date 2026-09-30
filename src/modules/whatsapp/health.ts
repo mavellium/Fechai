@@ -1,5 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { sendMail } from "@/lib/mail";
+import type { WhatsAppProviderName } from "./index";
+import { channelProvider } from "./instances";
 import { getWhatsAppProviderForInstance } from "./meta-config";
 
 /**
@@ -41,6 +43,8 @@ const ALERT_COOLDOWN_HOURS = 12;
 
 export type WhatsappHealth = {
   tenantId: string;
+  /** Qual das conexões da conta foi checada (cada uma tem a sua linha). */
+  provider: WhatsAppProviderName;
   /** O que o banco dizia antes desta checagem. */
   storedStatus: string;
   /** O que o provedor respondeu agora (null = não deu para perguntar). */
@@ -127,11 +131,18 @@ export function diagnose(input: {
  * não grava nada — quando não dá para perguntar, o certo é manter o que se
  * sabia, não chutar "desconectado" e assustar o cliente à toa.
  */
-export async function checkTenantWhatsapp(tenantId: string, now = new Date()): Promise<WhatsappHealth> {
-  const instance = await prisma.whatsappInstance.findUnique({ where: { tenantId } });
+export async function checkTenantWhatsapp(
+  tenantId: string,
+  now = new Date(),
+  providerName: WhatsAppProviderName = "evolution",
+): Promise<WhatsappHealth> {
+  const instance = await prisma.whatsappInstance.findUnique({
+    where: { tenantId_provider: { tenantId, provider: providerName } },
+  });
 
   const base: WhatsappHealth = {
     tenantId,
+    provider: providerName,
     storedStatus: instance?.status ?? "disconnected",
     liveStatus: null,
     exists: Boolean(instance?.externalId),
@@ -146,6 +157,12 @@ export async function checkTenantWhatsapp(tenantId: string, now = new Date()): P
   // estado também sai daqui: sem ela não há o que diagnosticar, e inventar um
   // veredito seria pior que não ter nenhum.
   if (!instance?.externalId) {
+    return { ...base, verdict: "ok" };
+  }
+  // Meta desconectada é decisão de quem clicou "Desconectar" (ou do admin que
+  // recolheu a liberação): as credenciais ficam guardadas e o token segue
+  // válido, então perguntar à Meta e sincronizar religaria o que foi desligado.
+  if (providerName === "meta" && instance.status !== "connected") {
     return { ...base, verdict: "ok" };
   }
   const provider = getWhatsAppProviderForInstance(instance);
@@ -167,13 +184,28 @@ export async function checkTenantWhatsapp(tenantId: string, now = new Date()): P
   // já é mantido pelo motor e espelha `isTest`, então não precisa de join nem
   // de varrer Message. Sandbox fora: conversa de teste não prova que o número
   // está recebendo.
-  const lastInbound = await prisma.conversation
-    .findFirst({
-      where: { tenantId, isTest: false, lastInboundAt: { not: null } },
-      orderBy: { lastInboundAt: "desc" },
-      select: { lastInboundAt: true },
-    })
-    .catch(() => null);
+  //
+  // Só a Evolution tem o sinal do silêncio: o socket "aberto" que não recebe é
+  // falha da sessão dela. A Cloud API não tem sessão para morrer em silêncio —
+  // o estado que a Meta devolve já é a verdade — e, com as duas conexões, a Meta
+  // costuma servir aos Disparos e ficar dias sem receber, o que viraria alarme
+  // falso. E, com as duas, as conversas da Meta não provam nada sobre o QR: o
+  // silêncio dele é medido só entre as conversas que falam por ele.
+  const lastInbound =
+    providerName === "evolution"
+      ? await prisma.conversation
+          .findFirst({
+            where: {
+              tenantId,
+              isTest: false,
+              lastInboundAt: { not: null },
+              OR: [{ whatsappProvider: null }, { whatsappProvider: { not: "meta" } }],
+            },
+            orderBy: { lastInboundAt: "desc" },
+            select: { lastInboundAt: true },
+          })
+          .catch(() => null)
+      : null;
 
   const lastInboundAt = lastInbound?.lastInboundAt ?? null;
   const silentHours = lastInboundAt
@@ -190,15 +222,21 @@ export async function checkTenantWhatsapp(tenantId: string, now = new Date()): P
   });
 
   // Sincroniza o banco com o provedor — o conserto do status congelado. Só
-  // quando deu para perguntar, e só quando mudou.
+  // quando deu para perguntar, e só quando mudou. Meta nunca sobe para
+  // "conectado" por aqui (a checagem acima já a deixa de fora): ligar é do
+  // botão da tela, que também valida o token.
   if (live.reachable && live.status !== instance.status) {
     await prisma.whatsappInstance
-      .update({ where: { tenantId }, data: { status: live.status } })
+      .update({
+        where: { tenantId_provider: { tenantId, provider: providerName } },
+        data: { status: live.status },
+      })
       .catch((err) => console.error(`[whatsapp health] falha ao sincronizar ${tenantId}`, err));
   }
 
   return {
     tenantId,
+    provider: providerName,
     storedStatus: instance.status,
     liveStatus: live.reachable ? live.status : null,
     exists: live.exists,
@@ -211,12 +249,14 @@ export async function checkTenantWhatsapp(tenantId: string, now = new Date()): P
 
 function alertText(tenantName: string, health: WhatsappHealth): { subject: string; text: string } {
   const horas = health.silentHours !== null ? Math.floor(health.silentHours) : null;
+  // A conta pode ter as duas conexões: o aviso precisa dizer qual delas caiu.
+  const via = health.provider === "meta" ? " (API oficial da Meta)" : "";
 
   if (health.verdict === "sumiu") {
     return {
-      subject: `${tenantName}: o WhatsApp precisa ser conectado de novo`,
+      subject: `${tenantName}: o WhatsApp${via} precisa ser conectado de novo`,
       text:
-        `O número de WhatsApp da conta ${tenantName} saiu do ar e precisa ser conectado de novo.\n\n` +
+        `O número de WhatsApp da conta ${tenantName}${via} saiu do ar e precisa ser conectado de novo.\n\n` +
         `Para voltar a atender: acesse Integrações e reconecte o provedor configurado.\n\n` +
         `Enquanto isso, as mensagens que os clientes enviarem NÃO chegam no painel.`,
     };
@@ -224,9 +264,9 @@ function alertText(tenantName: string, health: WhatsappHealth): { subject: strin
 
   if (health.verdict === "desconectado") {
     return {
-      subject: `${tenantName}: o WhatsApp foi desconectado`,
+      subject: `${tenantName}: o WhatsApp${via} foi desconectado`,
       text:
-        `O número de WhatsApp da conta ${tenantName} foi desconectado e parou de receber mensagens.\n\n` +
+        `O número de WhatsApp da conta ${tenantName}${via} foi desconectado e parou de receber mensagens.\n\n` +
         `Isso costuma acontecer quando o aparelho fica muito tempo sem internet ou quando o ` +
         `WhatsApp é desconectado pelo celular (Aparelhos conectados).\n\n` +
         `Para voltar a atender: acesse Integrações e conecte o número de novo.`,
@@ -257,14 +297,18 @@ export async function scanWhatsappHealth(now = new Date()): Promise<{
   broken: number;
   alerted: number;
 }> {
+  // Uma linha por conexão: a conta com as duas é checada duas vezes, cada uma
+  // com o seu provedor.
   const instances = await prisma.whatsappInstance.findMany({
     where: { externalId: { not: null } },
     select: {
       tenantId: true,
+      provider: true,
       tenant: {
         select: {
           name: true,
           status: true,
+          metaWhatsappEnabled: true,
           whatsappHealthAlertAt: true,
           users: { select: { email: true }, take: 1 },
         },
@@ -279,9 +323,11 @@ export async function scanWhatsappHealth(now = new Date()): Promise<{
     // Conta suspensa não recebe alerta: o WhatsApp dela está fora por decisão
     // nossa, e avisar seria ruído.
     if (row.tenant?.status !== "active") continue;
+    // Meta sem liberação do admin não atende (a linha só guarda credenciais).
+    if (channelProvider(row) === "meta" && !row.tenant.metaWhatsappEnabled) continue;
 
     try {
-      const health = await checkTenantWhatsapp(row.tenantId, now);
+      const health = await checkTenantWhatsapp(row.tenantId, now, channelProvider(row));
       if (health.verdict === "ok" || health.verdict === "indeterminado") continue;
       broken += 1;
 
@@ -296,7 +342,7 @@ export async function scanWhatsappHealth(now = new Date()): Promise<{
       const email = row.tenant.users[0]?.email;
       const tenantName = row.tenant.name;
       console.warn(
-        `[whatsapp health] ${tenantName} (${row.tenantId}): ${health.verdict}` +
+        `[whatsapp health] ${tenantName} (${row.tenantId}, ${health.provider}): ${health.verdict}` +
           (health.silentHours !== null ? ` — ${Math.floor(health.silentHours)}h sem mensagem` : ""),
       );
 

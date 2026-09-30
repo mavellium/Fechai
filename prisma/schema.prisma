@@ -118,7 +118,8 @@ model Tenant {
   agents           Agent[]
   knowledgeDocs    KnowledgeDocument[]
   actions          TenantAction[]
-  whatsappInstance WhatsappInstance?
+  /// Uma conexão por provedor (QR/Evolution e Meta). Ver `WhatsappInstance`.
+  whatsappInstances WhatsappInstance[]
   whatsappBlocked  WhatsappBlockedNumber[]
   leads            Lead[]
   conversations    Conversation[]
@@ -603,9 +604,13 @@ model TenantAction {
   @@index([agentId])
 }
 
+/// Conexão de WhatsApp da conta. Uma linha por provedor: a Evolution (QR code) e
+/// a API oficial da Meta podem ficar conectadas ao mesmo tempo, cada uma com o
+/// seu número. Antes era uma linha só por conta e a troca de provedor
+/// sobrescrevia a anterior.
 model WhatsappInstance {
   id         String  @id @default(cuid())
-  tenantId   String  @unique
+  tenantId   String
   tenant     Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   status     String  @default("disconnected") // disconnected | pending_qr | connected
   /// `evolution` (padrão legado) ou `meta`. String para permitir acrescentar
@@ -625,6 +630,7 @@ model WhatsappInstance {
 
   updatedAt DateTime @updatedAt
 
+  @@unique([tenantId, provider])
   @@index([provider, externalId])
 }
 
@@ -684,6 +690,13 @@ model Conversation {
   /// Espelha `Lead.isTest` para as consultas de conversa não precisarem de join.
   isTest          Boolean   @default(false)
   lastInboundAt   DateTime?
+  /// Por qual conexão o contato falou por último: `evolution` (QR code) ou
+  /// `meta` (API oficial). Com as duas conectadas, é o que decide de qual número
+  /// saem a resposta manual, o follow-up e o lembrete — o contato só conhece o
+  /// número em que escreveu, e um primeiro contato pelo outro leva ao bloqueio
+  /// (QR) ou à recusa da Meta (fora da janela). Null = conversa anterior a esta
+  /// coluna, do site ou de teste. Ver `modules/whatsapp/instances.ts`.
+  whatsappProvider String?
   /// Última mensagem de follow-up enviada, de qualquer etapa. Relatório e
   /// painel leem como "recebeu follow-up"; o worker usa como ponto de partida
   /// da etapa seguinte.

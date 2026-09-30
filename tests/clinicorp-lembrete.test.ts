@@ -11,11 +11,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const db = vi.hoisted(() => ({
   tenantAction: { findMany: vi.fn() },
   agent: { findMany: vi.fn() },
-  whatsappInstance: { findUnique: vi.fn() },
+  whatsappInstance: { findMany: vi.fn() },
   clinicorpReminder: { deleteMany: vi.fn(), findMany: vi.fn(), upsert: vi.fn() },
   appointment: { findMany: vi.fn() },
   lead: { findFirst: vi.fn() },
   message: { create: vi.fn() },
+  conversation: { update: vi.fn() },
 }));
 const clinicorp = vi.hoisted(() => ({ listClinicorpAgenda: vi.fn(), listClinicorpCategories: vi.fn() }));
 const meta = vi.hoisted(() => ({ getBroadcastConnection: vi.fn(), sendBroadcastTemplate: vi.fn() }));
@@ -53,7 +54,7 @@ const consulta = (over: Record<string, unknown> = {}) => ({
 
 let config: Record<string, unknown>;
 const provider = (kind: "meta" | "evolution") =>
-  db.whatsappInstance.findUnique.mockResolvedValue({ status: "connected", provider: kind, externalId: "inst-1" });
+  db.whatsappInstance.findMany.mockResolvedValue([{ status: "connected", provider: kind, externalId: "inst-1" }]);
 const upserts = () => db.clinicorpReminder.upsert.mock.calls.map(([arg]) => arg);
 
 beforeEach(() => {
@@ -73,6 +74,7 @@ beforeEach(() => {
   db.appointment.findMany.mockResolvedValue([]);
   db.lead.findFirst.mockResolvedValue(null);
   db.message.create.mockResolvedValue({});
+  db.conversation.update.mockResolvedValue({});
   clinicorp.listClinicorpAgenda.mockResolvedValue({ status: "ok", items: [consulta()], skipped: 0 });
   clinicorp.listClinicorpCategories.mockResolvedValue({ ok: true, data: [{ id: "1", name: "Avaliação" }, { id: "2", name: "Ortodontia" }] });
   meta.getBroadcastConnection.mockResolvedValue({ provider: { sendBroadcastTemplate: meta.sendBroadcastTemplate } });
@@ -269,12 +271,112 @@ describe("regras de envio", () => {
     config.reminderEnabled = false;
     await scanAndSendClinicorpReminders(AGORA);
     config.reminderEnabled = true;
-    db.whatsappInstance.findUnique.mockResolvedValue({ status: "disconnected", provider: "meta", externalId: "inst-1" });
+    db.whatsappInstance.findMany.mockResolvedValue([{ status: "disconnected", provider: "meta", externalId: "inst-1" }]);
     await scanAndSendClinicorpReminders(AGORA);
     provider("meta");
     clinicorp.listClinicorpAgenda.mockResolvedValue({ status: "error", error: "fora" });
     await scanAndSendClinicorpReminders(AGORA);
     expect(meta.sendBroadcastTemplate).not.toHaveBeenCalled();
     expect(db.clinicorpReminder.upsert).not.toHaveBeenCalled();
+  });
+});
+
+describe("com as duas conexões (QR e Meta) de pé", () => {
+  const QR = { provider: "evolution", externalId: "inst-qr", status: "connected" };
+  const META = { provider: "meta", externalId: "phone-meta", status: "connected" };
+  const contato = (over: Record<string, unknown> = {}) => ({
+    phone: "5514991406457",
+    conversation: {
+      id: "conversa-1", lastInboundAt: new Date("2026-09-01T12:00:00Z"),
+      followUpReason: null, variables: null, whatsappProvider: "evolution", ...over,
+    },
+  });
+
+  beforeEach(() => db.whatsappInstance.findMany.mockResolvedValue([QR, META]));
+
+  it("quem já conversou pelo QR recebe o texto pelo QR — o número que ele conhece", async () => {
+    db.lead.findFirst.mockResolvedValue(contato());
+
+    await scanAndSendClinicorpReminders(AGORA);
+
+    expect(evolution.sendMessage.mock.calls[0].slice(0, 2)).toEqual(["inst-qr", "5514991406457"]);
+    expect(meta.sendBroadcastTemplate).not.toHaveBeenCalled();
+  });
+
+  it("conversa antiga, sem canal registrado, também segue pelo QR", async () => {
+    db.lead.findFirst.mockResolvedValue(contato({ whatsappProvider: null }));
+
+    await scanAndSendClinicorpReminders(AGORA);
+
+    expect(evolution.sendMessage).toHaveBeenCalledOnce();
+    expect(meta.sendBroadcastTemplate).not.toHaveBeenCalled();
+  });
+
+  it("quem nunca conversou recebe o template pela Meta — nunca primeiro contato pelo QR", async () => {
+    await scanAndSendClinicorpReminders(AGORA);
+
+    expect(meta.sendBroadcastTemplate).toHaveBeenCalledOnce();
+    expect(evolution.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("quem fala pela Meta recebe pela Meta, mesmo com o QR de pé", async () => {
+    db.lead.findFirst.mockResolvedValue(contato({ whatsappProvider: "meta" }));
+
+    await scanAndSendClinicorpReminders(AGORA);
+
+    expect(meta.sendBroadcastTemplate).toHaveBeenCalledOnce();
+    expect(evolution.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("quem fala pela Meta, sem template escolhido: fica pendente e NÃO cai no QR", async () => {
+    delete config.metaReminderTemplate;
+    db.lead.findFirst.mockResolvedValue(contato({ whatsappProvider: "meta" }));
+
+    const result = await scanAndSendClinicorpReminders(AGORA);
+
+    expect(result).toMatchObject({ sent: 0, firstContactSkipped: 1 });
+    expect(evolution.sendMessage).not.toHaveBeenCalled();
+    expect(meta.sendBroadcastTemplate).not.toHaveBeenCalled();
+    expect(db.clinicorpReminder.upsert).not.toHaveBeenCalled();
+  });
+
+  it("Meta parada: o paciente novo espera (o QR não faz primeiro contato)", async () => {
+    db.whatsappInstance.findMany.mockResolvedValue([QR, { ...META, status: "disconnected" }]);
+
+    const result = await scanAndSendClinicorpReminders(AGORA);
+
+    expect(result).toMatchObject({ sent: 0, firstContactSkipped: 1 });
+    expect(evolution.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("QR parado: o paciente novo continua recebendo pela Meta", async () => {
+    db.whatsappInstance.findMany.mockResolvedValue([{ ...QR, status: "disconnected" }, META]);
+
+    await scanAndSendClinicorpReminders(AGORA);
+
+    expect(meta.sendBroadcastTemplate).toHaveBeenCalledOnce();
+  });
+
+  it("a conversa criada pelo template nasce da Meta: a resposta manual não sai pelo QR", async () => {
+    await scanAndSendClinicorpReminders(AGORA);
+
+    expect(db.conversation.update).toHaveBeenCalledWith({
+      where: { id: "conversa-nova" },
+      data: { whatsappProvider: "meta" },
+    });
+  });
+
+  it("conversa que já fala pelo QR não é tomada pelo template da Meta", async () => {
+    // Paciente do QR sem `lastInboundAt` (nunca escreveu) vai pela Meta, mas a
+    // conversa dele continua sendo do QR até ele responder por lá.
+    db.lead.findFirst.mockResolvedValue(contato({ lastInboundAt: null }));
+    conversations.getOrCreateConversation.mockResolvedValue({
+      lead: {}, conversation: { id: "conversa-1", whatsappProvider: "evolution" },
+    });
+
+    await scanAndSendClinicorpReminders(AGORA);
+
+    expect(meta.sendBroadcastTemplate).toHaveBeenCalledOnce();
+    expect(db.conversation.update).not.toHaveBeenCalled();
   });
 });

@@ -20,7 +20,7 @@ const db = vi.hoisted(() => ({
   tenantAction: { findMany: vi.fn() },
   agent: { findMany: vi.fn() },
   appointment: { findMany: vi.fn(), update: vi.fn() },
-  whatsappInstance: { findUnique: vi.fn() },
+  whatsappInstance: { findMany: vi.fn() },
   whatsappBlockedNumber: { findUnique: vi.fn() },
   message: { create: vi.fn() },
 }));
@@ -400,7 +400,7 @@ describe("Varredura (scanAndSendReminders)", () => {
     db.message.create.mockResolvedValue({});
     provider.isConfigured.mockReturnValue(true);
     provider.sendMessage.mockResolvedValue("wamid-1");
-    db.whatsappInstance.findUnique.mockResolvedValue({ externalId: "inst-1", status: "connected" });
+    db.whatsappInstance.findMany.mockResolvedValue([{ externalId: "inst-1", status: "connected" }]);
     db.whatsappBlockedNumber.findUnique.mockResolvedValue(null);
   });
 
@@ -697,7 +697,7 @@ describe("Varredura (scanAndSendReminders)", () => {
   it("WhatsApp desconectado não consome o lembrete: tenta novamente antes da consulta", async () => {
     acaoConfigurada();
     consultas([consultaAmanha()]);
-    db.whatsappInstance.findUnique.mockResolvedValue({ externalId: "inst-1", status: "disconnected" });
+    db.whatsappInstance.findMany.mockResolvedValue([{ externalId: "inst-1", status: "disconnected" }]);
 
     const r = await scanAndSendReminders(AGORA);
 
@@ -717,5 +717,92 @@ describe("Varredura (scanAndSendReminders)", () => {
     expect(r.sent).toBe(0);
     expect(db.message.create).not.toHaveBeenCalled();
     expect(db.appointment.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("Lembretes com as duas conexões (QR e Meta)", () => {
+  const QR = { provider: "evolution", externalId: "inst-qr", status: "connected" };
+  const META = { provider: "meta", externalId: "phone-meta", status: "connected" };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    db.appointment.update.mockResolvedValue({});
+    db.message.create.mockResolvedValue({});
+    db.whatsappBlockedNumber.findUnique.mockResolvedValue(null);
+    provider.isConfigured.mockReturnValue(true);
+    provider.sendMessage.mockResolvedValue("wamid-1");
+    db.agent.findMany.mockResolvedValue([{ id: AGENTE, tenantId: CONTA }]);
+    db.tenantAction.findMany.mockResolvedValue([{
+      tenantId: CONTA,
+      agentId: AGENTE,
+      config: {
+        reminderEnabled: true,
+        reminderAudience: "all",
+        reminderTypes: [],
+        reminders: [{ minutesBefore: UM_DIA, template: "É amanhã, {{nome}}." }],
+        timezone: "America/Sao_Paulo",
+      },
+    }]);
+  });
+
+  function consulta(conversation: unknown, leadConversation: unknown = null) {
+    db.appointment.findMany.mockImplementation((args: { where?: { startsAt?: { lt?: Date } } }) =>
+      Promise.resolve(
+        args?.where?.startsAt && "lt" in args.where.startsAt
+          ? []
+          : [{
+              id: "appt-1",
+              tenantId: CONTA,
+              agentId: AGENTE,
+              conversationId: conversation ? "conv-1" : null,
+              status: "scheduled",
+              startsAt: new Date("2026-09-17T08:00:00.000Z"),
+              remindersSent: [],
+              reminderOverride: null,
+              conversation,
+              lead: { phone: "5511999990000", name: "Maria", isTest: false, conversation: leadConversation },
+            }],
+      ),
+    );
+  }
+
+  it("o paciente que escreve pela Meta recebe o lembrete pela Meta, com o QR também de pé", async () => {
+    consulta({ variables: {}, whatsappProvider: "meta" });
+    db.whatsappInstance.findMany.mockResolvedValue([QR, META]);
+
+    const r = await scanAndSendReminders(AGORA);
+
+    expect(r.sent).toBe(1);
+    expect(provider.sendMessage).toHaveBeenCalledWith("phone-meta", "5511999990000", expect.any(String));
+  });
+
+  it("consulta marcada à mão (sem conversationId) usa o canal da conversa do lead", async () => {
+    consulta(null, { whatsappProvider: "meta" });
+    db.whatsappInstance.findMany.mockResolvedValue([QR, META]);
+
+    await scanAndSendReminders(AGORA);
+
+    expect(provider.sendMessage).toHaveBeenCalledWith("phone-meta", "5511999990000", expect.any(String));
+  });
+
+  it("paciente do QR recebe pelo QR", async () => {
+    consulta({ variables: {}, whatsappProvider: "evolution" });
+    db.whatsappInstance.findMany.mockResolvedValue([META, QR]);
+
+    await scanAndSendReminders(AGORA);
+
+    expect(provider.sendMessage).toHaveBeenCalledWith("inst-qr", "5511999990000", expect.any(String));
+  });
+
+  it("o número do paciente fora do ar espera: não usa o outro e não consome o disparo", async () => {
+    consulta({ variables: {}, whatsappProvider: "meta" });
+    db.whatsappInstance.findMany.mockResolvedValue([QR, { ...META, status: "disconnected" }]);
+
+    const r = await scanAndSendReminders(AGORA);
+
+    expect(r.sent).toBe(0);
+    expect(provider.sendMessage).not.toHaveBeenCalled();
+    expect(db.appointment.update).not.toHaveBeenCalled();
+    expect(db.message.create).not.toHaveBeenCalled();
   });
 });

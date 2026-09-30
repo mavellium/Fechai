@@ -37,7 +37,7 @@ async function createAdmin(tx: Prisma.TransactionClient, opts: {
       planKey: opts.planKey,
       onboardingCompleted: true,
       onboardingStep: 4,
-      whatsappInstance: { create: { status: "disconnected" } },
+      whatsappInstances: { create: { provider: "evolution", status: "disconnected" } },
       users: { create: { email: opts.email, passwordHash: opts.passwordHash, role: opts.role } },
     },
   });

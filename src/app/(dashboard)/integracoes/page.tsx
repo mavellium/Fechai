@@ -1,10 +1,10 @@
 // `AtSign` e não um ícone de marca: o lucide removeu os logos de terceiros, e
 // inventar um SVG do Instagram aqui criaria um ícone fora do conjunto.
 import Link from "next/link";
-import { AtSign, Globe, MessageCircle } from "lucide-react";
+import { AtSign, Globe, MessageCircle, ShieldCheck } from "lucide-react";
 import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
-import { getWhatsAppProvider, parseWhatsAppProviderName } from "@/modules/whatsapp";
+import { getWhatsAppProvider } from "@/modules/whatsapp";
 import { metaWebhookUrl, readMetaWebhookSecrets } from "@/modules/whatsapp/meta-config";
 import { Alert } from "@/components/ui/alert";
 import { Badge, StatusDot } from "@/components/ui/badge";
@@ -25,7 +25,8 @@ import { ClinicorpCard, type ClinicorpState } from "./ClinicorpCard";
 import { listBlockedNumbers } from "@/modules/whatsapp/blocklist";
 import { WhatsappConnect } from "./WhatsappConnect";
 import { MetaWhatsappConnect } from "./MetaWhatsappConnect";
-import { WhatsappProviderSelector } from "./WhatsappProviderSelector";
+import { AttendanceControls } from "./WhatsappControls";
+import { WhatsappBlocklist } from "./WhatsappBlocklist";
 import { SnippetBox } from "./SnippetBox";
 
 const STATUS_LABEL: Record<string, { label: string; tone: "success" | "warn" | "neutral" }> = {
@@ -51,8 +52,8 @@ export default async function IntegracoesPage({
   const tab = TABS.some((t) => t.key === aba) ? (aba as (typeof TABS)[number]["key"]) : "canais";
 
   const since = new Date(new Date().getTime() - 7 * 86_400_000);
-  const [instance, inboundLast7, tenant, agent, blocked] = await Promise.all([
-    prisma.whatsappInstance.findUnique({ where: { tenantId } }),
+  const [instances, inboundLast7, tenant, agent, blocked] = await Promise.all([
+    prisma.whatsappInstance.findMany({ where: { tenantId } }),
     prisma.message.count({
       where: { role: "user", createdAt: { gte: since }, conversation: { tenantId } },
     }),
@@ -130,21 +131,31 @@ export default async function IntegracoesPage({
         }
       : { connected: false };
 
+  // Uma linha por conexão: o QR code (Evolution) e a API oficial (Meta) podem
+  // estar de pé ao mesmo tempo, cada uma com o seu número.
   const metaEnabled = tenant?.metaWhatsappEnabled ?? false;
-  const savedProviderName = parseWhatsAppProviderName(instance?.provider);
+  const evolutionRow = instances.find((i) => i.provider !== "meta") ?? null;
   // Falha fechada para linhas antigas ou alteradas à mão: sem liberação do
-  // admin, nem a tela Meta nem um status conectado residual ficam expostos.
-  const providerName = savedProviderName === "meta" && !metaEnabled ? "evolution" : savedProviderName;
-  const configured =
-    providerName === "meta"
-      ? isEncryptionConfigured()
-      : getWhatsAppProvider("evolution").isConfigured();
-  const status = savedProviderName === "meta" && !metaEnabled
-    ? "disconnected"
-    : instance?.status ?? "disconnected";
-  const connected = status === "connected";
-  const s = STATUS_LABEL[status] ?? { label: status, tone: "neutral" as const };
-  const metaSecrets = instance && providerName === "meta" ? readMetaWebhookSecrets(instance) : null;
+  // admin, nem o cartão da Meta nem um status conectado residual ficam expostos.
+  const metaRow = metaEnabled ? (instances.find((i) => i.provider === "meta") ?? null) : null;
+
+  const evolutionConfigured = getWhatsAppProvider("evolution").isConfigured();
+  const evolutionStatus = evolutionRow?.status ?? "disconnected";
+  const metaStatus = metaRow?.status ?? "disconnected";
+  const evolutionConnected = evolutionStatus === "connected";
+  const metaConnected = metaStatus === "connected";
+  const connected = evolutionConnected || metaConnected;
+  const evolutionLabel = STATUS_LABEL[evolutionStatus] ?? { label: evolutionStatus, tone: "neutral" as const };
+  const metaLabel = STATUS_LABEL[metaStatus] ?? { label: metaStatus, tone: "neutral" as const };
+  const metaSecrets = metaRow ? readMetaWebhookSecrets(metaRow) : null;
+  // Sem a Meta liberada a conta tem uma conexão só e o cartão de sempre; com
+  // ela, cada conexão ganha o seu cartão. Gerar o QR sozinho ao abrir a tela só
+  // vale para quem usa (ou pode usar) o QR: conta que só tem a Meta não cria uma
+  // instância na Evolution por visitar a página.
+  const autoStartQr = !metaEnabled || Boolean(evolutionRow?.externalId);
+  const agentName = agent?.name ?? "Agente";
+  const agentEnabled = agent?.enabled ?? false;
+  const ignoreGroups = tenant?.whatsappIgnoreGroups ?? true;
 
   return (
     <div className="w-full space-y-8">
@@ -222,85 +233,160 @@ export default async function IntegracoesPage({
 
       {tab === "canais" && (
         <>
-      {!configured && (
+      {!evolutionConfigured && (
         <Alert tone="warn" title="Conexão indisponível neste ambiente">
-          {providerName === "meta"
-            ? "Falta a chave de criptografia necessária para guardar as credenciais da Meta."
-            : "A Evolution API não está configurada neste ambiente."}{" "}
+          A Evolution API não está configurada neste ambiente.{" "}
           <ButtonLink href="/conversas" variant="ghost" size="sm" className="ml-1 underline">
             Ir para Conversas
           </ButtonLink>
         </Alert>
       )}
 
-      {/*
-        A tela tem uma missão só e ela muda com o estado: desconectada, o código
-        é o assunto inteiro; conectada, nada disso é útil e o card vira painel de
-        saúde do canal (quem decide isso é o WhatsappConnect).
-      */}
-      <Card className="md:p-8">
-        <CardTitle
-          hintLabel="WhatsApp"
-          hint={
-            connected
-              ? "Este é o número que seus clientes usam para falar com o agente."
-              : providerName === "meta"
-                ? "Conecte com as credenciais da WhatsApp Business Platform."
-                : "Leva menos de um minuto — o código é gerado assim que a página abre."
-          }
-          action={<StatusDot tone={s.tone}>{s.label}</StatusDot>}
-        >
-          <span className="inline-flex items-center gap-2">
-            <MessageCircle size={18} aria-hidden className="text-success" />
-            WhatsApp
-          </span>
-        </CardTitle>
+      {metaEnabled ? (
+        /*
+          Com a API oficial liberada a conta pode ter os dois números de pé. Cada
+          conexão é um cartão com o próprio estado e o próprio "Desconectar" (uma
+          não derruba a outra); o que é da conta — pausar o agente, grupos,
+          bloqueios — fica num cartão só, porque não é de um número.
+        */
+        <section aria-labelledby="whatsapp-numeros" className="space-y-4">
+          <div className="space-y-1">
+            <h2 id="whatsapp-numeros" className="font-display text-lg font-semibold text-white">
+              Números de WhatsApp
+            </h2>
+            <p className="max-w-prose text-sm text-white/60">
+              Os dois números podem ficar conectados ao mesmo tempo. O agente responde pelo número
+              em que o contato escreveu, e os Disparos saem sempre pelo oficial.
+            </p>
+          </div>
 
-        <WhatsappProviderSelector
-          provider={providerName}
-          connected={connected}
-          metaEnabled={metaEnabled}
-        />
+          <Card className="md:p-8">
+            <CardTitle
+              as="h3"
+              hintLabel="WhatsApp por QR code"
+              hint={
+                evolutionConnected
+                  ? "Este é o número que seus clientes usam para falar com o agente."
+                  : "Conecte lendo o código no celular — leva menos de um minuto."
+              }
+              action={<StatusDot tone={evolutionLabel.tone}>{evolutionLabel.label}</StatusDot>}
+            >
+              <span className="inline-flex items-center gap-2">
+                <MessageCircle size={18} aria-hidden className="text-success" />
+                Número por QR code
+              </span>
+            </CardTitle>
 
-        {/* key={status}: quando desconecta, o WhatsappConnect remonta no estado
-            novo (o status é estado local dele e não se atualizaria sozinho). */}
-        {providerName === "meta" ? (
-          <MetaWhatsappConnect
-            key={status}
-            connected={connected}
-            encryptionConfigured={isEncryptionConfigured()}
-            hasCredentials={Boolean(
-              instance?.metaPhoneNumberId &&
-                instance.metaAccessTokenEncrypted &&
-                instance.metaAppSecretEncrypted &&
-                instance.metaVerifyTokenEncrypted,
+            {/* key={status}: quando desconecta, o componente remonta no estado
+                novo (o status é estado local dele e não se atualizaria sozinho). */}
+            <WhatsappConnect
+              key={evolutionStatus}
+              layout="channel"
+              initialStatus={evolutionStatus}
+              configured={evolutionConfigured}
+              autoStart={autoStartQr}
+              connectedSince={
+                evolutionConnected && evolutionRow?.updatedAt
+                  ? dateLabel(evolutionRow.updatedAt)
+                  : undefined
+              }
+            />
+          </Card>
+
+          <Card className="md:p-8">
+            <CardTitle
+              as="h3"
+              hintLabel="API oficial da Meta"
+              hint={
+                metaConnected
+                  ? "Número oficial: recebe e responde conversas e envia os Disparos."
+                  : "Conecte com as credenciais da WhatsApp Business Platform."
+              }
+              action={<StatusDot tone={metaLabel.tone}>{metaLabel.label}</StatusDot>}
+            >
+              <span className="inline-flex items-center gap-2">
+                <ShieldCheck size={18} aria-hidden className="text-iris" />
+                API oficial da Meta
+              </span>
+            </CardTitle>
+
+            <MetaWhatsappConnect
+              key={metaStatus}
+              connected={metaConnected}
+              encryptionConfigured={isEncryptionConfigured()}
+              hasCredentials={Boolean(
+                metaRow?.metaPhoneNumberId &&
+                  metaRow.metaAccessTokenEncrypted &&
+                  metaRow.metaAppSecretEncrypted &&
+                  metaRow.metaVerifyTokenEncrypted,
+              )}
+              displayPhone={metaRow?.metaDisplayPhone ?? null}
+              phoneNumberId={metaRow?.metaPhoneNumberId ?? null}
+              businessAccountId={metaRow?.metaBusinessAccountId ?? null}
+              webhookUrl={metaWebhookUrl(tenantId)}
+              verifyToken={metaSecrets?.verifyToken ?? null}
+            />
+          </Card>
+
+          <Card className="space-y-6 md:p-8">
+            {connected && (
+              <p className="text-sm text-white/70">
+                <span className="font-mono tabular-nums text-white">{inboundLast7}</span>{" "}
+                {inboundLast7 === 1 ? "mensagem recebida" : "mensagens recebidas"} de clientes nos
+                últimos 7 dias, somando os números.
+              </p>
             )}
-            displayPhone={instance?.metaDisplayPhone ?? null}
-            phoneNumberId={instance?.metaPhoneNumberId ?? null}
-            businessAccountId={instance?.metaBusinessAccountId ?? null}
-            webhookUrl={metaWebhookUrl(tenantId)}
-            verifyToken={metaSecrets?.verifyToken ?? null}
-            agentName={agent?.name ?? "Agente"}
-            agentEnabled={agent?.enabled ?? false}
-            ignoreGroups={tenant?.whatsappIgnoreGroups ?? true}
-            blocked={blocked}
-          />
-        ) : (
-          <WhatsappConnect
-            key={status}
-            initialStatus={status}
-            configured={configured}
-            connectedSince={
-              connected && instance?.updatedAt ? dateLabel(instance.updatedAt) : undefined
+            <AttendanceControls
+              agentName={agentName}
+              agentEnabled={agentEnabled}
+              ignoreGroups={ignoreGroups}
+              allNumbers
+              as="h3"
+            />
+            <WhatsappBlocklist blocked={blocked} as="h3" />
+          </Card>
+        </section>
+      ) : (
+        /*
+          A tela tem uma missão só e ela muda com o estado: desconectada, o código
+          é o assunto inteiro; conectada, nada disso é útil e o card vira painel de
+          saúde do canal (quem decide isso é o WhatsappConnect).
+        */
+        <Card className="md:p-8">
+          <CardTitle
+            hintLabel="WhatsApp"
+            hint={
+              evolutionConnected
+                ? "Este é o número que seus clientes usam para falar com o agente."
+                : "Leva menos de um minuto — o código é gerado assim que a página abre."
             }
-            inboundLast7={connected ? inboundLast7 : undefined}
-            agentName={agent?.name ?? "Agente"}
-            agentEnabled={agent?.enabled ?? false}
-            ignoreGroups={tenant?.whatsappIgnoreGroups ?? true}
+            action={<StatusDot tone={evolutionLabel.tone}>{evolutionLabel.label}</StatusDot>}
+          >
+            <span className="inline-flex items-center gap-2">
+              <MessageCircle size={18} aria-hidden className="text-success" />
+              WhatsApp
+            </span>
+          </CardTitle>
+
+          {/* key={status}: quando desconecta, o WhatsappConnect remonta no estado
+              novo (o status é estado local dele e não se atualizaria sozinho). */}
+          <WhatsappConnect
+            key={evolutionStatus}
+            initialStatus={evolutionStatus}
+            configured={evolutionConfigured}
+            connectedSince={
+              evolutionConnected && evolutionRow?.updatedAt
+                ? dateLabel(evolutionRow.updatedAt)
+                : undefined
+            }
+            inboundLast7={evolutionConnected ? inboundLast7 : undefined}
+            agentName={agentName}
+            agentEnabled={agentEnabled}
+            ignoreGroups={ignoreGroups}
             blocked={blocked}
           />
-        )}
-      </Card>
+        </Card>
+      )}
 
       <section className="space-y-3">
         <h2 className="font-display text-lg font-semibold text-white">Outros canais</h2>

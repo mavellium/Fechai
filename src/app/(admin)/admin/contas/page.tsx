@@ -7,6 +7,7 @@ import {
   TENANT_PAGE_SIZES,
 } from "@/modules/admin/service";
 import { planOf } from "@/modules/billing/plans";
+import { summarizeWhatsappStatus } from "@/modules/whatsapp/instances";
 import type { PlanKey } from "@prisma/client";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
@@ -162,7 +163,7 @@ export default async function ContasPage({
                   name={t.name}
                   planKey={t.planKey}
                   status={t.status}
-                  whatsappStatus={t.whatsappInstance?.status ?? "—"}
+                  whatsappStatus={t.whatsappInstances.length ? summarizeWhatsappStatus(t.whatsappInstances) : "—"}
                   metaWhatsappEnabled={t.metaWhatsappEnabled}
                   messageLimitOverride={t.messageLimitOverride}
                   priceCentsOverride={t.priceCentsOverride}
