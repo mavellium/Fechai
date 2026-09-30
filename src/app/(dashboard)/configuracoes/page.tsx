@@ -11,6 +11,8 @@ import { ProfileForm } from "./ProfileForm";
 import { RolesForm } from "./RolesForm";
 import { PasswordForm } from "./PasswordForm";
 import { FeedbackForm } from "./FeedbackForm";
+import { ServiceAreaForm } from "./ServiceAreaForm";
+import { getServiceArea } from "@/modules/lead-insights/service-area-store";
 
 /** Traduz o status cru do provedor que vem no `detail` do check de WhatsApp. */
 const DETAIL_PT: Record<string, string> = {
@@ -167,13 +169,15 @@ export default async function ConfiguracoesPage() {
 
   // Cota e checklist de configuração medem o agente: para quem só afilia são
   // perguntas sem objeto, e nem chegam a ser consultadas.
-  const [user, checks, usage] = await Promise.all([
+  const [user, checks, usage, serviceArea, tenant] = await Promise.all([
     prisma.user.findUniqueOrThrow({
       where: { id: session.user.id },
       select: { name: true, email: true },
     }),
     affiliateOnly ? null : tenantChecks(tenantId),
     affiliateOnly ? null : getUsageSummary(tenantId),
+    affiliateOnly ? null : getServiceArea(tenantId),
+    affiliateOnly ? null : prisma.tenant.findUnique({ where: { id: tenantId }, select: { city: true } }),
   ]);
   const pending = checks ? checks.filter((c) => !c.ok).length : 0;
 
@@ -204,6 +208,15 @@ export default async function ConfiguracoesPage() {
             <CardTitle hint="Recomendado a cada alguns meses.">Senha</CardTitle>
             <PasswordForm />
           </Card>
+
+          {!affiliateOnly && (
+            <Card>
+              <CardTitle hintInline hint="Define o que é lead de fora do raio nos relatórios de qualidade dos leads.">
+                Área de atendimento
+              </CardTitle>
+              <ServiceAreaForm baseCity={serviceArea?.baseCity ?? null} cities={serviceArea?.cities ?? []} suggestedCity={tenant?.city ?? null} />
+            </Card>
+          )}
 
           <Card>
             <CardTitle hintInline hint="Define o que aparece no menu. Você pode marcar as duas.">

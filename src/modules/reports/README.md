@@ -23,6 +23,10 @@ controle de publicação.
   `gapsAnswered`/`gapAnswerSeconds` no mês da aprovação, no escopo de agentes.
   Não são corrigíveis em `metricOverrides`. Ver
   [`knowledge-gaps/README.md`](../knowledge-gaps/README.md).
+- `monthly.ts` também carrega `leadQuality` (qualidade dos leads do mês, de
+  `modules/lead-insights`, congelada no snapshot; opcional em fechamentos
+  antigos). O PDF ganha uma segunda página só quando `leadQuality.leads > 0`.
+  Ver [`lead-insights/README.md`](../lead-insights/README.md).
 - `monthly-overrides.ts`: valida `assumptions.metricOverrides` para o mês e o
   comparativo, aplica correções manuais e recalcula receita/economia/ROI.
   Correções não são herdadas ao copiar premissas para outro mês.

@@ -4,6 +4,16 @@ Guia para qualquer agente/pessoa dar prosseguimento nesta seção. Cobre **o que
 
 ## Visão geral
 
+### Qualidade dos leads (`?visao=leads`)
+
+Quinta visão, com o seletor de período das visões Operacional/Financeira:
+`LeadQualityView` mostra leads, % que informou a cidade, % fora do raio,
+cidades, primeiras dúvidas, motivos de perda e resultado, com as melhorias
+sugeridas para o tráfego. Os números vêm de `loadLeadQuality`
+(`modules/lead-insights`) — regras, cobertura e limites em
+[`lead-insights/README.md`](../../../modules/lead-insights/README.md). O mesmo
+resumo entra no relatório mensal (bloco + 2ª página do PDF).
+
 ### ROI mensal odontológico (P-79)
 
 A visão `?visao=mensal&mes=YYYY-MM` apresenta relatórios revisados pela Mavellium.

@@ -1,0 +1,119 @@
+# Módulo: lead-insights (inteligência de conversas)
+
+> Produto e implantação: [`docs/inteligencia-de-conversas.md`](../../../docs/inteligencia-de-conversas.md).
+> Origem: Obsidian → Produto/Fechai/Fechai - Inteligência de Conversas (não estava disponível ao implementar; o escopo veio do pedido).
+
+## O que faz
+
+Mede a qualidade dos leads do tráfego pago: de que cidade são, se estão dentro
+do raio de atendimento, o que perguntam primeiro, por que não fecham e o que
+aconteceu com eles. O caso que originou: o Instituto do Sorriso fica em Garça e
+os leads de Marília quase nunca fecham — parte da verba compra lead que não
+converte, e ninguém media.
+
+```text
+contato diz cidade/dúvida/motivo ─► agente chama record_lead_insight ─► ConversationInsight (1 por conversa)
+                                                                              │
+Lead + Appointment + ReportEvent + follow-up ──► resultado (calculado) ◄──────┤
+TenantServiceArea (cidades atendidas) ──► dentro/fora do raio (calculado) ◄───┘
+                                                  ▼
+            /relatorios?visao=leads · relatório mensal (bloco + 2ª página do PDF)
+```
+
+## Arquivos
+
+- `categories.ts` — puro. `DOUBT_CATEGORIES`, `LOSS_CATEGORIES`, `parse*Category` (valor estranho vira `outro`, ausente é `null`), rótulos, `IDLE_LOSS_KEY` (`sumiu`, derivado).
+- `city.ts` — puro. `cleanCity`, `normalizeCity` (sem acento, caixa e UF final), `sameCity` (erro de 1 letra só em nome com 6+ letras).
+- `service-area.ts` — puro. `ServiceArea`, `parseServiceArea` (nunca lança), `classifyCity` → `in | out | unknown`, `serviceAreaFormSchema`.
+- `service-area-store.ts` — `getServiceArea` (nunca lança), `saveServiceArea`.
+- `record.ts` — `recordLeadInsight` (**nunca lança**), `scrubInsightText`.
+- `tool.ts` — schema da tool `record_lead_insight`, `leadInsightRule()` (vai no prompt de todo turno com agente) e o texto de retorno.
+- `summary.ts` — puro. `leadOutcome`, `summarizeLeadQuality`, `trafficSuggestions`, `leadQualityHeadline`.
+- `queries.ts` — `loadLeadQuality(tenantId, { from, to }, { agentIds? })`: só metadados, nenhum nome/telefone/texto de conversa.
+
+Telas: `(dashboard)/relatorios/LeadQualityView.tsx` (aba **Qualidade dos leads**),
+`(dashboard)/configuracoes/ServiceAreaForm.tsx` (card **Área de atendimento**) e
+`LeadQualityCard` em `relatorios/MonthlyView.tsx`. PDF: `reports/monthly-pdf.ts`.
+
+## Contratos expostos
+
+```ts
+recordLeadInsight({ tenantId, conversationId, city?, procedure?, firstQuestionCategory?, firstQuestionText?, lossReasonCategory?, lossReasonText? })
+  -> { status: "saved" | "empty" | "test" | "failed", fields: string[] }   // nunca lança
+getServiceArea(tenantId) -> ServiceArea | null                            // nunca lança; null = não configurada
+saveServiceArea(tenantId, { baseCity, cities }) -> { ok: true, area } | { ok: false, error }
+loadLeadQuality(tenantId, { from: Date | null, to: Date }, { agentIds?, now? }) -> LeadQuality
+summarizeLeadQuality(rows, area, now) -> LeadQuality                      // puro
+leadOutcome(row, now) -> { outcome: "scheduled" | "handoff" | "lost" | "open", lossKey }
+classifyCity(area, cityKey) -> "in" | "out" | "unknown"
+```
+
+## Regras que não podem quebrar
+
+**Só o que o contato disse, nunca deduzido.** Cidade, procedimento, dúvida e
+motivo entram por `record_lead_insight`, chamada pelo agente; nada é inferido do
+texto depois (mesma regra de `report_unanswered` e `disqualify_lead`). A tool
+proíbe deduzir cidade por DDD, nome ou sotaque, e o servidor descarta o que não
+parece cidade (frase, número, link). O agente **não pergunta** a cidade só para
+preencher o registro — quem quiser cobertura maior pede isso na persona.
+
+**Dentro/fora do raio e resultado são calculados na leitura, nunca gravados.**
+Gravá-los congelaria um palpite velho quando a clínica muda a área ou o lead
+volta a conversar. A área é uma **lista de cidades por nome** (a cidade-base
+mais as atendidas), não quilômetros: qualquer cidade fora da lista é "fora".
+Sem área configurada o veredito é `unknown` — nunca "dentro" presumido — e o
+painel/relatório avisam em vez de mostrar 0% fora do raio. Mesmo nome de cidade
+em outro estado é tratado como a mesma cidade (a UF é ignorada na comparação).
+
+**Resultado do lead** (`leadOutcome`), em ordem: agendou (qualquer agendamento
+não cancelado) > transbordou (`needsHuman` ou evento `handoff`) > perdeu >
+em andamento. **Perdeu** só com sinal explícito — motivo registrado pelo agente,
+triagem (`disqualifiedAt`), follow-up de quem recusou/pediu para parar, status
+`lost` — ou depois de `IDLE_AFTER_HOURS` (72h) sem resposta do contato
+(`sumiu`, derivado, o agente nunca o declara). Antes disso é "em andamento":
+chamar de perdido um lead de ontem inflaria a perda do mês corrente.
+
+**A coorte é o lead criado no período** (`Lead.createdAt`, `isTest: false`), com
+ou sem registro. Quem não disse a cidade conta em "leads", não em "informaram a
+cidade" — a cobertura aparece sempre ao lado do percentual. Conversa de teste
+fica fora (a tool responde `test` e não grava).
+
+**A primeira dúvida é gravada uma vez** (`updateMany ... firstQuestionKey: null`);
+cidade, procedimento e motivo de perda guardam o último valor dito. Registrar
+nunca lança nem derruba o turno; escreve por `findFirst` com `tenantId`, nunca
+por id cru.
+
+**Sugestões de tráfego são regra, não IA** (`trafficSuggestions`): o relatório
+não chama modelo, e sugestão de verba não pode variar entre gerações. Só saem
+com `MIN_SAMPLE` (10) leads com cidade informada; "fora do raio" pede 5+ leads e
+20%+; dúvida/motivo pede 25%+ das registradas. São hipóteses para a agência,
+**nunca promessa** — o relatório e o PDF dizem isso (`SUGGESTION_DISCLAIMER`).
+
+**LGPD:** nenhuma consulta desta pasta devolve nome, telefone ou trecho de
+conversa. O texto livre (`firstQuestionText`, `lossReasonText`) é limpo de
+e-mail/telefone antes de gravar e ainda não aparece em tela (base da fase 2).
+
+## Relatório mensal
+
+`computeMonthlyReport` calcula `MonthlyReport.leadQuality` **só do mês** (sem
+comparativo), no escopo de agentes da revisão, e o snapshot o congela. Ausente
+em relatórios fechados antes do bloco = "sem registro", nunca zero; falha na
+consulta tira o bloco, não o relatório. O PDF continua de **uma página**; com
+`leadQuality.leads > 0` ganha uma **segunda página** (e "Página 1 de 2" no
+rodapé da primeira). Mês sem leads ou relatório antigo não muda o arquivo.
+
+## Schema
+
+`TenantServiceArea` (uma linha por tenant) e `ConversationInsight` (uma por
+conversa, `conversationId @unique`, cascata). Categorias são `String`, não enum:
+a fase 2 acrescenta as aprovadas pela equipe. Mudança de schema pede
+`prisma db push` + `prisma generate` **nos dois processos** (web e worker).
+
+## O que NÃO faz (fase 2, depois de ~1 mês de dados)
+
+- Não sugere categorias novas quando um motivo "outro" se repete, nem tem a aprovação da equipe no painel.
+- Não exporta para a agência de tráfego (TegBe ou outra).
+- Não usa quilômetros nem coordenadas: o raio é uma lista de cidades.
+- Não mostra o texto livre das dúvidas/motivos, só as categorias.
+- Não pergunta a cidade ao contato: registra quando ele diz.
+- Não tem passo no wizard de onboarding: a área se configura em `/configuracoes` (a Mavellium edita personificando a conta).

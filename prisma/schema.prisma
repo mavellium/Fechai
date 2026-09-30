@@ -140,6 +140,8 @@ model Tenant {
   reportEvents      ReportEvent[]
   knowledgeGaps     KnowledgeGap[]
   knowledgeGapSettings KnowledgeGapSettings?
+  serviceArea       TenantServiceArea?
+  conversationInsights ConversationInsight[]
   reportTrackingStartedAt DateTime @default(now())
 }
 
@@ -234,6 +236,49 @@ model KnowledgeGapSettings {
   responders     String   @default("clinic") // clinic | mavellium | both
   lastDigestAt   DateTime?
   updatedAt      DateTime @updatedAt
+}
+
+/// Área de atendimento da clínica: a cidade-base e as outras cidades que ela
+/// atende, por NOME. Sem linha = não configurado, e "dentro/fora do raio" fica
+/// desconhecido — nunca chutado. Ver `src/modules/lead-insights/README.md`.
+model TenantServiceArea {
+  tenantId  String   @id
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  baseCity  String
+  /// Outras cidades atendidas (a base entra sempre). Nomes como a clínica digitou.
+  cities    String[] @default([])
+  updatedAt DateTime @updatedAt
+}
+
+/// O que o agente registrou da conversa (tool `record_lead_insight`): cidade,
+/// procedimento, primeira dúvida real e motivo de perda. Uma linha por conversa,
+/// só com o que o contato DISSE — nunca inferido. "Dentro/fora do raio" e o
+/// resultado (agendou, transbordou, perdeu) NÃO são gravados: são calculados na
+/// leitura, com a área e os dados de hoje. Chaves de categoria são String (o
+/// conjunto cresce com o que a equipe aprovar), não enum.
+model ConversationInsight {
+  id                String       @id @default(cuid())
+  tenantId          String
+  tenant            Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversationId    String       @unique
+  conversation      Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  /// Cidade como o contato disse (limpa, para exibição) e a chave normalizada
+  /// (minúsculas, sem acento, sem UF) usada para comparar com a área.
+  city              String?
+  cityKey           String?
+  procedure         String?
+  /// A PRIMEIRA dúvida real, depois da mensagem padrão do anúncio. Gravada uma
+  /// vez: as seguintes não sobrescrevem.
+  firstQuestionKey  String?
+  firstQuestionText String?
+  /// Último motivo de perda registrado pelo agente (o contato pode mudar de ideia).
+  lossReasonKey     String?
+  lossReasonText    String?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, cityKey])
 }
 
 /// Premissas e texto revisados pela Mavellium, por competência. O fechamento
@@ -731,6 +776,7 @@ model Conversation {
   appointments Appointment[]
   reportEvents ReportEvent[]
   knowledgeGapOccurrences KnowledgeGapOccurrence[]
+  insight      ConversationInsight?
 
   @@index([tenantId])
   @@index([agentId])

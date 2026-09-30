@@ -27,6 +27,8 @@ import { AfiliadoView } from "./AfiliadoView";
 import { ChartPanel } from "./ChartPanel";
 import { FinancialView } from "./FinancialView";
 import { TriagePanel } from "./TriagePanel";
+import { LeadQualityView } from "./LeadQualityView";
+import { loadLeadQuality } from "@/modules/lead-insights/queries";
 import { RangePicker } from "./RangePicker";
 import { StatusBreakdown } from "./StatusBreakdown";
 
@@ -34,7 +36,7 @@ const PERIODS: PeriodKey[] = ["hoje", "7", "30", "mes", "ano", "tudo"];
 // A aba "Afiliados" só existe para quem está no programa — o filtro abaixo
 // remove a opção de quem não é afiliado, e a página cai na visão padrão se
 // alguém digitar ?visao=afiliados na URL sem ter cadastro.
-const VIEWS = ["operacional", "financeiro", "mensal", "afiliados"] as const;
+const VIEWS = ["operacional", "financeiro", "leads", "mensal", "afiliados"] as const;
 type View = (typeof VIEWS)[number];
 
 export default async function RelatoriosPage({
@@ -81,10 +83,11 @@ export default async function RelatoriosPage({
     await approveMaturedCommissions(affiliate.id);
   }
 
-  const [hasAnyData, report, financial, affiliateOverview] = await Promise.all([
+  const [hasAnyData, report, financial, leadQuality, affiliateOverview] = await Promise.all([
     affiliateOnly ? 1 : prisma.lead.count({ where: { tenantId, isTest: false } }),
     view === "operacional" ? computePeriodReport(tenantId, range) : null,
     view === "financeiro" ? computeFinancialSummary(tenantId, range) : null,
+    view === "leads" ? loadLeadQuality(tenantId, { from: range.from, to: range.to }) : null,
     view === "afiliados" && affiliate ? getAffiliateOverview(affiliate.id) : null,
   ]);
 
@@ -143,6 +146,8 @@ export default async function RelatoriosPage({
               ? "Relatório mensal de ROI estimado, revisado pela Mavellium e apresentado ao decisor."
             : view === "financeiro"
               ? `Retorno estimado do investimento no projeto — ${range.label}.`
+            : view === "leads"
+              ? `De onde vêm os leads, o que perguntam e por que não fecham — ${range.label}.`
               : `Acompanhe a evolução da conta — ${range.label}.`
         }
       />
@@ -156,6 +161,7 @@ export default async function RelatoriosPage({
               options={[
                 { key: "operacional", label: "Operacional" },
                 { key: "financeiro", label: "Financeiro" },
+                { key: "leads", label: "Qualidade dos leads" },
                 ...(publishedMonths.length ? [{ key: "mensal", label: "ROI mensal" }] : []),
                 ...(affiliate ? [{ key: "afiliados", label: "Afiliados" }] : []),
               ]}
@@ -176,7 +182,7 @@ export default async function RelatoriosPage({
             Exportar CSV
           </ButtonLink>
         )}
-        {view === "mensal" && monthlyReport && <ButtonLink href={`/relatorios/mensal/pdf?mes=${month}`} variant="outline" size="sm"><Download size={14} aria-hidden />Exportar PDF de 1 página</ButtonLink>}
+        {view === "mensal" && monthlyReport && <ButtonLink href={`/relatorios/mensal/pdf?mes=${month}`} variant="outline" size="sm"><Download size={14} aria-hidden />Exportar PDF</ButtonLink>}
       </div>
 
       {view === "mensal" && month && <MonthPicker value={month} href={viewHref("mensal")} availableMonths={publishedMonths} />}
@@ -339,6 +345,10 @@ export default async function RelatoriosPage({
               <TriagePanel triage={financial.triage} />
             </section>
           </div>
+        </FadeIn>
+      ) : view === "leads" && leadQuality ? (
+        <FadeIn>
+          <LeadQualityView quality={leadQuality} period={range.label} />
         </FadeIn>
       ) : view === "afiliados" && affiliateOverview ? (
         <AfiliadoView overview={affiliateOverview} />

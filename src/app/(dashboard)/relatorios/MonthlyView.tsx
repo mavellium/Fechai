@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
 import { DataTable } from "@/components/ui/data-table";
 import { TIMEZONES } from "@/modules/scheduling/time";
+import { SUGGESTION_DISCLAIMER, leadQualityHeadline, type LeadQuality, type RankItem } from "@/modules/lead-insights/summary";
 
 export const total = (s: SplitCount) => s.inside + s.outside + s.unclassified;
 const number = (v: number | null, suffix = "") => v === null ? "Pendente" : `${v.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}${suffix}`;
@@ -89,6 +90,31 @@ function TimeReturnedCard({ report: r }: { report: MonthlyReport }) {
   </Card>;
 }
 
+const topLine = (items: RankItem[]) => items.slice(0, 4).map((i) => `${i.label} (${i.count})`).join(" · ");
+
+/**
+ * Qualidade dos leads do mês, para o decisor e a agência de tráfego. Ausente em
+ * relatórios fechados antes do bloco. Só agregados: nenhum dado de paciente.
+ */
+function LeadQualityCard({ quality: q }: { quality: LeadQuality }) {
+  return <Card>
+    <CardTitle hint="O que o agente registrou do que os contatos disseram. Sugestões são hipóteses, não promessa.">Qualidade dos leads e melhorias para o tráfego</CardTitle>
+    {q.leads === 0 ? <p className="text-sm text-neutral panel:text-white/55">Sem leads novos neste mês.</p> : <>
+      <p className="max-w-prose text-base leading-relaxed">{leadQualityHeadline(q)}</p>
+      <dl className="mt-4 grid gap-4 text-sm md:grid-cols-3">
+        <div><dt className="font-medium">Cidades mais citadas</dt><dd className="mt-1 text-neutral panel:text-white/60">{q.cities.length ? q.cities.slice(0, 4).map((c) => `${c.city} (${c.count}${c.verdict === "out" ? ", fora do raio" : ""})`).join(" · ") : "Nenhuma cidade informada."}</dd></div>
+        <div><dt className="font-medium">Primeiras dúvidas</dt><dd className="mt-1 text-neutral panel:text-white/60">{q.doubts.length ? topLine(q.doubts) : "Nenhuma registrada."}</dd></div>
+        <div><dt className="font-medium">Motivos de perda</dt><dd className="mt-1 text-neutral panel:text-white/60">{q.losses.length ? topLine(q.losses) : "Nenhum lead perdido."}</dd></div>
+      </dl>
+      {q.suggestions.length > 0 ? <>
+        <p className="mt-6 text-sm font-medium">Melhorias sugeridas</p>
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-sm leading-relaxed">{q.suggestions.map((s) => <li key={s}>{s}</li>)}</ul>
+      </> : q.lowSample && q.withCity > 0 ? <p className="mt-4 text-sm text-neutral panel:text-white/55">Poucos leads informaram a cidade ({q.withCity}); as sugestões só aparecem com pelo menos 10.</p> : null}
+      <p className="mt-4 text-xs leading-relaxed text-neutral panel:text-white/55">{SUGGESTION_DISCLAIMER}</p>
+    </>}
+  </Card>;
+}
+
 export function MonthlyView({ report: r, showSummary = true }: { report: MonthlyReport; showSummary?: boolean }) {
   const a = r.current, c = r.assumptions;
   const days = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
@@ -114,6 +140,7 @@ export function MonthlyView({ report: r, showSummary = true }: { report: Monthly
         <div><p className="mb-3 text-sm font-medium">Horários de pico</p>{a.peaks.length ? <div className="space-y-3">{a.peaks.map((p) => <div key={p.hour} className="flex items-center gap-3"><Badge tone="iris">{String(p.hour).padStart(2, "0")}h</Badge><span className="text-sm text-neutral panel:text-white/70">{p.messages} mensagens recebidas</span></div>)}</div> : <p className="text-sm text-neutral panel:text-white/55">Sem mensagens recebidas no período.</p>}<p className="mt-3 text-xs text-neutral panel:text-white/55">Horário local da clínica · {TIMEZONES.find((zone) => zone.value === c.timezone)?.label ?? c.timezone}</p></div>
       </div>
     </Card>
+    {r.leadQuality && <LeadQualityCard quality={r.leadQuality} />}
     <div className="grid gap-6 md:grid-cols-2">
       <Card><CardTitle>O que ajustamos no agente</CardTitle><p className="whitespace-pre-wrap text-sm leading-relaxed text-neutral panel:text-white/70">{r.adjustments || "Aguardando revisão da Mavellium."}</p></Card>
       <Card><CardTitle>Próximo mês</CardTitle><p className="whitespace-pre-wrap text-sm leading-relaxed text-neutral panel:text-white/70">{r.nextMonth || "Aguardando plano da Mavellium."}</p></Card>

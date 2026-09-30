@@ -5,15 +5,21 @@ import { formatBRL } from "@/lib/format";
 import type { MonthlyReport } from "./monthly";
 import { formatDuration, formatMinutes, hoursPremise, timeHeadline } from "./monthly-time";
 import { formatGapTimeShort as gapTime } from "@/modules/knowledge-gaps/text";
+import { SUGGESTION_DISCLAIMER, leadQualityHeadline } from "@/modules/lead-insights/summary";
 
-/** PDF A4 fixo de uma página, sem dados pessoais de pacientes. */
+/**
+ * PDF A4 sem dados pessoais de pacientes. A primeira página é fixa e única (o
+ * contrato do relatório); a "Qualidade dos leads e melhorias para o tráfego"
+ * vai numa segunda página, só quando o mês tem leads analisados — sem ela o
+ * arquivo continua de uma página, como os já entregues.
+ */
 export async function generateMonthlyPdf(r: MonthlyReport): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   doc.setTitle(`Relatório mensal de ROI - ${r.tenantName} - ${r.month}`);
   doc.setAuthor("Mavellium · Fechai");
   doc.setCreationDate(new Date(r.generatedAt));
   doc.setModificationDate(new Date(r.generatedAt));
-  const page = doc.addPage([595.28, 841.89]);
+  let page = doc.addPage([595.28, 841.89]);
   const regular = await doc.embedFont(StandardFonts.Helvetica);
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
   const ink = rgb(0.06, 0.06, 0.06), muted = rgb(0.35, 0.35, 0.35);
@@ -62,16 +68,20 @@ export async function generateMonthlyPdf(r: MonthlyReport): Promise<Uint8Array> 
     text(title, margin, y, 10, bold, ink);
     y -= 15;
   }
+  // Cabeçalho comum às páginas: marca, cliente e competência.
+  function header() {
+    page.drawImage(fechai, { x: margin - 3, y: y - 7, width: 30, height: 30 });
+    text("fechai.", margin + 31, y + 1, 20, bold, ink);
+    page.drawImage(mavellium, { x: margin + width - 114, y: y - 4, width: 114, height: 114 * mavellium.height / mavellium.width });
+    y -= 23;
+    y -= paragraph(r.tenantName, 18, width, margin, y, ink);
+    text(`${r.label} · ${r.status === "ready" ? "revisado" : "RASCUNHO"}${r.partial ? " · mês em andamento" : ""}`, margin, y, 9);
+    y -= 21;
+  }
   const num = (v: number | null, suffix = "") => v === null ? "Pendente" : `${v.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}${suffix}`;
   const money = (v: number | null) => v === null ? "Pendente" : formatBRL(v);
   const a = r.current, b = r.previous, c = r.assumptions;
-  page.drawImage(fechai, { x: margin - 3, y: y - 7, width: 30, height: 30 });
-  text("fechai.", margin + 31, y + 1, 20, bold, ink);
-  page.drawImage(mavellium, { x: margin + width - 114, y: y - 4, width: 114, height: 114 * mavellium.height / mavellium.width });
-  y -= 23;
-  y -= paragraph(r.tenantName, 18, width, margin, y, ink);
-  text(`${r.label} · ${r.status === "ready" ? "revisado" : "RASCUNHO"}${r.partial ? " · mês em andamento" : ""}`, margin, y, 9);
-  y -= 21;
+  header();
   page.drawRectangle({ x: margin, y: y - 62, width, height: 78, color: rgb(0.95, 0.95, 0.95) });
   text("1 · ROI DO MÊS (ESTIMADO)", margin + 12, y, 9, bold, ink);
   text(num(a.roiPercent, "%"), margin + 12, y - 31, 28, bold, ink);
@@ -159,5 +169,53 @@ export async function generateMonthlyPdf(r: MonthlyReport): Promise<Uint8Array> 
   page.drawLine({ start: { x: margin, y: 38 }, end: { x: margin + width, y: 38 }, thickness: 0.5, color: rgb(0.85, 0.85, 0.85) });
   const due = new Intl.DateTimeFormat("pt-BR", { timeZone: c.timezone }).format(new Date(r.dueAt));
   paragraph(`Decisor: ${r.decisionMaker || "a definir"} · entrega até ${due} · reunião curta`, 7, width, margin, 24);
+
+  const quality = r.leadQuality;
+  if (quality && quality.leads > 0) {
+    text("Página 1 de 2", margin + width - 52, 24, 7, regular, muted);
+    page = doc.addPage([595.28, 841.89]);
+    y = 806;
+    header();
+    const pct = (n: number, d: number) => (d > 0 ? `${Math.round((n / d) * 100)}%` : "—");
+    text("QUALIDADE DOS LEADS E MELHORIAS PARA O TRÁFEGO", margin, y, 11, bold, ink);
+    y -= 16;
+    y -= paragraph(leadQualityHeadline(quality), 9.5, width, margin, y, ink);
+    y -= 4;
+    const summary: [string, string][] = [
+      ["Leads novos no mês", num(quality.leads)],
+      ["Informaram a cidade", `${quality.withCity} (${pct(quality.withCity, quality.leads)})`],
+      ["Fora do raio de atendimento", quality.areaConfigured ? `${quality.outOfRadius} de ${quality.withCity} (${pct(quality.outOfRadius, quality.withCity)})` : "Área não configurada"],
+      ["Agendaram · dentro / fora do raio", quality.areaConfigured ? `${quality.inScheduled} / ${quality.outScheduled}` : "—"],
+      ["Agendaram · total", `${quality.outcomes.scheduled} (${pct(quality.outcomes.scheduled, quality.leads)})`],
+      ["Transbordaram para a equipe", num(quality.outcomes.handoff)],
+      ["Perderam", `${quality.outcomes.lost} (${pct(quality.outcomes.lost, quality.leads)})`],
+    ];
+    y -= 10;
+    for (const [label, value] of summary) {
+      text(label, margin, y, 8.5); text(value, 343, y, 8.5, bold);
+      page.drawLine({ start: { x: margin, y: y - 4 }, end: { x: margin + width, y: y - 4 }, thickness: 0.35, color: rgb(0.88, 0.88, 0.88) });
+      y -= 14;
+    }
+    const list = (title: string, items: { label: string; count: number; note?: string }[], empty: string) => {
+      section(title);
+      if (!items.length) { y -= paragraph(empty, 8); return; }
+      for (const item of items.slice(0, 6)) {
+        text(item.label, margin, y, 8.5); text(`${item.count}${item.note ? ` · ${item.note}` : ""}`, 343, y, 8.5, bold);
+        y -= 14;
+      }
+    };
+    list("CIDADES MAIS CITADAS", quality.cities.map((c) => ({ label: c.city, count: c.count, note: c.verdict === "out" ? "fora do raio" : undefined })), "Nenhum lead informou a cidade.");
+    list("PRIMEIRAS DÚVIDAS", quality.doubts, "Nenhuma dúvida registrada.");
+    list("MOTIVOS DE PERDA", quality.losses, "Nenhum lead perdido no mês.");
+    section("MELHORIAS SUGERIDAS PARA O TRÁFEGO");
+    if (quality.suggestions.length) for (const suggestion of quality.suggestions) y -= paragraph(`• ${suggestion}`, 8.6, width - 8, margin + 8, y, ink) + 3;
+    else y -= paragraph(quality.lowSample ? `Poucos leads informaram a cidade (${quality.withCity}); as sugestões só aparecem com pelo menos 10.` : "Os dados do mês não indicam mudança de tráfego.", 8.2, width, margin, y);
+    y -= 6;
+    y -= paragraph(SUGGESTION_DISCLAIMER, 7.3);
+    y -= paragraph("Conta os leads reais criados no mês. Cidade, dúvida e motivo são o que o agente registrou do que o contato disse, sem dedução. Dentro ou fora do raio usa a área de atendimento cadastrada. Perdeu: motivo registrado, triagem, follow-up de quem recusou ou 72 horas sem resposta.", 7.2);
+    if (y < 46) throw new Error("O conteúdo da página de qualidade dos leads excedeu o espaço.");
+    page.drawLine({ start: { x: margin, y: 38 }, end: { x: margin + width, y: 38 }, thickness: 0.5, color: rgb(0.85, 0.85, 0.85) });
+    text("Página 2 de 2", margin + width - 52, 24, 7, regular, muted);
+  }
   return doc.save();
 }

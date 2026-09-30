@@ -7,6 +7,8 @@ import { EMPTY_ASSUMPTIONS, monthlyWindow, normalizeLabel, outsideHumanHours,
   parseMonthlyAssumptions, type MonthlyAssumptions } from "./monthly-config";
 import { calculateTimeMetrics, LONG_AUDIO_SECONDS, type MonthlyTimeMetrics, type TimeMessage } from "./monthly-time";
 import { UNTRANSCRIBED_AUDIO } from "@/modules/voice/received-audio";
+import { loadLeadQuality } from "@/modules/lead-insights/queries";
+import type { LeadQuality } from "@/modules/lead-insights/summary";
 
 export type SplitCount = { inside: number; outside: number; unclassified: number };
 export type MonthlyMetrics = {
@@ -44,6 +46,12 @@ export type MonthlyReport = {
   adjustments: string; nextMonth: string; decisionMaker: string;
   /** Caso real do mês, anonimizado. Ausente em snapshots anteriores ao campo. */
   featuredCase?: string;
+  /**
+   * Qualidade dos leads do mês (cidade, raio, dúvidas, motivos de perda,
+   * sugestões de tráfego). Congelada no snapshot; relatórios fechados antes
+   * dela não a têm — ausente é "sem registro", nunca zero.
+   */
+  leadQuality?: LeadQuality;
   status: string; finalizedAt: string | null; sentAt: string | null; meetingAt: string | null;
 };
 
@@ -217,7 +225,7 @@ export async function computeMonthlyReport(tenantId: string, month: string, useS
   const previousWindow = monthlyWindow(window.previousMonth, previousAssumptions.timezone);
   const start = new Date(Math.min(window.start.getTime(), previousWindow.start.getTime()));
   const end = new Date(Math.max(window.end.getTime(), previousWindow.end.getTime()));
-  const [rawConversations, appointments, events, clinicorp, gaps] = await Promise.all([
+  const [rawConversations, appointments, events, clinicorp, gaps, leadQuality] = await Promise.all([
     prisma.conversation.findMany({ where: { tenantId, isTest: false, lead: { isTest: false }, OR: [
       { messages: { some: { createdAt: { gte: start, lt: end } } } },
       { appointments: { some: { OR: [{ startsAt: { gte: start, lt: end } }, { createdAt: { gte: start, lt: end } }] } } },
@@ -235,6 +243,10 @@ export async function computeMonthlyReport(tenantId: string, month: string, useS
     prisma.knowledgeGap.findMany({ where: { tenantId, answeredAt: { gte: start, lt: end } },
       select: { agentId: true, firstAskedAt: true, answeredAt: true } })
       .then((rows) => rows.map((g) => ({ ...g, answeredAt: g.answeredAt! }))),
+    // Só o mês do relatório (não o comparativo), no mesmo escopo de agentes. É
+    // um complemento: se falhar, o relatório sai sem o bloco em vez de não sair.
+    loadLeadQuality(tenantId, { from: window.start, to: window.end }, { agentIds: assumptions.agentIds ?? undefined })
+      .catch((error) => { console.error("[monthly] qualidade dos leads indisponível", error); return undefined; }),
   ]);
   const conversationIds = rawConversations.map((c) => c.id);
   const [firstInbound, unheard] = conversationIds.length ? await Promise.all([
@@ -271,6 +283,7 @@ export async function computeMonthlyReport(tenantId: string, month: string, useS
     clinicorpError: clinicorp.error, clinicorpStatusTypes: clinicorp.statusTypes, clinicorpIntegrationState: clinicorp.integrationState,
     adjustments: saved?.adjustments ?? "", nextMonth: saved?.nextMonth ?? "", decisionMaker: saved?.decisionMaker ?? "",
     featuredCase: saved?.featuredCase ?? "",
+    ...(leadQuality ? { leadQuality } : {}),
     status: saved?.status ?? "draft", finalizedAt: saved?.finalizedAt?.toISOString() ?? null,
     sentAt: saved?.sentAt?.toISOString() ?? null, meetingAt: saved?.meetingAt?.toISOString() ?? null };
 }
