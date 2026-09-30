@@ -6,7 +6,7 @@
 - `leadAppointmentsContext(ctx, cfg, now?)`: consultas futuras `scheduled` do lead; cada uma com dia relativo ("é HOJE, às 10:45"). Também é a saída da tool `list_appointments`. Só ID e horário, nada de título/nota.
 - `availableSlotsContext(ctx, cfg, date, days?, excludeDates?, excludeWeekdays?)`: até 5 datas livres em 14 dias.
 - `loadConversationVariables(tenantId, conversationId)`.
-- `getHandoffConfig(agentId)` só para a tela; no turno use `getActiveHandoffConfig`.
+- `getHandoffConfig(agentId)` só para a tela; quem age usa `getActiveHandoffConfig(tenantId, agentId)` (privada em `handoff.ts`, exige ação `enabled`).
 - `listWhatsAppGroups(tenantId)`: nunca lança.
 - `getToolSchemas(keys, scheduleConfig?, variableDefs?, handoff?)`: schemas das ações ativas.
 - `getAgentUsage`, `listAgents`, `getAgentOwned`.

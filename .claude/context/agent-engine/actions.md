@@ -3,7 +3,7 @@
 ## Módulo
 - `runAgentTurn(input)`: turno completo; grava msg do contato e resposta. Entradas extras: áudio (`incomingAudioUrl/Seconds/WasAudio/MessageKeyId`), `agentId?`, `skipUsageCheck`, `skipEnabledCheck` (só sandbox).
 - `appendMessage(conversationId, role, content, ...)`: grava `Message`.
-- `sendManualReply(tenantId, conversationId, text)`: humano responde; `sentBy: "human"`.
+- `sendManualReply(tenantId, conversationId, text, audio?)`: humano responde; `sentBy: "human"`, grava `needsHuman: false, agentPaused: true`.
 - `summarizeConversation(tenantId, conversationId)`: resumo + variáveis; mínimo `MIN_MESSAGES_TO_SUMMARIZE = 4`.
 - `rememberConversationVariables(...)`: grava `Conversation.variables`.
 - `saveHandoffConfig(tenantId, agentId, config)`; `notifyHandoffGroup(...)` nunca lança.
