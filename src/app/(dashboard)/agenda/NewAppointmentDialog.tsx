@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useRef } from "react";
+import { useActionState, useEffect, useId, useRef, useState } from "react";
 import { useActionToast } from "@/components/ui/toast";
 import { useRouter } from "next/navigation";
 import { CalendarPlus, X } from "lucide-react";
@@ -12,7 +12,9 @@ import { Alert, FormFeedback } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { SelectMenu } from "@/components/ui/select-menu";
 import { createManualAppointment } from "./actions";
+import { KIND_OPTIONS } from "./AppointmentClassification";
 
 export type ContactOption = { id: string; label: string };
 
@@ -52,6 +54,10 @@ export function NewAppointmentDialog({
   const router = useRouter();
   const [state, formAction, pending] = useActionState(createManualAppointment, null);
   useActionToast(state, pending, { entity: "agendamento", action: "create" });
+  // Controlado (o `SelectMenu` só existe assim): o reset nativo do formulário
+  // não o alcança, então volta ao vazio a cada abertura.
+  const [kind, setKind] = useState("");
+  const kindLabelId = useId();
 
   // Fecha e atualiza a lista quando o servidor confirmou.
   useEffect(() => {
@@ -63,7 +69,7 @@ export function NewAppointmentDialog({
 
   return (
     <>
-      <Button type="button" variant="outline" size="sm" onClick={() => ref.current?.showModal()}>
+      <Button type="button" variant="outline" size="sm" onClick={() => { setKind(""); ref.current?.showModal(); }}>
         <CalendarPlus size={14} aria-hidden />
         {triggerLabel}
       </Button>
@@ -162,6 +168,31 @@ export function NewAppointmentDialog({
                   </option>
                 ))}
               </Select>
+            </Field>
+          </div>
+
+          {/* Tipo e procedimento são perguntas diferentes: "avaliação para implante". */}
+          <div className="grid gap-5 sm:grid-cols-2">
+            <div>
+              <p id={kindLabelId} className="mb-1.5 text-sm font-medium text-white/80">
+                Tipo <span className="font-normal text-white/45">(opcional)</span>
+              </p>
+              <SelectMenu
+                options={KIND_OPTIONS}
+                value={kind}
+                onChange={setKind}
+                name="kind"
+                label="Tipo do agendamento"
+                labelledBy={kindLabelId}
+              />
+            </div>
+            <Field label="Procedimento" htmlFor="ag-procedure" optional>
+              <Input
+                {...fieldProps("ag-procedure")}
+                name="procedure"
+                placeholder="Ex: implante, clareamento"
+                maxLength={120}
+              />
             </Field>
           </div>
 

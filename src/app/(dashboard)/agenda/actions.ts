@@ -11,8 +11,12 @@ import {
   createAppointment,
   getScheduleConfig,
   hasConflictAnywhere,
-  markAppointmentDone,
+  setAppointmentAttendance,
+  setAppointmentClassification,
+  setAppointmentConfirmed,
+  type MarkResult,
 } from "@/modules/scheduling/repository";
+import { ATTENDANCE_LABELS, attendanceOf, parseAttendance, parseKind } from "@/modules/scheduling/dimensions";
 import {
   MAX_REMINDER_MINUTES,
   formatReminderLead,
@@ -49,6 +53,8 @@ const newSchema = z.object({
   durationMinutes: z.coerce.number().int().min(5).max(480),
   leadId: z.string().trim().optional(),
   notes: z.string().trim().max(500).optional(),
+  kind: z.string().optional(),
+  procedure: z.string().trim().max(120).optional(),
 });
 
 /**
@@ -119,6 +125,8 @@ export async function createManualAppointment(
     startsAt,
     durationMinutes,
     source: "manual",
+    kind: parseKind(parsed.data.kind),
+    procedure: parsed.data.procedure || null,
     timezone,
   });
 
@@ -136,18 +144,65 @@ export async function createManualAppointment(
 
 export async function cancelAppointmentAction(id: string): Promise<Result> {
   const { tenantId } = await requireTenant();
+  const current = await prisma.appointment.findFirst({ where: { id, tenantId }, select: { status: true, attendance: true } });
+  if (!current) return { ok: false, error: "Compromisso não encontrado." };
+  // O que aconteceu não deixa de ter acontecido: desfaça a marcação antes.
+  if (attendanceOf(current) !== "unknown") {
+    return { ok: false, error: "Esta consulta já tem comparecimento marcado. Desfaça a marcação antes de cancelar." };
+  }
   const canceled = await cancelAppointment(tenantId, id);
   if (!canceled) return { ok: false, error: "Compromisso não encontrado." };
   revalidateAgenda();
   return { ok: true, info: "Compromisso cancelado." };
 }
 
-export async function completeAppointmentAction(id: string): Promise<Result> {
+function markError(result: MarkResult, notAllowed: string): Result | null {
+  if (result === "not_found") return { ok: false, error: "Compromisso não encontrado." };
+  if (result === "not_allowed") return { ok: false, error: notAllowed };
+  return null;
+}
+
+/**
+ * Compareceu / faltou / desfazer. Só depois do horário: antes disso é
+ * previsão, e é justamente o que o relatório não pode contar como presença.
+ */
+export async function setAttendanceAction(id: string, value: string): Promise<Result> {
   const { tenantId } = await requireTenant();
-  const ok = await markAppointmentDone(tenantId, id);
+  const attendance = parseAttendance(value);
+  if (!attendance) return { ok: false, error: "Comparecimento inválido." };
+  const failed = markError(await setAppointmentAttendance(tenantId, id, attendance),
+    "Comparecimento só pode ser marcado depois do horário da consulta, e não em consulta cancelada.");
+  if (failed) return failed;
+  revalidateAgenda();
+  return { ok: true, info: attendance === "unknown" ? "Comparecimento voltou a não verificado." : `Marcado: ${ATTENDANCE_LABELS[attendance].toLowerCase()}.` };
+}
+
+/** Confirmar não é comparecer: só registra que o paciente disse que vem. */
+export async function setConfirmedAction(id: string, confirmed: boolean): Promise<Result> {
+  const { tenantId } = await requireTenant();
+  const failed = markError(await setAppointmentConfirmed(tenantId, id, confirmed),
+    "Só dá para confirmar uma consulta de pé que ainda não aconteceu.");
+  if (failed) return failed;
+  revalidateAgenda();
+  return { ok: true, info: confirmed ? "Consulta confirmada." : "Confirmação removida." };
+}
+
+const classificationSchema = z.object({
+  kind: z.string().optional(),
+  procedure: z.string().trim().max(120, "Procedimento com no máximo 120 caracteres.").optional(),
+});
+
+export async function setClassificationAction(id: string, input: { kind: string; procedure: string }): Promise<Result> {
+  const { tenantId } = await requireTenant();
+  const parsed = classificationSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Dados inválidos." };
+  // Valor desconhecido não vira um tipo chutado: só vazio volta a "não classificado".
+  const kind = parseKind(parsed.data.kind);
+  if (parsed.data.kind && !kind) return { ok: false, error: "Tipo inválido." };
+  const ok = await setAppointmentClassification(tenantId, id, { kind, procedure: parsed.data.procedure || null });
   if (!ok) return { ok: false, error: "Compromisso não encontrado." };
   revalidateAgenda();
-  return { ok: true, info: "Marcado como realizado." };
+  return { ok: true, info: "Classificação salva." };
 }
 
 // --------------------------------------------- lembretes de uma consulta

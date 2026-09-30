@@ -184,12 +184,38 @@ mensagem do contato e retorna `status: "human_handling"` sem gerar resposta —
 só nesta conversa, as outras do mesmo agente continuam normais. Diferente de
 `Agent.enabled` (`agent_off`), que é a chave geral e cala o agente em todas as
 conversas de cliente — mas não no chat de teste (`skipEnabledCheck`).
-"Devolver para o agente" desliga `agentPaused`.
+"Reativar agente" desliga `agentPaused` e `needsHuman`. Se o agente atribuído foi
+removido, arquivado ou desligado, a conversa passa para o agente ativo padrão.
+O webhook do WhatsApp e o widget usam o agente atribuído no próximo turno.
+Se a última mensagem real ainda não tem resposta, a reativação pede ao próprio
+agente para respondê-la, sem gravar a fala do contato de novo. O envio usa o
+mesmo número da conversa e uma trava por mensagem; falha incerta não é
+reenviada automaticamente. Conversa de teste e widget não fazem envio retroativo.
 
 Mensagens `role: "assistant"` carregam `sentBy: "agent" | "human" | null`
 (`Message.sentBy`) para diferenciar quem gerou a resposta — `role` continua
 igual nos dois casos, então o histórico que `getRecentMessages` devolve para
 o LLM não muda; `sentBy` é metadado só para UI/auditoria.
+
+### Datas relativas e histórico de outro dia (`time-context.ts`)
+
+O histórico vai ao LLM sem data. Um lembrete da véspera ("consulta amanhã às
+10:45") continua lá na manhã seguinte, e o agente repetia "te esperamos
+amanhã" no dia da consulta. Por isso, em **todo turno** (com ou sem
+agendamento), `conversationTimeContext` põe no system prompt, logo depois da
+persona: a data e hora de agora no fuso da agenda (padrão
+`America/Sao_Paulo`), a regra de nunca copiar "hoje"/"amanhã" do histórico
+nem dos exemplos da persona e, quando o histórico começa em outro dia, onde
+fica essa fronteira. `leadAppointmentsContext` (também a tool
+`list_appointments`) devolve cada consulta com o dia relativo **calculado no
+servidor** ("é HOJE, às 10:45"). Um único `now` por turno alimenta os três.
+
+- O aviso vai no system prompt, nunca como mensagem `system` no meio do
+  histórico: o Gemini junta todas num bloco só e a posição se perde.
+- Não prefixe data no conteúdo das mensagens do agente: o modelo imita o
+  prefixo nas respostas. No follow-up com IA (`follow-up/compose.ts`) o
+  prefixo é seguro porque a conversa vai como UMA mensagem de usuário.
+- Texto do contato nunca é citado no aviso — só a nossa própria mensagem.
 
 ### Resumo da conversa (`summary.ts`)
 

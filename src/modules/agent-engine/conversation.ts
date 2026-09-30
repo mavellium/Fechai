@@ -242,7 +242,9 @@ export async function getRecentMessages(conversationId: string, limit = 10) {
     where: { conversationId },
     orderBy: { createdAt: "desc" },
     take: limit,
-    select: { role: true, content: true },
+    // createdAt: o orquestrador avisa o LLM quando o histórico começa em outro
+    // dia (ver `time-context.ts`).
+    select: { role: true, content: true, createdAt: true },
   });
   return rows.reverse();
 }

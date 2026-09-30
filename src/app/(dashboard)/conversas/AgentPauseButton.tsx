@@ -1,59 +1,52 @@
 "use client";
 
-import { useState, useTransition } from "react";
 import { Pause, Play } from "lucide-react";
 import posthog from "posthog-js";
-import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { useSaveFeedback } from "@/components/ui/toast/use-save-feedback";
 import { setConversationAgentPaused } from "./actions";
 
 /**
  * Liga/desliga o agente NESTA conversa.
  *
- * É a resposta ao "como faço o agente voltar a responder?": a reação do atendente
- * parada pausava a IA sem nenhum botão visível para retomá-la na mesma tela —
- * o "Marcar como resolvida" só tirava a conversa da fila e a IA continuava
- * muda. Este toggle aparece no cabeçalho do histórico e faz os dois lados: pausa
- * uma conversa que você quer atender na mão e retoma a que a reação parou.
+ * O controle aparece no cabeçalho do histórico. Reativar também atribui um
+ * agente ativo quando a conversa ficou sem um e limpa a prioridade pendente.
  */
 export function AgentPauseButton({
   conversationId,
   paused,
+  agentAvailable,
+  needsHuman,
 }: {
   conversationId: string;
   paused: boolean;
+  agentAvailable: boolean;
+  needsHuman: boolean;
 }) {
-  const [error, setError] = useState<string | null>(null);
-  const [pending, start] = useTransition();
+  const save = useSaveFeedback({ entity: "atendimento" });
+  const reactivate = paused || !agentAvailable || needsHuman;
 
-  function toggle() {
-    setError(null);
-    start(async () => {
-      const nextPaused = !paused;
-      const res = await setConversationAgentPaused(conversationId, nextPaused);
-      if (!res.ok) {
-        setError(res.error ?? "Não foi possível salvar agora. Tente de novo.");
-        return;
-      }
-      posthog.capture("conversation_agent_pause_toggled", { paused: nextPaused });
-    });
+  async function toggle() {
+    const nextPaused = !reactivate;
+    const res = await save.run(() => setConversationAgentPaused(conversationId, nextPaused));
+    if (res.ok) posthog.capture("conversation_agent_pause_toggled", { paused: nextPaused });
   }
 
   return (
-    <div className="space-y-1.5">
+    <div>
       <Button
         type="button"
         size="sm"
-        variant={paused ? "default" : "ghost"}
+        variant={reactivate ? "default" : "ghost"}
         onClick={toggle}
-        loading={pending}
+        loading={save.saving}
         loadingLabel="Salvando"
         className="w-full"
       >
-        {paused ? (
+        {reactivate ? (
           <>
             <Play size={14} aria-hidden />
-            Ativar agente nesta conversa
+            Reativar agente
           </>
         ) : (
           <>
@@ -62,7 +55,6 @@ export function AgentPauseButton({
           </>
         )}
       </Button>
-      {error && <Alert tone="danger">{error}</Alert>}
     </div>
   );
 }

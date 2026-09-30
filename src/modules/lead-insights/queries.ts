@@ -1,6 +1,8 @@
 import { prisma } from "@/lib/prisma";
 import { getServiceArea } from "./service-area-store";
-import { summarizeLeadQuality, type LeadQuality, type LeadRow } from "./summary";
+import { classifyCity } from "./service-area";
+import { leadOutcome, summarizeLeadQuality, type LeadQuality, type LeadRow } from "./summary";
+import type { LeadEvidence } from "@/modules/reports/monthly-evidence";
 
 /** Teto de leads lidos por consulta: janela "tudo" de conta grande não pode varrer a tabela inteira. */
 const MAX_LEADS = 20_000;
@@ -16,6 +18,19 @@ export async function loadLeadQuality(
   range: { from: Date | null; to: Date },
   options: { agentIds?: string[]; now?: Date } = {},
 ): Promise<LeadQuality> {
+  return (await loadLeadQualityDetail(tenantId, range, options)).quality;
+}
+
+/**
+ * O mesmo agregado e, lead a lead, o que o compôs — para o relatório mensal
+ * abrir "273 leads" nos 273 registros. Identificador, datas, cidade e as
+ * classificações; nada de nome, telefone ou texto de conversa.
+ */
+export async function loadLeadQualityDetail(
+  tenantId: string,
+  range: { from: Date | null; to: Date },
+  options: { agentIds?: string[]; now?: Date } = {},
+): Promise<{ quality: LeadQuality; leads: LeadEvidence[] }> {
   const [area, leads] = await Promise.all([
     getServiceArea(tenantId),
     prisma.lead.findMany({
@@ -26,11 +41,11 @@ export async function loadLeadQuality(
         ...(options.agentIds?.length ? { conversation: { agentId: { in: options.agentIds } } } : {}),
       },
       select: {
-        createdAt: true, status: true, disqualifiedAt: true, disqualifiedReason: true,
+        id: true, createdAt: true, status: true, disqualifiedAt: true, disqualifiedReason: true,
         appointments: { select: { status: true } },
         conversation: {
           select: {
-            needsHuman: true, lastInboundAt: true, followUpReason: true,
+            id: true, needsHuman: true, lastInboundAt: true, followUpReason: true,
             reportEvents: { where: { kind: "handoff" }, select: { id: true }, take: 1 },
             insight: { select: { city: true, cityKey: true, firstQuestionKey: true, lossReasonKey: true } },
           },
@@ -55,5 +70,13 @@ export async function loadLeadQuality(
     },
     insight: lead.conversation?.insight ?? null,
   }));
-  return summarizeLeadQuality(rows, area, options.now ?? new Date());
+  const now = options.now ?? new Date();
+  const detail: LeadEvidence[] = rows.map((row, i) => {
+    const { outcome, lossKey } = leadOutcome(row, now);
+    const cityKey = row.insight?.cityKey ?? null;
+    return { leadId: leads[i].id, conversationId: leads[i].conversation?.id ?? null, createdAt: row.createdAt.toISOString(),
+      city: row.insight?.city ?? null, verdict: cityKey ? classifyCity(area, cityKey) : null,
+      outcome, lossKey, doubtKey: row.insight?.firstQuestionKey ?? null };
+  });
+  return { quality: summarizeLeadQuality(rows, area, now), leads: detail };
 }

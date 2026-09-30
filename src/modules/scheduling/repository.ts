@@ -10,6 +10,7 @@ import {
   pushAppointmentToClinicorp,
 } from "./clinicorp";
 import { dayKeyInZone, monthRangeUtc, parseLocalDateTime, partsInZone, zonedTimeToUtc } from "./time";
+import { canConfirm, canMarkAttendance, type AppointmentKind, type Attendance } from "./dimensions";
 
 /**
  * Leitura e escrita da agenda. Toda query filtra por tenantId (regra do
@@ -30,6 +31,9 @@ export type CreateAppointmentInput = {
   durationMinutes: number;
   source: "agent" | "manual";
   serviceType?: string | null;
+  /** Só com escolha explícita; null = não classificado (ver `dimensions.ts`). */
+  kind?: AppointmentKind | null;
+  procedure?: string | null;
   timezone: string;
 };
 
@@ -201,6 +205,8 @@ export async function createAppointment(input: CreateAppointmentInput) {
       endsAt,
       source: input.source,
       serviceType: input.serviceType ?? null,
+      kind: input.kind ?? null,
+      procedure: input.procedure?.trim() || null,
       // Não deixe o worker enviar lembrete enquanto a tentativa ainda está
       // aguardando a resposta que pode recusá-la por conflito.
       reminderOverride: [],
@@ -222,6 +228,7 @@ export async function createAppointment(input: CreateAppointmentInput) {
     patientName: input.patientName,
     notes: input.notes,
     serviceType: input.serviceType,
+    procedure: input.procedure,
     startsAt: input.startsAt,
     endsAt,
     timeZone: input.timezone,
@@ -308,7 +315,8 @@ export async function rescheduleAppointment(input: {
   }
   const changed = await prisma.appointment.updateMany({
     where: { id: previous.id, tenantId: input.tenantId, leadId: input.leadId, status: "scheduled", startsAt: previous.startsAt, endsAt: previous.endsAt },
-    data: { startsAt: input.startsAt, endsAt },
+    // A confirmação era do horário antigo: o paciente ainda não confirmou este.
+    data: { startsAt: input.startsAt, endsAt, rescheduledAt: new Date(), confirmedAt: null, confirmationSource: null },
   });
   if (!changed.count) return { status: "unavailable" } as const;
 
@@ -328,6 +336,7 @@ export async function rescheduleAppointment(input: {
       patientName: previous.patientName ?? undefined,
       notes: previous.notes,
       serviceType: previous.serviceType,
+      procedure: previous.procedure,
       lead,
     })
       : Promise.resolve({ status: "failed", error: "Não foi possível remover o horário anterior no Clinicorp." } as const),
@@ -341,7 +350,12 @@ export async function rescheduleAppointment(input: {
     // combinado, e deixe o agente consultar alternativas para uma nova escolha.
     const reverted = await prisma.appointment.updateMany({
       where: { id: previous.id, tenantId: input.tenantId, status: "scheduled", startsAt: input.startsAt, endsAt },
-      data: { startsAt: previous.startsAt, endsAt: previous.endsAt },
+      // Reposto por inteiro: a remarcação não aconteceu, então nem conta como
+      // remarcada nem perde a confirmação do horário original.
+      data: {
+        startsAt: previous.startsAt, endsAt: previous.endsAt, rescheduledAt: previous.rescheduledAt,
+        confirmedAt: previous.confirmedAt, confirmationSource: previous.confirmationSource,
+      },
     });
     if (!reverted.count) return { status: "unavailable" } as const;
     const newGoogleRemoved = googleRemoved && googleEventId
@@ -353,7 +367,7 @@ export async function rescheduleAppointment(input: {
       }) : Promise.resolve(googleEventId),
       clinicorpRemoved && previous.clinicorpAppointmentId ? pushAppointmentToClinicorp(input.tenantId, {
         title: previous.title, patientName: previous.patientName ?? undefined, notes: previous.notes,
-        serviceType: previous.serviceType,
+        serviceType: previous.serviceType, procedure: previous.procedure,
         startsAt: previous.startsAt, endsAt: previous.endsAt, timeZone: input.timezone, lead,
       }) : Promise.resolve({ status: "skipped" } as const),
     ]);
@@ -376,10 +390,62 @@ export async function rescheduleAppointment(input: {
   return { status: "rescheduled", clinicorpSync } as const;
 }
 
-export async function markAppointmentDone(tenantId: string, id: string) {
+export type MarkResult = "ok" | "not_found" | "not_allowed";
+
+/**
+ * Comparecimento marcado por alguém da clínica. `unknown` desfaz a marcação.
+ *
+ * A trava de horário vai no próprio WHERE (e não só num `if` antes): uma
+ * consulta remarcada para depois entre a leitura e a escrita não pode ganhar
+ * "compareceu" antes de acontecer. Linha legada `done` entra e sai normalizada.
+ */
+export async function setAppointmentAttendance(
+  tenantId: string,
+  id: string,
+  attendance: Attendance,
+  now = new Date(),
+): Promise<MarkResult> {
+  const row = await prisma.appointment.findFirst({ where: { id, tenantId }, select: { status: true, startsAt: true } });
+  if (!row) return "not_found";
+  if (!canMarkAttendance(row, now)) return "not_allowed";
+  const { count } = await prisma.appointment.updateMany({
+    where: { id, tenantId, status: { in: ["scheduled", "done"] }, startsAt: { lte: now } },
+    data: {
+      status: "scheduled",
+      attendance,
+      attendanceSource: attendance === "unknown" ? null : "human",
+      attendanceAt: attendance === "unknown" ? null : now,
+    },
+  });
+  return count ? "ok" : "not_allowed";
+}
+
+/** Confirmação da presença futura. Não toca em `attendance`. */
+export async function setAppointmentConfirmed(
+  tenantId: string,
+  id: string,
+  confirmed: boolean,
+  now = new Date(),
+): Promise<MarkResult> {
+  const row = await prisma.appointment.findFirst({ where: { id, tenantId }, select: { status: true, startsAt: true } });
+  if (!row) return "not_found";
+  if (!canConfirm(row, now)) return "not_allowed";
+  const { count } = await prisma.appointment.updateMany({
+    where: { id, tenantId, status: "scheduled", startsAt: { gt: now } },
+    data: confirmed ? { confirmedAt: now, confirmationSource: "human" } : { confirmedAt: null, confirmationSource: null },
+  });
+  return count ? "ok" : "not_allowed";
+}
+
+/** Tipo e procedimento corrigidos à mão. `kind: null` volta a "não classificado". */
+export async function setAppointmentClassification(
+  tenantId: string,
+  id: string,
+  input: { kind: AppointmentKind | null; procedure: string | null },
+): Promise<boolean> {
   const { count } = await prisma.appointment.updateMany({
     where: { id, tenantId },
-    data: { status: "done" },
+    data: { kind: input.kind, procedure: input.procedure?.trim() || null },
   });
   return count > 0;
 }

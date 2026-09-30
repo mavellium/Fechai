@@ -4,7 +4,11 @@
 - **Coorte:** leads reais (`isTest: false`) com `createdAt` em `[from, to)`; `from: null` = desde o início.
 - **Select:** só metadados (status, agendamentos, `needsHuman`, `lastInboundAt`, `followUpReason`, evento handoff, insight). **Nunca** nome, telefone ou texto de conversa.
 - **Teto:** 20.000 leads. **Escopo:** `agentIds` filtra por `conversation.agentId`.
-- **Uso:** `/relatorios?visao=leads` e `computeMonthlyReport` (só o mês, no escopo de agentes).
+- **Uso:** `/relatorios?visao=leads`.
+
+## loadLeadQualityDetail(tenantId, range, options) → { quality, leads: LeadEvidence[] }
+- Mesmo agregado + um registro por lead (id do lead/conversa, data, cidade dita, veredito, resultado, `lossKey`, `doubtKey`), com as mesmas `leadOutcome`/`classifyCity`.
+- **Uso:** `computeMonthlyReport` (só o mês, no escopo de agentes) → `leadQuality` + `evidence.leads` ("Ver registros" no painel; nunca no PDF).
 
 ## getServiceArea(tenantId) → ServiceArea | null
 - Nunca lança; `null` = não configurada (ou ilegível).

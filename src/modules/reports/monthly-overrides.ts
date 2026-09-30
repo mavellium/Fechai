@@ -2,6 +2,7 @@ import { z } from "zod";
 import { normalizeLabel, type MonthlyAssumptions } from "./monthly-config";
 import type { MonthlyMetrics } from "./monthly";
 import { returnedHours } from "./monthly-time";
+import { blocksRevenue, detectMonthlyPendencies } from "./monthly-pendencies";
 
 const count = z.number().int().min(0).max(10_000_000);
 const split = z.object({ inside: count.optional(), outside: count.optional(), unclassified: count.optional() }).strict();
@@ -66,20 +67,11 @@ export function applyMonthlyOverrides(auto: MonthlyMetrics, overrides: MonthlyMe
       ? Math.round(p.attendedOutside * premise.ticketCents * premise.conversionBps / 10_000) : null;
     return { ...p, revenueCents };
   });
-  if (!config.humanHours) m.missing.push("Horário humano não informado.");
-  if (m.attendanceUnknown) m.missing.push(`${m.attendanceUnknown} avaliação(ões) sem comparecimento confirmado.`);
-  if (m.untypedAppointments) m.missing.push(`${m.untypedAppointments} agendamento(s) sem tipo de atendimento; confira se são avaliações.`);
-  if (m.attended.unclassified) m.missing.push("Há avaliações realizadas sem horário de chegada do contato.");
-  if (m.procedures.some((p) => p.revenueCents === null)) m.missing.push("Faltam procedimento, ticket ou conversão de avaliações realizadas fora do horário.");
-  if (!config.procedures.length) m.missing.push("Ticket e conversão por procedimento ainda não informados.");
-  if (config.procedures.some((p) => p.ticketCents === null || p.conversionBps === null)) m.missing.push("Há procedimentos sem ticket ou conversão nas premissas.");
-  // Uma correção não pode criar receita maior que o total de presenças fora do expediente.
-  const outside = m.procedures.reduce((sum, p) => sum + p.attendedOutside, 0);
-  if (outside !== m.attended.outside) m.missing.push("Confira as avaliações realizadas fora do horário: o total deve corresponder à soma por procedimento.");
-  m.revenueCents = m.missing.length === 0 ? m.procedures.reduce((sum, p) => sum + (p.revenueCents ?? 0), 0) : null;
-  if (m.savingsCents === null) m.missing.push("Informe custo e carga mensal do atendente e o tempo por mensagem (ou por conversa) para a economia estimada.");
   m.investmentCents = config.investmentCents;
-  if (m.investmentCents === null) m.missing.push("Mensalidade não informada.");
+  // Regra única do que falta (a central de pendências lê a mesma função).
+  const pendencies = detectMonthlyPendencies(m, config);
+  m.missing = pendencies.map((p) => p.text);
+  m.revenueCents = blocksRevenue(pendencies) ? null : m.procedures.reduce((sum, p) => sum + (p.revenueCents ?? 0), 0);
   m.roiPercent = m.revenueCents !== null && m.savingsCents !== null && m.investmentCents !== null && m.investmentCents > 0
     ? Math.round((m.revenueCents + m.savingsCents - m.investmentCents) / m.investmentCents * 1000) / 10 : null;
   return m;

@@ -27,6 +27,9 @@ controle de publicação.
   `modules/lead-insights`, congelada no snapshot; opcional em fechamentos
   antigos). O PDF ganha uma segunda página só quando `leadQuality.leads > 0`.
   Ver [`lead-insights/README.md`](../lead-insights/README.md).
+- `monthly-evidence.ts` e `monthly-quality.ts`: os registros por trás de cada
+  número e o selo de qualidade de cada indicador — ver "Registros e selo de
+  qualidade" no [README da seção](../../app/(dashboard)/relatorios/README.md).
 - `monthly-overrides.ts`: valida `assumptions.metricOverrides` para o mês e o
   comparativo, aplica correções manuais e recalcula receita/economia/ROI.
   Correções não são herdadas ao copiar premissas para outro mês.

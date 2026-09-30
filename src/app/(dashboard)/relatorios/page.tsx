@@ -320,7 +320,7 @@ export default async function RelatoriosPage({
             <ChartPanel
               variant="attendanceOutcome"
               title="Comparecimento e no-show"
-              hint="Agendamentos do período, pelo status em que terminaram."
+              hint="Consultas que já aconteceram no período, pelo comparecimento marcado."
               attendanceOutcome={report.attendanceOutcome}
             />
           </FadeIn>

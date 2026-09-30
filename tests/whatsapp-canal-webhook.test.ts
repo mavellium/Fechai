@@ -73,10 +73,10 @@ const canaisGravados = () =>
     .filter((arg) => "whatsappProvider" in arg.data)
     .map((arg) => arg.data.whatsappProvider);
 
-function conversa(whatsappProvider: string | null) {
+function conversa(whatsappProvider: string | null, agentId: string | null = null) {
   mocks.getOrCreateConversation.mockResolvedValue({
     lead: { id: "lead-1", isTest: false },
-    conversation: { id: "conv-1", whatsappProvider },
+    conversation: { id: "conv-1", whatsappProvider, agentId },
   });
 }
 
@@ -100,6 +100,21 @@ beforeEach(() => {
 });
 
 describe("Canal da conversa na entrada", () => {
+  it("entrega a próxima mensagem ao agente atribuído à conversa", async () => {
+    conversa("evolution", "agente-reativado");
+    mocks.resolveAgent.mockImplementation(async (_tenantId: string, agentId?: string) => ({
+      id: agentId ?? "agente-1", stopOnEmoji: true, listenAudio: false, speakReplies: false,
+    }));
+
+    await processIncomingWhatsapp(BASE, fakeProvider("evolution"));
+
+    expect(mocks.resolveAgent).toHaveBeenCalledWith("tenant-1", "agente-reativado");
+    expect(mocks.runAgentTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "agente-reativado", conversationId: "conv-1" }),
+    );
+    expect(sendMessage).toHaveBeenCalledOnce();
+  });
+
   it("mensagem pela Meta: a conversa passa a ser da Meta e a resposta sai pelo mesmo número", async () => {
     conversa("evolution");
 

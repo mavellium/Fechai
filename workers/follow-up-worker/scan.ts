@@ -14,6 +14,7 @@ import { composeFollowUp } from "../../src/modules/follow-up/compose";
 import { parseScheduleConfig } from "../../src/modules/scheduling/config";
 import { partsInZone } from "../../src/modules/scheduling/time";
 import { sanitizeUnresolvedPlaceholders } from "../../src/modules/agent-engine/reply-sanitizer";
+import { DEFAULT_AGENT_TIMEZONE } from "../../src/modules/agent-engine/time-context";
 import { parseConversationVariables, withContactDefaults } from "../../src/modules/agent-engine/variables";
 import { isPhoneBlocked } from "../../src/modules/whatsapp/blocklist";
 
@@ -229,7 +230,7 @@ export async function scanAndSendFollowUps(now: Date = new Date()) {
     if (!next || now < next.dueAt || isStale(next.dueAt, now)) continue;
 
     // Fora da janela a etapa espera: ninguém quer "oi, sumiu?" às 3h.
-    const timezone = (c.agentId && timezoneByAgent.get(c.agentId)) || "America/Sao_Paulo";
+    const timezone = (c.agentId && timezoneByAgent.get(c.agentId)) || DEFAULT_AGENT_TIMEZONE;
     if (!isWithinFollowUpWindow(now, config.window, timezone)) continue;
 
     // O webhook barra novas mensagens desse contato, mas a conversa antiga
@@ -261,6 +262,8 @@ export async function scanAndSendFollowUps(now: Date = new Date()) {
           systemPrompt: c.agent?.systemPrompt ?? null,
           reference,
           values,
+          timeZone: timezone,
+          now,
         })
       : { text: reference, byAi: false };
 

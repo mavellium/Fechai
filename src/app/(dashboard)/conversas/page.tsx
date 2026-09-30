@@ -72,7 +72,7 @@ export default async function ConversasPage({
             lead: true,
             // `voiceId` vem junto do nome (mesma query) para o composer saber se
             // pode oferecer os botões de voz — ver `voiceReady` abaixo.
-            agent: { select: { name: true, voiceId: true, variableDefinitions: true } },
+            agent: { select: { name: true, enabled: true, archived: true, voiceId: true, variableDefinitions: true } },
             messages: { orderBy: { createdAt: "asc" } },
             _count: { select: { messages: true } },
           },

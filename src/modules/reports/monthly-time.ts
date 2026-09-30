@@ -1,6 +1,7 @@
 import { formatBRL } from "@/lib/format";
 import { normalizeLabel } from "./monthly-config";
 import type { MonthlyReport } from "./monthly";
+import type { MonthlyEvidence } from "./monthly-evidence";
 
 /**
  * "Tempo que o Fechai devolveu para sua equipe" — o bloco do ROI mensal que
@@ -41,6 +42,8 @@ export type MonthlyTimeMetrics = {
 };
 
 export type TimeMessage = {
+  /** Só para a lista de registros do painel (`monthly-evidence.ts`). */
+  id?: string;
   role: string; sentBy: string | null; createdAt: Date;
   /** Presente só em mensagem de áudio. `heard` = a IA recebeu a transcrição. */
   audio?: { seconds: number | null; heard: boolean } | null;
@@ -73,7 +76,7 @@ function stats(rows: { minutes: number; messages: number }[]): DurationStats {
  */
 export function calculateTimeMetrics(input: {
   start: Date; end: Date; conversations: TimeConversation[]; appointments: TimeAppointment[]; events: TimeEvent[];
-}): MonthlyTimeMetrics {
+}, evidence?: Pick<MonthlyEvidence, "messages" | "messagesExcluded">): MonthlyTimeMetrics {
   const { start, end } = input;
   const inMonth = (at: Date) => at >= start && at < end;
   let textMessages = 0, audios = 0, audioSeconds = 0, unmeasuredAudios = 0, longAudios = 0;
@@ -87,14 +90,18 @@ export function calculateTimeMetrics(input: {
   for (const conversation of input.conversations) {
     const messages = [...conversation.messages].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
     let waiting: TimeMessage[] = [];
+    const record = (w: TimeMessage, kind: "text" | "audio") => evidence?.messages.push({
+      messageId: w.id ?? "", conversationId: conversation.id, at: w.createdAt.toISOString(), kind, seconds: w.audio?.seconds ?? null });
     for (const m of messages) {
       if (m.role === "user") { waiting.push(m); continue; }
       if (m.role !== "assistant" || (m.sentBy !== "agent" && m.sentBy !== "human")) continue;
+      if (m.sentBy === "human" && evidence) evidence.messagesExcluded.humanFirst += waiting.filter((w) => inMonth(w.createdAt)).length;
       if (m.sentBy === "agent") for (const w of waiting) {
         if (!inMonth(w.createdAt)) continue;
-        if (!w.audio) { textMessages++; continue; }
-        if (!w.audio.heard) continue;
+        if (!w.audio) { textMessages++; record(w, "text"); continue; }
+        if (!w.audio.heard) { if (evidence) evidence.messagesExcluded.unheardAudio++; continue; }
         audios++;
+        record(w, "audio");
         if (w.audio.seconds === null) { unmeasuredAudios++; continue; }
         audioSeconds += w.audio.seconds;
         if (w.audio.seconds > LONG_AUDIO_SECONDS) longAudios++;
@@ -102,6 +109,7 @@ export function calculateTimeMetrics(input: {
       }
       waiting = [];
     }
+    if (evidence) evidence.messagesExcluded.noReply += waiting.filter((w) => inMonth(w.createdAt)).length;
 
     // Atendimento começa numa mensagem do contato; mensagem nossa depois de
     // 24h de silêncio (follow-up, lembrete, disparo) não abre atendimento.

@@ -11,13 +11,13 @@ import {
   runAgentTurn,
 } from "@/modules/agent-engine/orchestrator";
 import { transcribeAudio } from "@/modules/ai/transcribe";
-import { speakReply } from "@/modules/voice/reply";
 import { storeVoiceMessage } from "@/modules/voice/storage";
 import { audioDurationSeconds, UNTRANSCRIBED_AUDIO } from "@/modules/voice/received-audio";
 import { isPhoneBlocked } from "./blocklist";
 import { isWhatsappProviderName, setConversationChannel } from "./instances";
 import type { IncomingMessage, WhatsAppProvider } from "./provider";
 import { shouldPauseAgentForReaction } from "./reactions";
+import { sendAgentReply } from "./send-agent-reply";
 
 export type IncomingWebhookResult = {
   body: Record<string, unknown>;
@@ -110,8 +110,6 @@ export async function processIncomingWhatsapp(
       : ok({ ignored: "limite de taxa" });
   }
 
-  const agent = await resolveAgent(tenantId);
-
   // Com as duas conexões de pé, a conversa lembra por qual o contato fala: é
   // desse número que saem a resposta manual, o follow-up e o lembrete.
   const trackChannel = (conversation: { id: string; whatsappProvider?: string | null }) =>
@@ -125,12 +123,17 @@ export async function processIncomingWhatsapp(
     }
 
     if (incoming.isReaction) {
+      const existing = await prisma.lead.findFirst({
+        where: { tenantId, phone: incoming.fromPhone },
+        select: { conversation: { select: { agentId: true } } },
+      });
+      const reactionAgent = await resolveAgent(tenantId, existing?.conversation?.agentId ?? undefined);
       if (
-        agent &&
+        reactionAgent &&
         shouldPauseAgentForReaction({
           isReaction: incoming.isReaction,
           isFromMe: incoming.isFromMe,
-          stopOnEmoji: agent.stopOnEmoji,
+          stopOnEmoji: reactionAgent.stopOnEmoji,
         })
       ) {
         const { lead, conversation } = await getOrCreateConversation(
@@ -145,7 +148,7 @@ export async function processIncomingWhatsapp(
             data: { agentPaused: true, needsHuman: true },
           })
           .catch(() => {});
-        await notifyHandoffGroup(tenantId, agent.id, conversation.id, {
+        await notifyHandoffGroup(tenantId, reactionAgent.id, conversation.id, {
           isTest: lead.isTest,
           reason: "Atendente assumiu a conversa por reação no WhatsApp.",
         });
@@ -220,6 +223,7 @@ export async function processIncomingWhatsapp(
     incoming.fromName,
   );
   await trackChannel(conversation);
+  const agent = await resolveAgent(tenantId, conversation.agentId ?? undefined);
   if (incoming.messageKeyId) {
     const existing = await prisma.message.findUnique({
       where: { whatsappMessageId: incoming.messageKeyId },
@@ -260,6 +264,7 @@ export async function processIncomingWhatsapp(
       tenantId,
       conversationId: conversation.id,
       leadId: lead.id,
+      agentId: conversation.agentId ?? undefined,
       userMessage,
       incomingWasAudio: incoming.hasAudio,
       incomingAudioUrl: received?.audioUrl,
@@ -268,61 +273,17 @@ export async function processIncomingWhatsapp(
     });
     if (status !== "ok" || !reply) return ok({ ok: true, silent: status });
 
-    let keyId: string | null = null;
-    let sent = false;
-    const spoken = await speakReply({
-      text: reply,
-      settings: {
-        speakReplies: agent?.speakReplies ?? false,
-        voiceId: agent?.voiceId ?? null,
-        speechBlocklist: agent?.speechBlocklist ?? "",
-        voiceStyle: agent?.voiceStyle ?? null,
-      },
+    await sendAgentReply({
+      tenantId,
+      conversationId: conversation.id,
+      phone: incoming.fromPhone,
+      externalId: incoming.instanceExternalId,
+      provider,
+      reply,
+      replyMessageId,
       incomingWasAudio: incoming.hasAudio,
+      agent,
     });
-
-    if (spoken.spoken) {
-      try {
-        keyId = await provider.sendAudio(
-          incoming.instanceExternalId,
-          incoming.fromPhone,
-          {
-            base64: spoken.audio.toString("base64"),
-            mime: spoken.mime,
-          },
-        );
-        sent = true;
-      } catch (err) {
-        console.error(
-          "[whatsapp webhook] falha ao enviar áudio, enviando texto",
-          err,
-        );
-      }
-    }
-    if (!sent) {
-      keyId = await provider.sendMessage(
-        incoming.instanceExternalId,
-        incoming.fromPhone,
-        reply,
-      );
-    }
-    const audioUrl =
-      sent && spoken.spoken
-        ? await storeVoiceMessage({
-            tenantId,
-            conversationId: conversation.id,
-            audio: spoken.audio,
-            mime: spoken.mime,
-          })
-        : null;
-    if (replyMessageId && (keyId || audioUrl)) {
-      await prisma.message
-        .update({
-          where: { id: replyMessageId },
-          data: { whatsappMessageId: keyId, audioUrl },
-        })
-        .catch(() => {});
-    }
   } catch (err) {
     console.error("[whatsapp webhook] falha ao processar turno", err);
     return { body: { error: "falha" }, status: 500 };

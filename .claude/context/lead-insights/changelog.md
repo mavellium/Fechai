@@ -2,6 +2,15 @@
 
 **Instrução:** Atualize aqui cada vez que mexer neste módulo.
 
+### [2026-09-30] — Leads um a um no relatório mensal
+
+**Arquivos:**
+- `queries.ts`: `loadLeadQualityDetail` (`loadLeadQuality` passa a delegar a ele); select ganha `id` do lead e da conversa
+
+**Razão:** abrir "273 leads" nos registros que compõem o número.
+
+**Impacto:** sem schema novo; continua sem nome, telefone ou texto de conversa.
+
 ### [2026-09-29] — MVP da inteligência de conversas
 
 **Arquivos:**

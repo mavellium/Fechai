@@ -49,6 +49,8 @@ export const AUDIT_EVENTS = {
   "report.monthly_finalized": { label: "Fechou o relatório mensal", kind: "update", group: "admin" },
   "report.monthly_reopened": { label: "Reabriu o relatório mensal", kind: "update", group: "admin" },
   "report.monthly_delivered": { label: "Registrou envio ou reunião do relatório", kind: "update", group: "admin" },
+  "report.monthly_pendency_updated": { label: "Atualizou uma pendência do relatório mensal", kind: "update", group: "admin" },
+  "report.monthly_pendencies_requested": { label: "Registrou a solicitação de pendências à clínica", kind: "update", group: "admin" },
   // ── acesso ────────────────────────────────────────────────────────────
   "auth.login": { label: "Entrou na conta", kind: "auth", group: "auth" },
   "auth.login_failed": { label: "Falha ao entrar", kind: "auth", group: "auth" },

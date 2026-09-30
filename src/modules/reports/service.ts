@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { dateLabel } from "@/lib/format";
 import { planOf } from "@/modules/billing/plans";
 import { partsInZone, zonedTimeToUtc } from "@/modules/scheduling/time";
+import { attendanceOf } from "@/modules/scheduling/dimensions";
 import {
   costPerLeadCents as costPerLeadManual,
   reasonLabel,
@@ -199,8 +200,12 @@ export type HeatmapCell = { weekday: number; hour: number; count: number };
 /** Uma faixa de tempo até a primeira resposta, com a contagem em cada uma. */
 export type ResponseTimeBucket = { label: string; ai: number; human: number };
 
-/** Uma coluna do gráfico de comparecimento: concluídos × cancelados. */
-export type AttendanceOutcomePoint = { key: string; label: string; done: number; canceled: number };
+/**
+ * Uma coluna do gráfico de comparecimento, pelo horário da consulta:
+ * compareceu × faltou, e quantas ninguém conferiu. Agendado ou confirmado não
+ * entra em nenhuma das duas primeiras — ver `scheduling/dimensions.ts`.
+ */
+export type AttendanceOutcomePoint = { key: string; label: string; attended: number; noShow: number; unknown: number };
 
 export type PeriodReport = {
   kpis: PeriodKpis;
@@ -387,8 +392,7 @@ export async function computePeriodReport(tenantId: string, range: ReportRange):
     needsHuman,
     assistantMsgs,
     closedAppts,
-    canceledAppts,
-    doneAppts,
+    pastAppts,
     hotLeadsInPeriod,
     orderedMsgs,
     followUpConvos,
@@ -469,23 +473,16 @@ export async function computePeriodReport(tenantId: string, range: ReportRange):
       },
       select: { source: true, createdAt: true },
     }),
-    // Agendamentos cancelados no período — base do gráfico de comparecimento.
+    // Comparecimento: consultas de pé cujo HORÁRIO já passou dentro do
+    // período, pelo que alguém marcou. Antes era concluído × cancelado pela
+    // data de criação — cancelar não é faltar, e "concluído" não dizia se veio.
     prisma.appointment.findMany({
       where: {
         tenantId,
-        createdAt: { gte: from ?? undefined, lt: toExcl },
-        status: "canceled",
+        startsAt: { gte: from ?? undefined, lt: new Date(Math.min(toExcl.getTime(), Date.now())) },
+        status: { not: "canceled" },
       },
-      select: { createdAt: true },
-    }),
-    // Agendamentos concluídos no período — a outra metade do comparecimento.
-    prisma.appointment.findMany({
-      where: {
-        tenantId,
-        createdAt: { gte: from ?? undefined, lt: toExcl },
-        status: "done",
-      },
-      select: { createdAt: true },
+      select: { startsAt: true, status: true, attendance: true },
     }),
     // Funil: leads com 2+ mensagens do lead (engajados) já vem de engagedGroups;
     // aqui só o total de leads quentes/agendados CRIADOS no período (o funil é
@@ -634,15 +631,15 @@ export async function computePeriodReport(tenantId: string, range: ReportRange):
   }
   const closed: AiHumanPoint[] = buckets.map((b) => ({ ...b, ...closedMap.get(b.key)! }));
 
-  // ── comparecimento: concluído × cancelado, por bucket ──────────────────────
-  const outcomeMap = new Map(buckets.map((b) => [b.key, { done: 0, canceled: 0 }]));
-  for (const a of doneAppts) {
-    const slot = outcomeMap.get(bucketStart(a.createdAt, bucket).toISOString());
-    if (slot) slot.done++;
-  }
-  for (const a of canceledAppts) {
-    const slot = outcomeMap.get(bucketStart(a.createdAt, bucket).toISOString());
-    if (slot) slot.canceled++;
+  // ── comparecimento: compareceu × faltou × não verificado, pelo horário ────
+  const outcomeMap = new Map(buckets.map((b) => [b.key, { attended: 0, noShow: 0, unknown: 0 }]));
+  for (const a of pastAppts) {
+    const slot = outcomeMap.get(bucketStart(a.startsAt, bucket).toISOString());
+    if (!slot) continue;
+    const attendance = attendanceOf(a);
+    if (attendance === "attended") slot.attended++;
+    else if (attendance === "no_show") slot.noShow++;
+    else slot.unknown++;
   }
   const attendanceOutcome: AttendanceOutcomePoint[] = buckets.map((b) => ({ ...b, ...outcomeMap.get(b.key)! }));
 

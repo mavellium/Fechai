@@ -68,8 +68,8 @@ export async function GET(request: Request) {
     `${cell("Enviados")};${r.followUpRecovery.sent}`,
     `${cell("Com resposta depois")};${r.followUpRecovery.recovered}`,
     "",
-    "bucket;concluidos;cancelados",
-    ...r.attendanceOutcome.map((p) => `${cell(p.label)};${p.done};${p.canceled}`),
+    "bucket;compareceu;faltou;nao_verificado",
+    ...r.attendanceOutcome.map((p) => `${cell(p.label)};${p.attended};${p.noShow};${p.unknown}`),
   ];
 
   const csv = "\uFEFF" + lines.join("\r\n") + "\r\n";

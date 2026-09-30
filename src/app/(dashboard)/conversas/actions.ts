@@ -7,11 +7,12 @@ import { payloadTooLarge } from "@/lib/rate-limit";
 import { sendManualReply } from "@/modules/agent-engine/conversation";
 import { summarizeConversation } from "@/modules/agent-engine/summary";
 import { runAgentTurn, resolveAgent } from "@/modules/agent-engine/orchestrator";
+import { recoverPendingAgentReply } from "@/modules/agent-engine/recover-pending";
 import { transcribeAudio } from "@/modules/ai/transcribe";
 import { MAX_TTS_CHARS, isFishAudioConfigured, synthesize } from "@/modules/voice/fish";
 import { toSpeech } from "@/modules/voice/speech-text";
 
-type Result = { ok: boolean; error?: string };
+type Result = { ok: boolean; error?: string; info?: string };
 
 /**
  * Teto do áudio gravado à mão (~2 min de voz). Bem acima do `MAX_FORM_BYTES`
@@ -235,18 +236,57 @@ export async function sendRecordedAudioMessage(
 /**
  * Pausa/retoma o agente NESTA conversa (por conversa, não pelo agente inteiro).
  *
- * É a resposta ao "como faço ele voltar a responder?": a reação do atendente
- * liga `agentPaused` (e `needsHuman`) no webhook, e não havia nenhum botão que
- * desligasse os dois de uma vez — o "Marcar como resolvida" só limpava o
- * `needsHuman` e a IA continuava muda. `paused=false` limpa os dois juntos: a
- * conversa sai da fila "precisa de você" e o agente volta a responder.
+ * Ao retomar, mantém o agente atribuído se estiver ativo. Conversas de agente
+ * removido, arquivado ou desligado passam para o agente ativo padrão. Também
+ * limpa a pausa e o sinal de atendimento humano.
  */
 export async function setConversationAgentPaused(id: string, paused: boolean): Promise<Result> {
   const { tenantId } = await requireTenant();
 
+  if (!paused) {
+    const conversation = await prisma.conversation.findFirst({
+      where: { id, tenantId },
+      select: { agent: { select: { id: true, enabled: true, archived: true } } },
+    });
+    if (!conversation) return { ok: false, error: "Conversa não encontrada." };
+
+    const assigned = conversation.agent;
+    const agentId = assigned?.enabled && !assigned.archived
+      ? assigned.id
+      : (await prisma.agent.findFirst({
+          where: { tenantId, enabled: true, archived: false },
+          orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }],
+          select: { id: true },
+        }))?.id;
+    if (!agentId) {
+      return { ok: false, error: "Ative um agente em Agentes antes de devolver esta conversa." };
+    }
+
+    const res = await prisma.conversation.updateMany({
+      where: { id, tenantId },
+      data: { agentId, agentPaused: false, needsHuman: false },
+    });
+    if (res.count === 0) return { ok: false, error: "Conversa não encontrada." };
+
+    const recovery = await recoverPendingAgentReply(tenantId, id, agentId);
+    if (recovery.status === "failed") {
+      await prisma.conversation.updateMany({
+        where: { id, tenantId },
+        data: { needsHuman: true },
+      });
+    }
+
+    revalidatePath("/conversas");
+    revalidatePath("/inicio");
+    if (recovery.status === "failed") return { ok: false, error: recovery.error };
+    if (recovery.status === "sent") return { ok: true, info: "Agente reativado e resposta enviada à mensagem pendente." };
+    if (recovery.status === "in_progress") return { ok: true, info: "A resposta do agente já está em andamento." };
+    return { ok: true, info: "Agente reativado nesta conversa para atender a próxima mensagem." };
+  }
+
   const res = await prisma.conversation.updateMany({
     where: { id, tenantId },
-    data: paused ? { agentPaused: true } : { agentPaused: false, needsHuman: false },
+    data: { agentPaused: true },
   });
 
   if (res.count === 0) return { ok: false, error: "Conversa não encontrada." };

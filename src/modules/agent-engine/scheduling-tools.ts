@@ -3,6 +3,7 @@ import { isWithinBusinessHours, type ScheduleConfig } from "@/modules/scheduling
 import { cancelAppointment, findLeadAppointment, listFreeSlots, listUpcomingLeadAppointments, rescheduleAppointment } from "@/modules/scheduling/repository";
 import { dayKeyInZone, formatInZone, parseLocalDateTime, partsInZone, timeInZone } from "@/modules/scheduling/time";
 import type { ToolContext } from "./tools";
+import { relativeDayLabel } from "./time-context";
 import { describeRanges, getWeeklyAvailability } from "@/modules/scheduling/weekly-availability";
 
 const DEFAULT_AVAILABILITY_SEARCH_DAYS = 14;
@@ -97,13 +98,21 @@ export function schedulingToolAllowed(name: string, cfg: ScheduleConfig): boolea
     || (name === "reschedule_meeting" && cfg.allowRescheduling);
 }
 
-export async function leadAppointmentsContext(ctx: Pick<ToolContext, "tenantId" | "leadId">, cfg: ScheduleConfig): Promise<string> {
+export async function leadAppointmentsContext(
+  ctx: Pick<ToolContext, "tenantId" | "leadId">, cfg: ScheduleConfig, now = new Date(),
+): Promise<string> {
   const appointments = await listUpcomingLeadAppointments(ctx.tenantId, ctx.leadId);
   if (!appointments.length) return "Nenhuma consulta futura deste contato na agenda do fechai.";
   // Só IDs e horários: títulos/notas livres não viram instruções de sistema.
-  return "Consultas futuras deste contato na agenda do fechai:\n" + appointments.map((a) =>
-    `- ID ${a.id}: ${formatInZone(a.startsAt, cfg.timezone)} (${Math.round((a.endsAt.getTime() - a.startsAt.getTime()) / 60_000)} min).`,
-  ).join("\n");
+  // O dia relativo ("é HOJE") vem calculado: com só a data absoluta, o agente
+  // repetiu o "amanhã" do lembrete da véspera na manhã da consulta.
+  return [
+    "Consultas futuras deste contato na agenda do fechai:",
+    ...appointments.map((a) =>
+      `- ID ${a.id}: ${formatInZone(a.startsAt, cfg.timezone)} (${Math.round((a.endsAt.getTime() - a.startsAt.getTime()) / 60_000)} min) — é ${relativeDayLabel(a.startsAt, now, cfg.timezone).toUpperCase()}, às ${timeInZone(a.startsAt, cfg.timezone)}.`,
+    ),
+    `- Ao mencionar uma dessas consultas, use o dia indicado aqui ("hoje", "amanhã" ou a data), mesmo que uma mensagem anterior da conversa diga outra coisa.`,
+  ].join("\n");
 }
 
 /** "2026-09-16" + 2 -> "2026-09-18". Aritmética de calendário, sem fuso. */

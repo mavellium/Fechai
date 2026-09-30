@@ -87,6 +87,8 @@ export function ConversationThread({
         <AgentPauseButton
           conversationId={conversation.id}
           paused={conversation.agentPaused}
+          agentAvailable={Boolean(conversation.agent?.enabled && !conversation.agent.archived)}
+          needsHuman={conversation.needsHuman}
         />
         <div className="mt-2 xl:hidden">
           <ConversationVariables definitions={conversation.variableDefinitions} values={conversation.variables} />

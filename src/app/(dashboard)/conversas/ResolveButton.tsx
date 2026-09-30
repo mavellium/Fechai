@@ -1,65 +1,59 @@
 "use client";
 
-import { useState, useTransition } from "react";
 import { Check, Undo2, Play } from "lucide-react";
 import posthog from "posthog-js";
-import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { useSaveFeedback } from "@/components/ui/toast/use-save-feedback";
 import { resolveConversation, reopenConversation, setConversationAgentPaused } from "./actions";
 
 /**
  * Ação principal de fila do histórico.
  *
- * A prioridade é do agente pausado: quando `agentPaused` está ligado (reação/
- * emoji de parada, ou resposta manual), o único botão que faz sentido é retomar
- * a IA. Antes, um turno parado por emoji caía no "Marcar como resolvida", que só
- * limpava `needsHuman` e deixava a IA muda para sempre — beco sem saída.
+ * Uma conversa pausada ou sem agente ativo pode ser devolvida ao atendimento
+ * automático. As demais mantêm as ações da fila humana.
  */
 export function ResolveButton({
   conversationId,
   needsHuman,
   agentPaused,
+  agentAvailable,
 }: {
   conversationId: string;
   needsHuman: boolean;
   /** Um humano respondeu manualmente e a IA está muda nesta conversa. */
   agentPaused: boolean;
+  agentAvailable: boolean;
 }) {
-  const [error, setError] = useState<string | null>(null);
-  const [pending, start] = useTransition();
+  const save = useSaveFeedback({ entity: "conversa", gender: "f" });
+  const reactivate = agentPaused || !agentAvailable;
 
-  function run() {
-    setError(null);
-    start(async () => {
-      const status = agentPaused ? "agent_resumed" : needsHuman ? "resolved" : "reopened";
-      const res = agentPaused
-        ? await setConversationAgentPaused(conversationId, false)
+  async function run() {
+    const status = reactivate ? "agent_resumed" : needsHuman ? "resolved" : "reopened";
+    const res = await save.run(() =>
+      reactivate
+        ? setConversationAgentPaused(conversationId, false)
         : needsHuman
-          ? await resolveConversation(conversationId)
-          : await reopenConversation(conversationId);
-      if (!res.ok) {
-        setError(res.error ?? "Não foi possível salvar agora. Tente de novo.");
-        return;
-      }
-      posthog.capture("conversation_status_changed", { status });
-    });
+          ? resolveConversation(conversationId)
+          : reopenConversation(conversationId),
+    );
+    if (res.ok) posthog.capture("conversation_status_changed", { status });
   }
 
   return (
     <div className="space-y-2">
       <Button
         type="button"
-        variant={agentPaused ? "default" : needsHuman ? "default" : "ghost"}
+        variant={reactivate ? "default" : needsHuman ? "default" : "ghost"}
         size="sm"
         className="w-full"
         onClick={run}
-        loading={pending}
+        loading={save.saving}
         loadingLabel="Salvando"
       >
-        {agentPaused ? (
+        {reactivate ? (
           <>
             <Play size={14} aria-hidden />
-            Ativar agente nesta conversa
+            Reativar agente
           </>
         ) : needsHuman ? (
           <>
@@ -73,13 +67,11 @@ export function ResolveButton({
           </>
         )}
       </Button>
-      {agentPaused && (
+      {reactivate && (
         <p className="text-xs leading-relaxed text-white/50">
-          O agente está pausado nesta conversa — por reação do atendente ou resposta manual. Ative-o para
-          ele voltar a atender.
+          Se houver uma mensagem pendente, o agente tentará respondê-la agora. Depois, atenderá as próximas.
         </p>
       )}
-      {error && <Alert tone="danger">{error}</Alert>}
     </div>
   );
 }

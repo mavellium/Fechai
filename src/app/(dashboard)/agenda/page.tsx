@@ -19,6 +19,7 @@ import {
   type ClinicorpAgendaItem,
 } from "@/modules/scheduling/clinicorp";
 import { listMonthAppointments } from "@/modules/scheduling/repository";
+import { loadAppointmentOriginHours } from "@/modules/reports/origin-hours";
 import { clockInZone, dayKeyInZone, todayInZone } from "@/modules/scheduling/time";
 import { agendaVersion, monthDays, warmNeighborMonths } from "@/modules/scheduling/agenda-pulse";
 import { AgendaLiveRefresh } from "./AgendaLiveRefresh";
@@ -166,6 +167,8 @@ export default async function AgendaPage({
   }));
 
   const selectedKey = selectedDay ? `${year}-${pad(month)}-${pad(selectedDay)}` : null;
+  // Só do dia aberto: é o único que a tela mostra, e a leitura nunca lança.
+  const originByAppointment = await loadAppointmentOriginHours(tenantId, selectedKey ? byDay.get(selectedKey) ?? [] : []);
   const selectedLabel = selectedKey
     ? new Intl.DateTimeFormat("pt-BR", {
         weekday: "long",
@@ -270,6 +273,8 @@ export default async function AgendaPage({
             agentReminders={scheduleAction?.enabled && config.reminderEnabled ? config.reminders : []}
             location={config.location}
             reminderSentAt={reminderSentAt}
+            originByAppointment={originByAppointment}
+            now={renderedDate}
             dialog={dialog}
           />
         </div>

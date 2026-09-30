@@ -42,6 +42,12 @@ Conexão cadastrada e consulta com sucesso são estados separados: falha da agen
 preserva a lista válida de status e mostra o endpoint/código HTTP no editor,
 sem expor o corpo externo. A importação atualiza o aviso e a lista carregados;
 comparecimentos vinculados continuam pendentes quando não há confirmação.
+Presença local é `Appointment.attendance` marcada na `/agenda` depois do
+horário (nunca "agendado" nem "confirmado"; o `done` legado vale como
+compareceu). Com espelho, o status mapeado do Clinicorp vence e, sem resposta
+de lá, só a marcação com `attendanceAt` conta. `kind` explícito vence
+`serviceType` × `evaluationTypes`, e `Appointment.procedure` vence a variável
+da conversa. Ver "Dimensões de um agendamento" em `modules/scheduling/README.md`.
 Eventos anteriores à implantação não são inventados. P-86 fica fora.
 A fila P-87 (`/perguntas`, [contrato](../../../../docs/P-87-perguntas-sem-resposta.md))
 acrescenta a linha **Tempo médio para a equipe responder**: média de
@@ -50,6 +56,76 @@ acrescenta a linha **Tempo médio para a equipe responder**: média de
 mostra "Sem registro", mês sem aprovação mostra "Nenhuma aprovada"). Formatação
 única em `formatGapTime`/`formatGapTimeShort` (`modules/knowledge-gaps/text.ts`);
 no PDF o tempo vai na célula de perguntas sem resposta para não aumentar a página.
+
+#### Central de pendências do fechamento (admin)
+
+Na revisão individual em rascunho, `MonthlyPendencyCenter` mostra o que falta
+por tópico (expediente, comparecimento, classificação, ticket/conversão,
+custo e tempo da equipe, conferência dos indicadores, mensalidade), agrupado
+por responsável (Recepção, Agenda, Financeiro, Mavellium), com as métricas
+que cada falta segura. Regras que não se quebram:
+
+- **Uma regra só.** `detectMonthlyPendencies` (`modules/reports/monthly-pendencies.ts`)
+  gera o `missing` em `applyMonthlyOverrides` e a receita só é bloqueada pelos
+  tópicos que afetam receita (`blocksRevenue`). A central nunca diz
+  "confirmado" para algo que trava "Fechar para entrega".
+- **Pendência é calculada, acompanhamento é gravado.** `MonthlyRoiPendency`
+  (um por tenant + mês + tópico) guarda só quem responde, quando pediu e a
+  resposta. Fica fora de `MonthlyRoiReport` para não mexer no `updatedAt`
+  que protege a revisão. **Registrar resposta não muda número**: a Mavellium
+  aplica o dado na revisão e salva. Resposta anterior ao último pedido não conta.
+- **Solicitação consolidada** (`buildPendencyRequest`): uma mensagem, por
+  área/pessoa, só com tópicos da clínica. Nunca leva dado de paciente (só
+  contagens e nomes de procedimento). Nada é enviado sozinho: abre `wa.me` /
+  `mailto` para o dono da conta (`User` OWNER) ou copia, e "Registrar envio"
+  marca os tópicos como "Aguardando clínica".
+- Relatório fechado não mostra a central e as actions recusam alteração.
+
+#### Registros e selo de qualidade de cada número
+
+Todo número do ROI mensal abre a própria origem ("Ver registros (N)" na tabela,
+nos destaques e nos blocos; "Ver cálculo" nos valores derivados) e carrega um
+selo: **verificado**, **estimado**, **cobertura parcial**, **pendente** ou
+**inconsistente**. Nasceu de um relatório com "10 agendamentos", um sem
+classificação de horário e oito sem tipo, sem como mostrar a composição.
+
+- **Mesma passada, nunca outra consulta.** `evaluateMonthlyMetrics`
+  (`monthly.ts`) devolve `{ metrics, evidence }`: cada `continue` que tira um
+  registro da conta anota o motivo (`AppointmentEvidence.scheduled/attended`,
+  `ConversationEvidence.excluded`, `messagesExcluded`). `calculateMonthlyMetrics`
+  é só `.metrics`. Reconstruir a lista com outra query é exatamente a
+  divergência que ela existe para explicar.
+- **Registros** (`monthly-evidence.ts`): conversas (contou/fora e por quê),
+  pares da primeira resposta (com mediana e separação IA × equipe), agendamentos
+  do agente criados ou com consulta no mês (tipo, procedimento, status local e
+  Clinicorp, chegada do contato, horário e critério), eventos, perguntas
+  aprovadas, mensagens de texto e áudios respondidos, mensagens por hora e leads
+  do mês (`lead-insights/queries.ts`). Só ids, datas e classificações — nenhum
+  nome, telefone ou texto; o id da conversa abre `/conversas?id=`. Datas em ISO
+  e formatadas na tela pelo fuso das premissas. Listas acima de
+  `EVIDENCE_LIMIT` (5.000) são cortadas com o total anotado — o número nunca.
+- **Selo** (`monthly-quality.ts`, puro): a pior situação encontrada vence
+  (inconsistente > pendente > parcial > estimado > verificado) e cada selo leva
+  os motivos. Contagens são verificadas; horas, receita, economia e ROI são
+  estimados; sem expediente, dentro/fora é pendente; sem horário de chegada,
+  sem tipo, comparecimento pendente, erro do Clinicorp, áudio sem duração ou
+  cobertura histórica incompleta são parciais. **Correção manual diferente do
+  que os registros somam é inconsistente** (compara `current` com
+  `automatic.current`); correção igual ao registro não muda o selo. Soma por
+  procedimento diferente das realizadas fora também é inconsistente.
+- **Congelados no snapshot.** `computeMonthlyReport` anexa `evidence` e
+  `quality` (calculado depois das correções); o fechamento grava os dois.
+  Relatório fechado antes deles não tem nenhum dos dois e o painel/PDF escondem
+  selo e registros (mesma regra de `time` e `leadQuality`). O editor do admin
+  recebe o relatório sem `evidence` (não usa e dobraria o payload), e o
+  assistente de IA continua só com agregados (`editableMonthlyMetrics`).
+- **PDF**: coluna "Qualidade" na tabela (x=250, entre o rótulo mais longo e o
+  valor), selo sob o ROI e ao lado de receita/economia/investimento, selo dos
+  leads na 2ª página. A legenda vai numa linha de **rodapé** (y=14, corpo
+  reduzido até caber), fora da área de conteúdo: na página cheia não sobra
+  espaço para ela no corpo (teste de conteúdo máximo em
+  `relatorio-mensal-tempo.test.ts`). Registros nunca vão ao PDF.
+- Testes: `tests/relatorio-mensal-registros.test.ts`.
 
 #### Tempo que o Fechai devolveu para sua equipe
 
@@ -92,7 +168,7 @@ trabalho da recepção assumido pelo agente. Regras que não se quebram:
 
 `/relatorios` tem **três visões do produto**, trocadas por um toggle no topo (querystring `?visao=`), além da visão de afiliados para participantes do programa:
 
-- **Operacional** (padrão): KPIs com delta vs. período anterior, gráficos (fluxo, resultados, atendimento IA×humano, leads fechados IA×humano, donut por agente, leads por status, funil de conversão, resolução autônoma, recuperação por follow-up, horários de pico, tempo até a primeira resposta, comparecimento/no-show) e exportação CSV.
+- **Operacional** (padrão): KPIs com delta vs. período anterior, gráficos (fluxo, resultados, atendimento IA×humano, leads fechados IA×humano, donut por agente, leads por status, funil de conversão, resolução autônoma, recuperação por follow-up, horários de pico, tempo até a primeira resposta, comparecimento/no-show — compareceu × faltou pelo horário da consulta, com "não verificado" na tabela; cancelada não entra) e exportação CSV.
 - **Financeiro**: retorno financeiro **estimado** do investimento no projeto — KPIs (Retorno, Investido, ROI, Ponto de equilíbrio), gráfico de retorno acumulado × investido, retorno por agente, retorno mês a mês e custo por lead fechado. O valor por lead é definido manualmente pelo dono da conta; sem ele, os gráficos que dependem desse valor mostram um estado vazio com a chamada para definir, nunca uma série de zeros. No fim da visão fica **"O que o agente filtrou"** (triagem): contatos que o agente encerrou por não serem clientes em potencial, e o tempo/dinheiro que isso poupou.
 - **ROI mensal** (`mensal`): competência mensal fechada pela Mavellium, com receita somente de avaliações realizadas de contatos que chegaram fora do horário humano, economia estimada, premissas por procedimento e PDF de uma página. Contrato em `docs/P-79-relatorio-mensal-roi.md`.
 
@@ -128,6 +204,7 @@ Tudo começa na `page.tsx`, que resolve a janela (`?periodo=`/`?de=&ate=`), comp
 | Arquivo | Papel |
 | --- | --- |
 | `page.tsx` | Server Component: lê `?periodo/de/ate/visao/mes`, resolve janela e publicações, computa sob demanda e renderiza Operacional, Financeiro, ROI mensal ou afiliados conforme papel/visão. |
+| `MonthlyEvidence.tsx` / `EvidenceDialog.tsx` | Selo de qualidade (`QualityBadge`) e "Ver registros"/"Ver cálculo" de cada indicador do ROI mensal: tabelas montadas no servidor a partir de `report.evidence`, abertas num `Modal` (`size="full"`) que só monta o conteúdo aberto. |
 | `MonthlyView.tsx` | Cinco partes do ROI mensal, bloco "Tempo que o Fechai devolveu" (`TimeReturnedCard`), comparação, premissas, fontes e link para exportação do snapshot em PDF. |
 | `RangePicker.tsx` | `<details>` com presets de período + intervalo custom; **preserva `?visao=`** nos links e no form (hidden input). |
 | `FinancialView.tsx` | "use client": linha de KPIs, card "Retorno estimado" + "Valor do lead" com `<dialog>` (campo com máscara `CurrencyInput`), delega os gráficos a `FinancialCharts.tsx`. |

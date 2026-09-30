@@ -11,6 +11,7 @@ import {
   listUpcomingLeadAppointments,
 } from "@/modules/scheduling/repository";
 import { formatInZone, parseLocalDateTime } from "@/modules/scheduling/time";
+import { parseKind } from "@/modules/scheduling/dimensions";
 import { DISQUALIFY_REASONS, parseReason } from "./disqualify";
 import { notifyHandoffGroup, handoffToolDescription, type HandoffConfig } from "./handoff";
 import { ACTION_BY_KEY, type ActionKey } from "./actions";
@@ -285,6 +286,8 @@ const TOOLS: Record<ActionKey, ToolDef> = {
           patientName: { type: "string", description: "Nome da pessoa que será atendida. Se o contato marcar para outra pessoa, use o nome dessa pessoa, não o nome do contato. Pergunte se ainda não souber." },
           notes: { type: "string", description: "Registre sempre o procedimento, a queixa ou o motivo informado pelo paciente na conversa (ex.: avaliação para implante), além das observações clínicas ou logísticas combinadas. Não omita um procedimento já informado, mesmo quando o tipo de atendimento for apenas avaliação. Não use para guardar o nome do paciente." },
           tipoAtendimento: { type: "string", description: "Nome EXATO do tipo de consulta combinado com o contato, copiado dos tipos com duração própria ou dos tipos que recebem lembrete no contexto. Registra o tipo e, quando há duração própria, define o tamanho do bloco. Omita quando o negócio não tiver tipos ou quando o contato não disse qual quer." },
+          categoria: { type: "string", enum: ["avaliacao", "retorno", "procedimento"], description: "Categoria da consulta, só se o contato disse explicitamente (primeira avaliação, retorno de tratamento, realizar um procedimento). Na dúvida, omita — fica como não classificada." },
+          procedimento: { type: "string", description: "Procedimento de interesse que o contato informou (ex.: implante, clareamento). É separado da categoria: 'avaliação para implante' tem categoria avaliacao e procedimento implante. Nunca deduza." },
           additionalAppointment: { type: "boolean", description: "True somente se o contato pediu explicitamente OUTRA consulta separada, mantendo a anterior. Nunca use para reagendamento." },
         },
         required: ["date", "time", "patientName"],
@@ -364,6 +367,9 @@ const TOOLS: Record<ActionKey, ToolDef> = {
         durationMinutes: duration.minutes,
         source: "agent",
         serviceType,
+        // Só o que o LLM passou explicitamente; valor fora da lista vira "não classificado".
+        kind: parseKind(args.categoria),
+        procedure: str(args.procedimento) ?? null,
         timezone: cfg.timezone,
       });
 

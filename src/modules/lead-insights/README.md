@@ -43,6 +43,7 @@ recordLeadInsight({ tenantId, conversationId, city?, procedure?, firstQuestionCa
 getServiceArea(tenantId) -> ServiceArea | null                            // nunca lança; null = não configurada
 saveServiceArea(tenantId, { baseCity, cities }) -> { ok: true, area } | { ok: false, error }
 loadLeadQuality(tenantId, { from: Date | null, to: Date }, { agentIds?, now? }) -> LeadQuality
+loadLeadQualityDetail(tenantId, range, options) -> { quality, leads: LeadEvidence[] }  // um registro por lead, para o relatório mensal
 summarizeLeadQuality(rows, area, now) -> LeadQuality                      // puro
 leadOutcome(row, now) -> { outcome: "scheduled" | "handoff" | "lost" | "open", lossKey }
 classifyCity(area, cityKey) -> "in" | "out" | "unknown"
@@ -101,6 +102,12 @@ em relatórios fechados antes do bloco = "sem registro", nunca zero; falha na
 consulta tira o bloco, não o relatório. O PDF continua de **uma página**; com
 `leadQuality.leads > 0` ganha uma **segunda página** (e "Página 1 de 2" no
 rodapé da primeira). Mês sem leads ou relatório antigo não muda o arquivo.
+
+O relatório usa `loadLeadQualityDetail`, que devolve o mesmo agregado e, lead a
+lead, o que o compôs (`MonthlyEvidence.leads`: id do lead e da conversa, data,
+cidade dita, veredito do raio, resultado, motivo e dúvida — calculados pelas
+**mesmas** `leadOutcome`/`classifyCity` da leitura). É o "Ver registros" do
+bloco no painel; o PDF não leva a lista. Continua sem nome, telefone ou texto.
 
 ## Schema
 
