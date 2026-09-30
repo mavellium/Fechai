@@ -173,8 +173,8 @@ describe("Leitura da config (parseHandoffConfig)", () => {
 describe("Motivo na descrição da tool (handoffToolDescription)", () => {
   const MOTIVO = "o paciente quiser fechar o orçamento";
 
-  it("sem config, fica a descrição de sempre", () => {
-    expect(handoffToolDescription()).toBe("Transfere a conversa para um atendente humano.");
+  it("sem config, não trata mero interesse como prioridade", () => {
+    expect(handoffToolDescription()).toContain("Não marque prioridade apenas porque o contato demonstrou interesse.");
   });
 
   it("com grupo ligado e motivo, diz ao agente quando transferir", () => {
@@ -192,7 +192,7 @@ describe("Motivo na descrição da tool (handoffToolDescription)", () => {
 
   it("motivo guardado com o grupo desligado não tem efeito", () => {
     expect(handoffToolDescription(config({ notifyGroup: false, groupReason: MOTIVO }))).toBe(
-      "Transfere a conversa para um atendente humano.",
+      handoffToolDescription(),
     );
   });
 

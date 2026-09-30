@@ -421,6 +421,8 @@ export type ClinicorpEventInput = {
   patientName?: string;
   notes?: string | null;
   serviceType?: string | null;
+  /** Procedimento de interesse (`Appointment.procedure`), também em `Procedures`. */
+  procedure?: string | null;
   startsAt: Date;
   endsAt: Date;
   timeZone: string;
@@ -514,7 +516,11 @@ export async function pushAppointmentToClinicorp(
     // Inclua também o motivo clínico da conversa, além do tipo que define a duração.
     const procedures = [
       ...(isTest ? ["Agendamento de teste feito no chat de teste do fechai. Pode excluir."] : []),
-      input.serviceType?.trim(), input.notes?.trim(),
+      input.serviceType?.trim(),
+      // A nota do agente costuma já dizer o procedimento; não repita.
+      input.procedure?.trim() && !input.notes?.toLowerCase().includes(input.procedure.trim().toLowerCase())
+        ? `Procedimento: ${input.procedure.trim()}` : null,
+      input.notes?.trim(),
     ].filter(Boolean).join("\n");
     const mobilePhone = !isTest && samePerson && input.lead?.phone
       ? clinicorpPhone(input.lead.phone) : undefined;

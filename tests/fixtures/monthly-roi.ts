@@ -1,5 +1,6 @@
-import { calculateMonthlyMetrics, type MonthlyConversation, type MonthlyAppointment, type MonthlyReport } from "@/modules/reports/monthly";
+import { evaluateMonthlyMetrics, type MonthlyConversation, type MonthlyAppointment, type MonthlyReport } from "@/modules/reports/monthly";
 import { EMPTY_ASSUMPTIONS, monthlyWindow, type MonthlyAssumptions } from "@/modules/reports/monthly-config";
+import { monthlyQuality } from "@/modules/reports/monthly-quality";
 
 export const roiConfig = (): MonthlyAssumptions => ({ ...EMPTY_ASSUMPTIONS,
   humanHours: [[], ...Array.from({ length: 5 }, () => [{ start: 540, end: 1080 }]), []],
@@ -26,12 +27,15 @@ export function roiInput() {
 }
 export function roiFixture(): MonthlyReport {
   const input = roiInput(), window = monthlyWindow("2026-09", input.config.timezone);
-  const current = calculateMonthlyMetrics(input);
-  return { version: 1, tenantName: "Clínica de demonstração - dados fictícios", month: "2026-09", label: "setembro de 2026", previousMonth: "2026-08",
+  const { metrics: current, evidence } = evaluateMonthlyMetrics(input);
+  const report: MonthlyReport = { version: 1, tenantName: "Clínica de demonstração - dados fictícios", month: "2026-09", label: "setembro de 2026", previousMonth: "2026-08",
     generatedAt: input.now.toISOString(), dueAt: window.dueAt.toISOString(), partial: false,
     assumptions: input.config, previousAssumptions: input.config, previousConfigured: true,
     current, previous: { ...current, newContacts: 0, qualified: 0, roiPercent: -100 }, clinicorpError: null, clinicorpStatusTypes: [],
     adjustments: "Revisamos a abordagem de implantes e o convite para a avaliação. Ajustamos a explicação das formas de pagamento conforme a política da clínica.",
     nextMonth: "Conferir comparecimento com a recepção e acompanhar a conversão de avaliações em tratamentos. Rever os horários com maior procura.",
-    decisionMaker: "Decisor de demonstração", status: "draft", finalizedAt: null, sentAt: null, meetingAt: null };
+    decisionMaker: "Decisor de demonstração", status: "draft", finalizedAt: null, sentAt: null, meetingAt: null,
+    automatic: { current, previous: { ...current, newContacts: 0, qualified: 0, roiPercent: -100 } }, evidence };
+  report.quality = monthlyQuality(report);
+  return report;
 }

@@ -6,6 +6,7 @@ import type { MonthlyReport } from "./monthly";
 import { formatDuration, formatMinutes, hoursPremise, timeHeadline } from "./monthly-time";
 import { formatGapTimeShort as gapTime } from "@/modules/knowledge-gaps/text";
 import { SUGGESTION_DISCLAIMER, leadQualityHeadline } from "@/modules/lead-insights/summary";
+import { QUALITY_FOOTER, QUALITY_LABEL, type QualityKey } from "./monthly-quality";
 
 /**
  * PDF A4 sem dados pessoais de pacientes. A primeira página é fixa e única (o
@@ -81,6 +82,10 @@ export async function generateMonthlyPdf(r: MonthlyReport): Promise<Uint8Array> 
   const num = (v: number | null, suffix = "") => v === null ? "Pendente" : `${v.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}${suffix}`;
   const money = (v: number | null) => v === null ? "Pendente" : formatBRL(v);
   const a = r.current, b = r.previous, c = r.assumptions;
+  // Selo de qualidade do painel, em texto: acompanha o número até o PDF.
+  // Relatório fechado antes do selo não tem `quality` e sai como antes.
+  const status = (key: QualityKey) => { const q = r.quality?.[key]; return q ? QUALITY_LABEL[q.status].toUpperCase() : ""; };
+  const QUALITY_X = 250;
   header();
   page.drawRectangle({ x: margin, y: y - 62, width, height: 78, color: rgb(0.95, 0.95, 0.95) });
   text("1 · ROI DO MÊS (ESTIMADO)", margin + 12, y, 9, bold, ink);
@@ -88,6 +93,10 @@ export async function generateMonthlyPdf(r: MonthlyReport): Promise<Uint8Array> 
   text(`Receita: ${money(a.revenueCents)}`, margin + 205, y - 3, 10, bold);
   text(`Economia: ${money(a.savingsCents)}`, margin + 205, y - 20, 10);
   text(`Investimento: ${money(a.investmentCents)}`, margin + 205, y - 37, 10);
+  text(status("roi"), margin + 12, y - 50, 6.5, bold, muted);
+  text(status("revenue"), margin + 400, y - 3, 6.5, bold, muted);
+  text(status("savings"), margin + 400, y - 20, 6.5, bold, muted);
+  text(status("investment"), margin + 400, y - 37, 6.5, bold, muted);
   y -= 78;
   // Explica a "Economia" do quadro acima; relatórios fechados antes dele não têm `time`.
   const t = a.time;
@@ -107,32 +116,32 @@ export async function generateMonthlyPdf(r: MonthlyReport): Promise<Uint8Array> 
     if (r.featuredCase) y -= paragraph(`Caso do mês: ${r.featuredCase}`, 8, width, margin, y, ink);
   }
   section("2 · O QUE ACONTECEU NO MÊS");
-  text("Indicador", margin, y, 8, bold); text(r.month, 343, y, 8, bold); text(r.previousMonth, 456, y, 8, bold); y -= 14;
-  const rows = [
-    ["Novos contatos atendidos", num(a.newContacts), num(b.newContacts)],
-    ["Conversas respondidas · dentro / fora", c.humanHours ? `${a.conversations.inside} / ${a.conversations.outside}` : "Pendente", r.previousAssumptions.humanHours ? `${b.conversations.inside} / ${b.conversations.outside}` : "Pendente"],
-    ["Primeira resposta média", num(a.firstResponseSeconds, " s"), num(b.firstResponseSeconds, " s")],
-    ["Leads qualificados", `${a.qualified}${a.trackingComplete ? "" : "*"}`, `${b.qualified}${b.trackingComplete ? "" : "*"}`],
-    ["Avaliações agendadas · dentro / fora", c.humanHours ? `${a.scheduled.inside} / ${a.scheduled.outside}` : "Pendente", r.previousAssumptions.humanHours ? `${b.scheduled.inside} / ${b.scheduled.outside}` : "Pendente"],
-    ["Avaliações realizadas · dentro / fora", c.humanHours ? `${a.attended.inside} / ${a.attended.outside}` : "Pendente", r.previousAssumptions.humanHours ? `${b.attended.inside} / ${b.attended.outside}` : "Pendente"],
-    ["Transbordos para humano", `${a.handoffs}${a.trackingComplete ? "" : "*"}`, `${b.handoffs}${b.trackingComplete ? "" : "*"}`],
+  text("Indicador", margin, y, 8, bold); if (r.quality) text("Qualidade", QUALITY_X, y, 8, bold); text(r.month, 343, y, 8, bold); text(r.previousMonth, 456, y, 8, bold); y -= 14;
+  const rows: [QualityKey, string, string, string][] = [
+    ["newContacts", "Novos contatos atendidos", num(a.newContacts), num(b.newContacts)],
+    ["conversations", "Conversas respondidas · dentro / fora", c.humanHours ? `${a.conversations.inside} / ${a.conversations.outside}` : "Pendente", r.previousAssumptions.humanHours ? `${b.conversations.inside} / ${b.conversations.outside}` : "Pendente"],
+    ["firstResponse", "Primeira resposta média", num(a.firstResponseSeconds, " s"), num(b.firstResponseSeconds, " s")],
+    ["qualified", "Leads qualificados", `${a.qualified}${a.trackingComplete ? "" : "*"}`, `${b.qualified}${b.trackingComplete ? "" : "*"}`],
+    ["scheduled", "Avaliações agendadas · dentro / fora", c.humanHours ? `${a.scheduled.inside} / ${a.scheduled.outside}` : "Pendente", r.previousAssumptions.humanHours ? `${b.scheduled.inside} / ${b.scheduled.outside}` : "Pendente"],
+    ["attended", "Avaliações realizadas · dentro / fora", c.humanHours ? `${a.attended.inside} / ${a.attended.outside}` : "Pendente", r.previousAssumptions.humanHours ? `${b.attended.inside} / ${b.attended.outside}` : "Pendente"],
+    ["handoffs", "Transbordos para humano", `${a.handoffs}${a.trackingComplete ? "" : "*"}`, `${b.handoffs}${b.trackingComplete ? "" : "*"}`],
     // O tempo da fila vai na mesma célula: a página é única e uma linha a mais
     // faria relatórios que já cabiam recusarem a exportação.
-    ["Perguntas sem resposta · tempo p/ responder", `${a.unanswered}${a.trackingComplete ? "" : "*"}${gapTime(a)}`, `${b.unanswered}${b.trackingComplete ? "" : "*"}${gapTime(b)}`],
+    ["unanswered", "Perguntas sem resposta · tempo p/ responder", `${a.unanswered}${a.trackingComplete ? "" : "*"}${gapTime(a)}`, `${b.unanswered}${b.trackingComplete ? "" : "*"}${gapTime(b)}`],
     // Horas devolvidas não têm linha aqui: estão no bloco de tempo, com o mês
     // anterior, e a página não comporta as duas coisas com conteúdo máximo.
-    ...(t ? [] : [["Horas assumidas (estimadas)", num(a.assumedHours, " h"), num(b.assumedHours, " h")]]),
-    ["ROI estimado", num(a.roiPercent, "%"), num(b.roiPercent, "%")],
+    ...(t ? [] : [["assumedHours", "Horas assumidas (estimadas)", num(a.assumedHours, " h"), num(b.assumedHours, " h")] as [QualityKey, string, string, string]]),
+    ["roi", "ROI estimado", num(a.roiPercent, "%"), num(b.roiPercent, "%")],
   ];
-  for (const [label, value, previous] of rows) {
-    text(label, margin, y, 8.5); text(value, 343, y, 8.5, bold); text(previous, 456, y, 8.5, regular, muted);
+  for (const [key, label, value, previous] of rows) {
+    text(label, margin, y, 8.5); text(status(key), QUALITY_X, y, 6.5, bold, muted); text(value, 343, y, 8.5, bold); text(previous, 456, y, 8.5, regular, muted);
     page.drawLine({ start: { x: margin, y: y - 4 }, end: { x: margin + width, y: y - 4 }, thickness: 0.35, color: rgb(0.88, 0.88, 0.88) });
     y -= 14;
   }
   const dataNote = [
     r.agentNames?.length ? `Agentes: ${r.agentNames.slice(0, 2).map((name) => name.slice(0, 35)).join(", ")}${r.agentNames.length > 2 ? ` + ${r.agentNames.length - 2}; lista completa no painel` : ""}.` : "",
     !a.trackingComplete || !b.trackingComplete ? "* Cobertura parcial: somente eventos registrados; histórico ausente não significa zero." : "",
-    `Sem horário classificado: ${a.conversations.unclassified} conversas; ${a.scheduled.unclassified} agendadas; ${a.attended.unclassified} realizadas. Presença pendente: ${a.attendanceUnknown}; sem tipo: ${a.untypedAppointments}.`,
+    `Sem horário: ${a.conversations.unclassified} conversas, ${a.scheduled.unclassified} agendadas, ${a.attended.unclassified} realizadas; presença pendente: ${a.attendanceUnknown}; sem tipo: ${a.untypedAppointments}.`,
     !r.previousConfigured ? "Mês anterior sem premissas financeiras/horário; apenas totais operacionais comparáveis." : "",
     Object.keys(r.metricOverrides?.current ?? {}).length || Object.keys(r.metricOverrides?.previous ?? {}).length ? "Inclui dados ajustados manualmente pela Mavellium; origens e detalhes disponíveis no painel." : "",
   ].filter(Boolean).join(" ");
@@ -169,6 +178,12 @@ export async function generateMonthlyPdf(r: MonthlyReport): Promise<Uint8Array> 
   page.drawLine({ start: { x: margin, y: 38 }, end: { x: margin + width, y: 38 }, thickness: 0.5, color: rgb(0.85, 0.85, 0.85) });
   const due = new Intl.DateTimeFormat("pt-BR", { timeZone: c.timezone }).format(new Date(r.dueAt));
   paragraph(`Decisor: ${r.decisionMaker || "a definir"} · entrega até ${due} · reunião curta`, 7, width, margin, 24);
+  // A legenda do selo vai no rodapé, fora da área de conteúdo (que tem ~2pt de
+  // folga): uma linha, com o corpo reduzido até caber na largura.
+  if (r.quality) {
+    const legend = safe(QUALITY_FOOTER, regular);
+    text(legend, margin, 14, Math.min(6.5, 6.5 * width / regular.widthOfTextAtSize(legend, 6.5)), regular, muted);
+  }
 
   const quality = r.leadQuality;
   if (quality && quality.leads > 0) {
@@ -191,8 +206,9 @@ export async function generateMonthlyPdf(r: MonthlyReport): Promise<Uint8Array> 
       ["Perderam", `${quality.outcomes.lost} (${pct(quality.outcomes.lost, quality.leads)})`],
     ];
     y -= 10;
-    for (const [label, value] of summary) {
+    for (const [i, [label, value]] of summary.entries()) {
       text(label, margin, y, 8.5); text(value, 343, y, 8.5, bold);
+      if (i === 0) text(status("leads"), QUALITY_X, y, 6.5, bold, muted);
       page.drawLine({ start: { x: margin, y: y - 4 }, end: { x: margin + width, y: y - 4 }, thickness: 0.35, color: rgb(0.88, 0.88, 0.88) });
       y -= 14;
     }

@@ -10,6 +10,7 @@ export function Stat({
   about,
   delta,
   compact,
+  footer,
 }: {
   label: string;
   value: string;
@@ -31,6 +32,8 @@ export function Stat({
   delta?: number;
   /** Versão de grade densa (home), com número menor. */
   compact?: boolean;
+  /** Linha extra sob o número (selo de qualidade, link para a origem). */
+  footer?: React.ReactNode;
 }) {
   return (
     <div
@@ -68,6 +71,7 @@ export function Stat({
         </p>
       )}
       {hint && <p className="mt-1 text-xs text-neutral panel:text-white/55">{hint}</p>}
+      {footer}
     </div>
   );
 }

@@ -23,6 +23,7 @@ import { getToolSchemas, runToolHandler, type ToolContext } from "./tools";
 import { parseHandoffConfig } from "./handoff";
 import { leadAppointmentsContext } from "./scheduling-tools";
 import { appendMessage, getRecentMessages } from "./conversation";
+import { conversationTimeContext, DEFAULT_AGENT_TIMEZONE } from "./time-context";
 import { sanitizeUnresolvedPlaceholders } from "./reply-sanitizer";
 import { loadConversationVariables, parseVariableDefinitions, variablesSystemContext } from "./variables";
 import { INJECTION_GUARD } from "./injection-guard";
@@ -78,7 +79,9 @@ export async function runAgentTurn(input: {
   incomingWasAudio?: boolean;
   /** Id do áudio no WhatsApp para ignorar reentregas do webhook. */
   incomingMessageKeyId?: string;
-  /** Agente que deve atender. Omitido (webhook do WhatsApp), usa o principal. */
+  /** Retomada explícita: usa a mensagem já registrada, sem duplicá-la no histórico. */
+  existingUserMessageId?: string;
+  /** Agente que deve atender. Omitido, usa o principal. */
   agentId?: string;
   /** Sandbox: pula a checagem de cota — testar não conta como atendimento. */
   skipUsageCheck?: boolean;
@@ -93,7 +96,13 @@ export async function runAgentTurn(input: {
 }): Promise<AgentTurn> {
   const { tenantId, conversationId, leadId, userMessage } = input;
 
-  if (input.incomingAudioUrl || input.incomingMessageKeyId || input.incomingAudioSeconds != null) {
+  if (input.existingUserMessageId) {
+    const existing = await prisma.message.findFirst({
+      where: { id: input.existingUserMessageId, conversationId, role: "user" },
+      select: { content: true },
+    });
+    if (existing?.content !== userMessage) throw new Error("Mensagem pendente mudou durante a retomada.");
+  } else if (input.incomingAudioUrl || input.incomingMessageKeyId || input.incomingAudioSeconds != null) {
     await appendMessage(conversationId, "user", userMessage, undefined, input.incomingMessageKeyId, input.incomingAudioUrl, input.incomingAudioSeconds);
   } else {
     await appendMessage(conversationId, "user", userMessage);
@@ -127,6 +136,13 @@ export async function runAgentTurn(input: {
   }
 
   const agent = await resolveAgent(tenantId, input.agentId);
+
+  if (!agent) {
+    await prisma.conversation
+      .update({ where: { id: conversationId }, data: { needsHuman: true } })
+      .catch(() => {});
+    return { reply: "", toolsUsed: [], status: "no_agent" };
+  }
 
   // Agente desligado: a mensagem do contato já ficou registrada, e a conversa
   // sobe para "precisa de você" — desligar o agente pausa a resposta
@@ -170,11 +186,21 @@ export async function runAgentTurn(input: {
   // atendimento, e propunha horários que a tool depois recusava.
   const scheduling = actions.find((a) => a.key === "schedule_meeting");
   const scheduleConfig = scheduling ? parseScheduleConfig(scheduling.config) : undefined;
+  // Um só "agora" por turno: data de hoje, dia relativo das consultas e a
+  // fronteira de dias do histórico precisam concordar entre si.
+  const now = new Date();
   const scheduleContext = scheduleConfig
-    ? scheduleSystemContext(scheduleConfig)
+    ? scheduleSystemContext(scheduleConfig, now)
     : "";
+  // Vai sempre, com ou sem agendamento: "amanhã" copiado de uma mensagem de
+  // ontem é erro em qualquer conversa (ver `time-context.ts`).
+  const timeContext = conversationTimeContext({
+    now,
+    timeZone: scheduleConfig?.timezone ?? DEFAULT_AGENT_TIMEZONE,
+    history,
+  });
   const appointmentsContext = scheduleConfig?.recognizeExisting
-    ? await leadAppointmentsContext({ tenantId, leadId }, scheduleConfig).catch((err) => {
+    ? await leadAppointmentsContext({ tenantId, leadId }, scheduleConfig, now).catch((err) => {
         console.error("[orchestrator] consulta da agenda falhou", err);
         return "Não foi possível consultar a agenda. Não presuma que o contato está sem consulta; use list_appointments antes de marcar.";
       })
@@ -192,6 +218,9 @@ export async function runAgentTurn(input: {
     input.incomingWasAudio && agent?.speakReplies && agent.voiceId && agent.voicePrompt.trim()
       ? `Ao formular a resposta que será falada, siga estas instruções de estilo de fala do dono da conta. Preserve fatos, horários, valores e o resultado das ferramentas:\n${agent.voicePrompt.trim()}`
       : "",
+    // Depois da persona: a regra de datas precisa valer sobre os exemplos dela
+    // ("Te esperamos amanhã às 10h" como modelo a repetir).
+    timeContext,
     scheduleContext,
     appointmentsContext,
     agent ? variablesSystemContext(variableDefinitions, variableValues) : "",

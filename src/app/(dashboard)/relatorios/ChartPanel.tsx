@@ -45,7 +45,7 @@ const DESCRIPTIONS: Record<Variant, string> = {
   firstResponseTime: "Tempo entre a mensagem do lead e a primeira resposta seguinte na mesma conversa (IA ou humano), agrupado em faixas. Conversas sem resposta no período não entram. O sandbox de teste não conta.",
   autonomyRate: "Fração dos contatos atendidos no período que a IA resolveu sozinha, sem um humano responder pelo painel — mesma base do gráfico 'Atendimento: IA x humano', resumida num número.",
   followUpRecovery: "Conversas com um follow-up automático enviado no período e, destas, quantas tiveram uma resposta do lead depois do envio, dentro do mesmo período.",
-  attendanceOutcome: "Agendamentos criados no período, pelo status em que terminaram: concluído ou cancelado. Agendamentos ainda marcados (nem concluídos nem cancelados) não aparecem aqui.",
+  attendanceOutcome: "Consultas de pé cujo horário caiu no período, pelo comparecimento marcado na agenda (ou mapeado do Clinicorp): compareceu ou faltou. Agendar ou confirmar não conta como comparecimento — consulta que ninguém conferiu aparece como não verificada na tabela, e cancelada não entra.",
 };
 
 /**
@@ -159,12 +159,12 @@ export function ChartPanel({
       case "attendanceOutcome":
         return (
           <SeriesChart
-            points={(attendanceOutcome ?? []).map((p) => ({ key: p.key, label: p.label, a: p.done, b: p.canceled }))}
-            labelA="Concluídos"
-            labelB="Cancelados"
+            points={(attendanceOutcome ?? []).map((p) => ({ key: p.key, label: p.label, a: p.attended, b: p.noShow }))}
+            labelA="Compareceu"
+            labelB="Faltou"
             colorA="text-success"
             colorB="text-warn"
-            empty="Nenhum agendamento concluído nem cancelado no período."
+            empty="Nenhum comparecimento marcado no período. Marque na agenda quem veio e quem faltou."
             className={tall ? "h-64" : undefined}
           />
         );
@@ -267,12 +267,11 @@ export function ChartPanel({
     }
     if (variant === "attendanceOutcome") {
       const points = attendanceOutcome ?? [];
-      const tDone = points.reduce((s, p) => s + p.done, 0);
-      const tCanceled = points.reduce((s, p) => s + p.canceled, 0);
+      const sum = (pick: (p: AttendanceOutcomePoint) => number) => String(points.reduce((s, p) => s + pick(p), 0));
       return {
-        head: ["Período", "Concluídos", "Cancelados"],
-        rows: points.map((p) => [p.label, String(p.done), String(p.canceled)]),
-        foot: ["Total", String(tDone), String(tCanceled)],
+        head: ["Período", "Compareceu", "Faltou", "Não verificado"],
+        rows: points.map((p) => [p.label, String(p.attended), String(p.noShow), String(p.unknown)]),
+        foot: ["Total", sum((p) => p.attended), sum((p) => p.noShow), sum((p) => p.unknown)],
       };
     }
     const parts = slices ?? [];
@@ -364,8 +363,9 @@ export function ChartPanel({
     if (variant === "attendanceOutcome") {
       const points = attendanceOutcome ?? [];
       return [
-        ["Concluídos", String(points.reduce((s, p) => s + p.done, 0))],
-        ["Cancelados", String(points.reduce((s, p) => s + p.canceled, 0))],
+        ["Compareceu", String(points.reduce((s, p) => s + p.attended, 0))],
+        ["Faltou", String(points.reduce((s, p) => s + p.noShow, 0))],
+        ["Não verificado", String(points.reduce((s, p) => s + p.unknown, 0))],
         ["Período coberto", `${points[0]?.label ?? "—"} a ${points[points.length - 1]?.label ?? "—"}`],
       ];
     }

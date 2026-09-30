@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   instanceFindFirst: vi.fn(),
   messageFindUnique: vi.fn(),
   messageFindFirst: vi.fn(),
+  leadFindFirst: vi.fn(),
   conversationUpdate: vi.fn(),
   getOrCreateConversation: vi.fn(),
   resolveAgent: vi.fn(),
@@ -20,6 +21,7 @@ vi.mock("@/lib/prisma", () => ({
       findFirst: mocks.messageFindFirst,
     },
     conversation: { update: mocks.conversationUpdate },
+    lead: { findFirst: mocks.leadFindFirst },
   },
 }));
 vi.mock("@/lib/rate-limit", () => ({
@@ -77,6 +79,7 @@ beforeEach(() => {
     tenant: { whatsappIgnoreGroups: false },
   });
   mocks.resolveAgent.mockResolvedValue({ id: "agente-1", stopOnEmoji: true });
+  mocks.leadFindFirst.mockResolvedValue({ conversation: { agentId: "agente-1" } });
   mocks.getOrCreateConversation.mockResolvedValue({
     lead: { isTest: false },
     conversation: { id: "conversa-1" },
@@ -119,6 +122,16 @@ describe("reação no webhook do WhatsApp", () => {
     await POST(request());
 
     expect(mocks.getOrCreateConversation).not.toHaveBeenCalled();
+    expect(mocks.conversationUpdate).not.toHaveBeenCalled();
+  });
+
+  it("usa a opção do agente atribuído à conversa, não a do agente principal", async () => {
+    mocks.leadFindFirst.mockResolvedValue({ conversation: { agentId: "agente-atribuido" } });
+    mocks.resolveAgent.mockResolvedValue({ id: "agente-atribuido", stopOnEmoji: false });
+
+    await POST(request());
+
+    expect(mocks.resolveAgent).toHaveBeenCalledWith("tenant-1", "agente-atribuido");
     expect(mocks.conversationUpdate).not.toHaveBeenCalled();
   });
 });

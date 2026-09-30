@@ -17,6 +17,7 @@ mostrada no painel, e o horário combinado com o lead continua de pé.
 | `agenda-pulse.ts` | A `/agenda` ao vivo: `agendaVersion` (versão do mês, igual na página e na rota), `readAgendaPulse` (o pulso), `monthDays`, `warmNeighborMonths`. |
 | `meta-reminder.ts` | Template aprovado da Meta para lembrar quem nunca conversou com o número (`metaReminderTemplate`): leitura, parâmetros e validação. Puro — a tela importa. |
 | `features.ts` | Quais calendários a conta habilitou em /integracoes. |
+| `dimensions.ts` | As dimensões de um agendamento (tipo, situação, confirmação, comparecimento, procedimento, origem, horário de origem): rótulos e regras puras. Ver "Dimensões de um agendamento". |
 
 Fora do módulo, o que usa estas peças:
 
@@ -31,6 +32,69 @@ Fora do módulo, o que usa estas peças:
 | `app/api/agenda/pulso/route.ts` | A pergunta do ao vivo: versão do mês, relendo o Clinicorp com `fresh`. |
 | `app/(dashboard)/agentes/MetaReminderTemplatePicker.tsx` | Escolha do template da Meta do lembrete, variáveis e prévia. |
 | `workers/follow-up-worker/clinicorp-reminders.ts` | Envia os lembretes das consultas do Clinicorp (fila própria, 5 min). |
+
+## Dimensões de um agendamento
+
+Cada agendamento responde a perguntas **separadas**, e nenhuma é deduzida de
+outra. Antes tudo cabia em `status` (`scheduled | done | canceled`): o botão
+"Concluir" gravava `done`, que o relatório lia como "compareceu" — e uma
+avaliação contava como realizada sem ninguém ter conferido.
+
+| Dimensão | Valores | Onde mora | Quem define |
+| --- | --- | --- | --- |
+| Tipo | avaliação, retorno, procedimento, não classificado | `kind` | tela (Marcar/Classificar) ou tool com `categoria` explícita |
+| Situação | agendado, remarcado, cancelado | `status` + `rescheduledAt` | ciclo de vida |
+| Confirmação | confirmado, não confirmado | `confirmedAt` (+ `confirmationSource`) | tela, antes do horário |
+| Comparecimento | compareceu, faltou, não verificado | `attendance` (+ `attendanceSource`, `attendanceAt`) | tela, depois do horário |
+| Procedimento | texto (implante, clareamento) | `procedure` | tela ou tool com `procedimento` |
+| Origem | agente, humano, integração | `source` (`agent`/`manual`/`integration`) | quem criou |
+| Horário de origem | dentro, fora, não classificado | **calculado na leitura** | `reports/origin-hours.ts` |
+
+Regras que não se negociam:
+
+- **Agendar ou confirmar nunca é comparecer.** `attendance` nasce `unknown` e só
+  muda por marcação de alguém **depois do horário** (`canMarkAttendance`, com a
+  trava repetida no `WHERE` de `setAppointmentAttendance`). Confirmar
+  (`setAppointmentConfirmed`) não toca em `attendance`.
+- **`status` é só ciclo de vida**: `scheduled` (de pé) ou `canceled`. Conflito,
+  lembrete e horários livres filtram `status: "scheduled"` — confirmação e
+  remarcação ficaram fora dele justamente para nenhum filtro esquecido deixar
+  passar horário duplicado.
+- **Remarcar** grava `rescheduledAt` e **limpa a confirmação** (era do horário
+  antigo). Se o Clinicorp recusa o novo horário, tudo é reposto, inclusive
+  `rescheduledAt` e a confirmação.
+- **Tipo nunca é deduzido** do nome do serviço, das notas ou da conversa. Sem
+  `kind`, o relatório mensal cai no mapeamento antigo por `serviceType` ×
+  `evaluationTypes` das premissas — que é configuração conferida, não palpite.
+  Valor fora da lista (`parseKind`) vira "não classificado".
+- **Tipo e procedimento são independentes**: "avaliação para implante" é tipo
+  avaliação, procedimento implante. O procedimento também vai ao Clinicorp em
+  `Procedures` (sem repetir se a nota já o diz).
+- **Horário de origem** é a primeira mensagem do contato (anterior à marcação)
+  contra o expediente humano das premissas do ROI mensal (`humanHours`, a
+  competência mais recente). Sem expediente ou sem chegada: "não classificado",
+  jamais "dentro" presumido. Nunca gravado — o expediente pode ser corrigido.
+- **Cancelar consulta com comparecimento marcado é recusado** (a action
+  confere): desfaça a marcação antes.
+
+**Legado `done`.** `attendanceOf()` lê `status: "done"` como compareceu, então
+linhas antigas continuam contando como antes. `scripts/separa-dimensoes-agendamento.ts`
+(prévia por padrão, `--aplicar` para gravar, idempotente) converte as que já
+passaram do horário em `scheduled` + `attended`, com **`attendanceAt: null`**:
+é essa ausência de data que mantém a regra do relatório para consultas
+espelhadas — com espelho no Clinicorp, o status mapeado de lá vence, e sem
+resposta de lá só vale marcação feita na `/agenda` (com data). `done` com
+horário futuro fica como está até passar (convertido antes, receberia lembrete
+e bloquearia horário).
+
+Na `/agenda`, cada compromisso mostra as dimensões numa linha de rótulos, e os
+botões são por dimensão: **Confirmar** (antes do horário), **Compareceu /
+Faltou** (depois; clicar de novo desfaz), **Classificar** e **Cancelar**. O
+gráfico "Comparecimento e no-show" de `/relatorios` conta, pelo **horário** da
+consulta, compareceu × faltou, com "não verificado" na tabela.
+
+Regressões: `tests/agendamento-dimensoes.test.ts`. Schema novo (colunas em
+`Appointment`): `db push` + `generate` nos dois processos, depois o script.
 
 ## Configuração do agendamento por agente
 
@@ -522,8 +586,9 @@ Outras regras do botão:
 
 ### Estendendo
 
-Endpoints úteis ainda não usados: `/appointment/change_status` +
-`/appointment/status_list` (marcar "realizado" aqui refletir lá),
+Endpoints úteis ainda não usados: `/appointment/change_status` (marcar
+comparecimento aqui refletir lá; `/appointment/status_list` já é lido pelo
+relatório mensal),
 `/business/list_available_times` (oferecer os slots reais da clínica em vez de
 derivar do expediente configurado no fechai).
 

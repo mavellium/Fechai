@@ -104,6 +104,7 @@ export async function POST(
       tenantId,
       conversationId: conversation.id,
       leadId: lead.id,
+      agentId: conversation.agentId ?? undefined,
       userMessage: message,
     });
 

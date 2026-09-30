@@ -32,8 +32,8 @@ export function Modal({
   title: string;
   description?: React.ReactNode;
   children: React.ReactNode;
-  /** `wide` para formulários de duas colunas. */
-  size?: "default" | "wide";
+  /** `wide` para formulários de duas colunas; `full` para tabelas de leitura. */
+  size?: "default" | "wide" | "full";
 }) {
   const ref = React.useRef<HTMLDialogElement>(null);
   const titleId = React.useId();
@@ -66,7 +66,7 @@ export function Modal({
         // único assunto sem esconder de todo o contexto.
         "backdrop:bg-ink/80 backdrop:backdrop-blur-sm",
         "open:flex open:flex-col",
-        size === "wide" ? "max-w-2xl" : "max-w-md",
+        size === "full" ? "max-w-5xl" : size === "wide" ? "max-w-2xl" : "max-w-md",
       )}
     >
       {/* O cabeçalho fica fixo: num formulário longo, o botão de fechar não

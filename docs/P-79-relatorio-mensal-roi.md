@@ -298,6 +298,18 @@ ficam sem duração: nada é reconstruído por estimativa.
   foi entregue à parte ([contrato](./P-87-perguntas-sem-resposta.md)) e só
   acrescenta o tempo médio de resposta a este relatório.
 
+## Registros e qualidade de cada número
+
+Cada indicador do painel abre os registros que o compõem (identificador,
+horários, tipo, procedimento, status e o critério que o incluiu ou excluiu) e
+carrega um selo: verificado, estimado, cobertura parcial, pendente ou
+inconsistente. Os registros saem da mesma passada do cálculo e, com o selo,
+ficam congelados no snapshot; o PDF leva o selo de cada linha e a legenda no
+rodapé, nunca os registros. Correção manual que diverge dos registros aparece
+como inconsistente. Regras em
+[`relatorios/README.md`](../src/app/(dashboard)/relatorios/README.md), seção
+"Registros e selo de qualidade de cada número".
+
 ## Histórico, revisão e autorização
 
 `MonthlyRoiReport` é único por tenant + `YYYY-MM`. Premissas são mensais; editar

@@ -88,7 +88,7 @@ export function describeHandoff(cfg: HandoffConfig): string {
     : "também avisa a equipe em um grupo do WhatsApp";
 }
 
-const HANDOFF_TOOL_BASE = "Transfere a conversa para um atendente humano.";
+const HANDOFF_TOOL_BASE = "Transfere a conversa para um atendente humano. Use quando o contato pedir uma pessoa, quando houver uma pergunta que você não pode responder com a base disponível ou quando a equipe precisar tomar uma decisão. Não marque prioridade apenas porque o contato demonstrou interesse.";
 
 /**
  * Descrição da tool `handoff_human` que o LLM lê. É por ela que o motivo

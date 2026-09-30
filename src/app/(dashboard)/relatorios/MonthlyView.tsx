@@ -9,6 +9,8 @@ import { Alert } from "@/components/ui/alert";
 import { DataTable } from "@/components/ui/data-table";
 import { TIMEZONES } from "@/modules/scheduling/time";
 import { SUGGESTION_DISCLAIMER, leadQualityHeadline, type LeadQuality, type RankItem } from "@/modules/lead-insights/summary";
+import { QUALITY_LEGEND, type QualityKey } from "@/modules/reports/monthly-quality";
+import { MetricEvidence, QualityBadge } from "./MonthlyEvidence";
 
 export const total = (s: SplitCount) => s.inside + s.outside + s.unclassified;
 const number = (v: number | null, suffix = "") => v === null ? "Pendente" : `${v.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}${suffix}`;
@@ -17,37 +19,43 @@ const money = (v: number | null) => v === null ? "Pendente" : formatBRL(v);
 const audioCell = (m: MonthlyMetrics) => !m.time ? "Não medido"
   : m.time.audioMinutes ? `${m.time.audios} · ${formatMinutes(m.time.audioMinutes)}` : number(m.time.audios);
 const usesMeasuredTime = (r: MonthlyReport) => r.assumptions.secondsPerMessage != null && Boolean(r.current.time) && r.metricOverrides?.current.assumedHours === undefined;
-export function monthlyRows(r: MonthlyReport) {
+export function monthlyRows(r: MonthlyReport): { key: QualityKey; cells: string[] }[] {
   const a = r.current, b = r.previous;
-  return [
-    ["Novos contatos atendidos", number(a.newContacts), number(b.newContacts)],
-    ["Conversas · dentro / fora", r.assumptions.humanHours ? `${a.conversations.inside} / ${a.conversations.outside}` : `Pendente (${total(a.conversations)} no total)`, r.previousAssumptions.humanHours ? `${b.conversations.inside} / ${b.conversations.outside}` : `Pendente (${total(b.conversations)} no total)`],
-    ["Primeira resposta média", number(a.firstResponseSeconds, " s"), number(b.firstResponseSeconds, " s")],
-    ["Leads qualificados", `${a.qualified}${a.trackingComplete ? "" : " registrados*"}`, `${b.qualified}${b.trackingComplete ? "" : " registrados*"}`],
-    ["Avaliações agendadas · dentro / fora", r.assumptions.humanHours ? `${a.scheduled.inside} / ${a.scheduled.outside}` : "Pendente", r.previousAssumptions.humanHours ? `${b.scheduled.inside} / ${b.scheduled.outside}` : "Pendente"],
-    ["Avaliações realizadas · dentro / fora", r.assumptions.humanHours ? `${a.attended.inside} / ${a.attended.outside}` : "Pendente", r.previousAssumptions.humanHours ? `${b.attended.inside} / ${b.attended.outside}` : "Pendente"],
-    ["Transbordos para humano", `${a.handoffs}${a.trackingComplete ? "" : " registrados*"}`, `${b.handoffs}${b.trackingComplete ? "" : " registrados*"}`],
-    ["Perguntas sem resposta", `${a.unanswered}${a.trackingComplete ? "" : " registradas*"}`, `${b.unanswered}${b.trackingComplete ? "" : " registradas*"}`],
-    ["Tempo médio para a equipe responder", gapTime(a), gapTime(b)],
-    ["Áudios ouvidos pelo agente", audioCell(a), audioCell(b)],
-    ["Mensagens de texto respondidas pelo agente", a.time ? number(a.time.textMessages) : "Não medido", b.time ? number(b.time.textMessages) : "Não medido"],
-    ["Horas devolvidas à equipe (estimadas)", number(a.assumedHours, " h"), number(b.assumedHours, " h")],
-    ["ROI estimado", number(a.roiPercent, "%"), number(b.roiPercent, "%")],
+  const rows: [QualityKey, string, string, string][] = [
+    ["newContacts", "Novos contatos atendidos", number(a.newContacts), number(b.newContacts)],
+    ["conversations", "Conversas · dentro / fora", r.assumptions.humanHours ? `${a.conversations.inside} / ${a.conversations.outside}` : `Pendente (${total(a.conversations)} no total)`, r.previousAssumptions.humanHours ? `${b.conversations.inside} / ${b.conversations.outside}` : `Pendente (${total(b.conversations)} no total)`],
+    ["firstResponse", "Primeira resposta média", number(a.firstResponseSeconds, " s"), number(b.firstResponseSeconds, " s")],
+    ["qualified", "Leads qualificados", `${a.qualified}${a.trackingComplete ? "" : " registrados*"}`, `${b.qualified}${b.trackingComplete ? "" : " registrados*"}`],
+    ["scheduled", "Avaliações agendadas · dentro / fora", r.assumptions.humanHours ? `${a.scheduled.inside} / ${a.scheduled.outside}` : "Pendente", r.previousAssumptions.humanHours ? `${b.scheduled.inside} / ${b.scheduled.outside}` : "Pendente"],
+    ["attended", "Avaliações realizadas · dentro / fora", r.assumptions.humanHours ? `${a.attended.inside} / ${a.attended.outside}` : "Pendente", r.previousAssumptions.humanHours ? `${b.attended.inside} / ${b.attended.outside}` : "Pendente"],
+    ["handoffs", "Transbordos para humano", `${a.handoffs}${a.trackingComplete ? "" : " registrados*"}`, `${b.handoffs}${b.trackingComplete ? "" : " registrados*"}`],
+    ["unanswered", "Perguntas sem resposta", `${a.unanswered}${a.trackingComplete ? "" : " registradas*"}`, `${b.unanswered}${b.trackingComplete ? "" : " registradas*"}`],
+    ["gapAnswer", "Tempo médio para a equipe responder", gapTime(a), gapTime(b)],
+    ["audios", "Áudios ouvidos pelo agente", audioCell(a), audioCell(b)],
+    ["textMessages", "Mensagens de texto respondidas pelo agente", a.time ? number(a.time.textMessages) : "Não medido", b.time ? number(b.time.textMessages) : "Não medido"],
+    ["assumedHours", "Horas devolvidas à equipe (estimadas)", number(a.assumedHours, " h"), number(b.assumedHours, " h")],
+    ["roi", "ROI estimado", number(a.roiPercent, "%"), number(b.roiPercent, "%")],
   ];
+  return rows.map(([key, ...cells]) => ({ key, cells }));
 }
-export function MonthlyRoiSummary({ report: r }: { report: MonthlyReport }) {
+/** Selo e "ver registros" abaixo de um número em destaque. */
+function StatSource({ report: r, metric }: { report: MonthlyReport; metric: QualityKey }) {
+  if (!r.quality?.[metric]) return null;
+  return <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1"><QualityBadge quality={r.quality[metric]} /><MetricEvidence report={r} metric={metric} /></div>;
+}
+export function MonthlyRoiSummary({ report: r, showMissing = true }: { report: MonthlyReport; showMissing?: boolean }) {
   const a = r.current;
   return <section className="space-y-4" aria-label="Retorno do mês">
     <div className="flex flex-wrap items-center gap-3"><h2 className="font-display text-lg font-semibold text-ink panel:text-white">Retorno de {r.label}</h2><Badge tone="neutral">Valores estimados</Badge>{r.partial && <Badge tone="warn">Mês em andamento</Badge>}</div>
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-      <Stat label="ROI do mês" value={number(a.roiPercent, "%")} hint={a.roiPercent === null ? "aguardando premissas" : "retorno sobre o investimento"} />
-      <Stat compact label="Receita estimada" value={money(a.revenueCents)} hint="contatos que chegaram fora do expediente" />
-      <Stat compact label="Economia estimada" value={money(a.savingsCents)} hint="tempo devolvido à equipe" />
-      <Stat compact label="Investimento mensal" value={money(a.investmentCents)} hint="mensalidade do Fechai" />
+      <Stat label="ROI do mês" value={number(a.roiPercent, "%")} hint={a.roiPercent === null ? "aguardando premissas" : "retorno sobre o investimento"} footer={<StatSource report={r} metric="roi" />} />
+      <Stat compact label="Receita estimada" value={money(a.revenueCents)} hint="contatos que chegaram fora do expediente" footer={<StatSource report={r} metric="revenue" />} />
+      <Stat compact label="Economia estimada" value={money(a.savingsCents)} hint="tempo devolvido à equipe" footer={<StatSource report={r} metric="savings" />} />
+      <Stat compact label="Investimento mensal" value={money(a.investmentCents)} hint="mensalidade do Fechai" footer={<StatSource report={r} metric="investment" />} />
     </div>
     <p className="text-sm leading-relaxed text-neutral panel:text-white/60">A receita considera as avaliações realizadas de contatos que chegaram fora do horário humano. {usesMeasuredTime(r) ? "A economia estima o tempo que a recepção gastaria ouvindo os áudios e respondendo as mensagens que o agente atendeu." : "A economia estima o tempo de atendimento assumido pelo agente."}</p>
     {a.investmentCents === 0 && <Alert>Mensalidade zero: o ROI percentual não se aplica.</Alert>}
-    {a.missing.length > 0 && <Alert tone="warn" title="Dados pendentes para calcular o retorno"><ul className="mt-1 list-disc space-y-1 pl-4">{a.missing.map((m) => <li key={m}>{m}</li>)}</ul></Alert>}
+    {showMissing && a.missing.length > 0 && <Alert tone="warn" title="Dados pendentes para calcular o retorno"><ul className="mt-1 list-disc space-y-1 pl-4">{a.missing.map((m) => <li key={m}>{m}</li>)}</ul></Alert>}
   </section>;
 }
 
@@ -66,10 +74,10 @@ function TimeReturnedCard({ report: r }: { report: MonthlyReport }) {
     {empty ? <p className="text-sm text-neutral panel:text-white/55">Sem atendimentos do agente neste mês. O bloco é preenchido com as mensagens e os áudios que ele responder.</p> : <>
       <p className="max-w-prose text-base leading-relaxed">{timeHeadline(t, total(a.conversations), a.assumedHours, a.savingsCents)}</p>
       <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <Stat compact label="Áudio ouvido" value={t.audioMinutes ? formatMinutes(t.audioMinutes) : String(t.audios)} hint={t.audioMinutes ? `${t.audios} áudios respondidos` : "áudios respondidos"} />
+        <Stat compact label="Áudio ouvido" value={t.audioMinutes ? formatMinutes(t.audioMinutes) : String(t.audios)} hint={t.audioMinutes ? `${t.audios} áudios respondidos` : "áudios respondidos"} footer={<StatSource report={r} metric="audios" />} />
         <Stat compact label="Áudios longos" value={String(t.longAudios)} hint={t.longestAudioSeconds === null ? "acima de 2 min" : `acima de 2 min · maior: ${formatDuration(t.longestAudioSeconds)}`} />
-        <Stat compact label="Mensagens de texto" value={String(t.textMessages)} hint="respondidas pelo agente" />
-        <Stat compact label="Tempo devolvido" value={a.assumedHours === null ? "Pendente" : formatDuration(a.assumedHours * 3600)} hint={a.savingsCents === null ? "aguardando custo do atendente" : `${formatBRL(a.savingsCents)} estimados`} />
+        <Stat compact label="Mensagens de texto" value={String(t.textMessages)} hint="respondidas pelo agente" footer={<StatSource report={r} metric="textMessages" />} />
+        <Stat compact label="Tempo devolvido" value={a.assumedHours === null ? "Pendente" : formatDuration(a.assumedHours * 3600)} hint={a.savingsCents === null ? "aguardando custo do atendente" : `${formatBRL(a.savingsCents)} estimados`} footer={<StatSource report={r} metric="assumedHours" />} />
       </div>
       {r.featuredCase && <figure className="mt-6 border-l-2 border-iris pl-4">
         <figcaption className="font-mono text-micro uppercase tracking-[0.2em] text-neutral panel:text-white/55">Caso do mês</figcaption>
@@ -96,11 +104,12 @@ const topLine = (items: RankItem[]) => items.slice(0, 4).map((i) => `${i.label} 
  * Qualidade dos leads do mês, para o decisor e a agência de tráfego. Ausente em
  * relatórios fechados antes do bloco. Só agregados: nenhum dado de paciente.
  */
-function LeadQualityCard({ quality: q }: { quality: LeadQuality }) {
+function LeadQualityCard({ quality: q, report: r }: { quality: LeadQuality; report: MonthlyReport }) {
   return <Card>
     <CardTitle hint="O que o agente registrou do que os contatos disseram. Sugestões são hipóteses, não promessa.">Qualidade dos leads e melhorias para o tráfego</CardTitle>
     {q.leads === 0 ? <p className="text-sm text-neutral panel:text-white/55">Sem leads novos neste mês.</p> : <>
       <p className="max-w-prose text-base leading-relaxed">{leadQualityHeadline(q)}</p>
+      <StatSource report={r} metric="leads" />
       <dl className="mt-4 grid gap-4 text-sm md:grid-cols-3">
         <div><dt className="font-medium">Cidades mais citadas</dt><dd className="mt-1 text-neutral panel:text-white/60">{q.cities.length ? q.cities.slice(0, 4).map((c) => `${c.city} (${c.count}${c.verdict === "out" ? ", fora do raio" : ""})`).join(" · ") : "Nenhuma cidade informada."}</dd></div>
         <div><dt className="font-medium">Primeiras dúvidas</dt><dd className="mt-1 text-neutral panel:text-white/60">{q.doubts.length ? topLine(q.doubts) : "Nenhuma registrada."}</dd></div>
@@ -127,7 +136,11 @@ export function MonthlyView({ report: r, showSummary = true }: { report: Monthly
       <CardTitle hint="Nos indicadores por horário, o primeiro número é dentro do expediente humano e o segundo é fora.">O que aconteceu no mês</CardTitle>
       <p className="mb-4 text-sm text-neutral panel:text-white/55">Comparativo com {previousLabel}. Horários: dentro / fora do expediente humano.</p>
       {(Object.keys(r.metricOverrides?.current ?? {}).length > 0 || Object.keys(r.metricOverrides?.previous ?? {}).length > 0) && <Alert title="Dados conferidos manualmente">Este relatório inclui indicadores ajustados pela Mavellium. Os valores financeiros continuam estimados pela fórmula e pelas premissas abaixo.</Alert>}
-      <DataTable caption="Indicadores do mês e comparativo anterior" head={["Indicador", "Este mês", "Mês anterior"]} rows={monthlyRows(r).map((cells) => ({ id: cells[0], cells }))} />
+      {r.quality
+        ? <DataTable caption="Indicadores do mês e comparativo anterior" head={["Indicador", "Este mês", "Mês anterior", "Qualidade", "Origem"]}
+            rows={monthlyRows(r).map(({ key, cells }) => ({ id: key, cells: [...cells, <QualityBadge key="q" quality={r.quality?.[key]} />, <MetricEvidence key="e" report={r} metric={key} />] }))} />
+        : <DataTable caption="Indicadores do mês e comparativo anterior" head={["Indicador", "Este mês", "Mês anterior"]} rows={monthlyRows(r).map(({ key, cells }) => ({ id: key, cells }))} />}
+      {r.quality && <p className="mt-3 text-xs leading-relaxed text-neutral panel:text-white/55">{QUALITY_LEGEND} Em &quot;Ver registros&quot;, a lista do que compõe cada número de {r.label}.</p>}
       {!a.trackingComplete && <p className="mt-3 text-xs text-warn">* Qualificação, transbordos e perguntas sem resposta têm cobertura parcial: apenas eventos explícitos registrados após a implantação. Ausência de registro histórico não significa zero ocorrências.</p>}
       {!r.previousConfigured && <p className="mt-2 text-xs text-neutral panel:text-white/55">Mês anterior sem premissas: os totais operacionais são comparáveis; classificações de horário e valores financeiros estão pendentes.</p>}
       <p className="mt-2 text-xs text-neutral panel:text-white/55">Sem classificação de horário: {a.conversations.unclassified} conversas, {a.scheduled.unclassified} agendadas e {a.attended.unclassified} realizadas. Comparecimento pendente: {a.attendanceUnknown}. Agendamentos sem tipo: {a.untypedAppointments}.</p>
@@ -137,10 +150,10 @@ export function MonthlyView({ report: r, showSummary = true }: { report: Monthly
       <CardTitle>Destaques do mês</CardTitle>
       <div className="grid gap-4 md:grid-cols-2">
         <div><p className="mb-3 text-sm font-medium">Procedimentos</p>{a.procedures.length ? <div className="space-y-3">{a.procedures.map((p) => <div key={p.name} className="border-l-2 border-iris pl-3"><p className="text-sm font-medium">{p.name}</p><p className="mt-1 text-sm text-neutral panel:text-white/60">{p.qualified} qualificados · {p.attendedOutside} avaliações realizadas de contatos fora do expediente</p><p className="mt-1 text-sm font-medium tabular-nums">{money(p.revenueCents)} <span className="font-normal text-neutral panel:text-white/55">de receita estimada</span></p></div>)}</div> : <p className="text-sm text-neutral panel:text-white/55">Sem procedimento registrado no período.</p>}</div>
-        <div><p className="mb-3 text-sm font-medium">Horários de pico</p>{a.peaks.length ? <div className="space-y-3">{a.peaks.map((p) => <div key={p.hour} className="flex items-center gap-3"><Badge tone="iris">{String(p.hour).padStart(2, "0")}h</Badge><span className="text-sm text-neutral panel:text-white/70">{p.messages} mensagens recebidas</span></div>)}</div> : <p className="text-sm text-neutral panel:text-white/55">Sem mensagens recebidas no período.</p>}<p className="mt-3 text-xs text-neutral panel:text-white/55">Horário local da clínica · {TIMEZONES.find((zone) => zone.value === c.timezone)?.label ?? c.timezone}</p></div>
+        <div><div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1"><p className="text-sm font-medium">Horários de pico</p><QualityBadge quality={r.quality?.peaks} /><MetricEvidence report={r} metric="peaks" /></div>{a.peaks.length ? <div className="space-y-3">{a.peaks.map((p) => <div key={p.hour} className="flex items-center gap-3"><Badge tone="iris">{String(p.hour).padStart(2, "0")}h</Badge><span className="text-sm text-neutral panel:text-white/70">{p.messages} mensagens recebidas</span></div>)}</div> : <p className="text-sm text-neutral panel:text-white/55">Sem mensagens recebidas no período.</p>}<p className="mt-3 text-xs text-neutral panel:text-white/55">Horário local da clínica · {TIMEZONES.find((zone) => zone.value === c.timezone)?.label ?? c.timezone}</p></div>
       </div>
     </Card>
-    {r.leadQuality && <LeadQualityCard quality={r.leadQuality} />}
+    {r.leadQuality && <LeadQualityCard quality={r.leadQuality} report={r} />}
     <div className="grid gap-6 md:grid-cols-2">
       <Card><CardTitle>O que ajustamos no agente</CardTitle><p className="whitespace-pre-wrap text-sm leading-relaxed text-neutral panel:text-white/70">{r.adjustments || "Aguardando revisão da Mavellium."}</p></Card>
       <Card><CardTitle>Próximo mês</CardTitle><p className="whitespace-pre-wrap text-sm leading-relaxed text-neutral panel:text-white/70">{r.nextMonth || "Aguardando plano da Mavellium."}</p></Card>

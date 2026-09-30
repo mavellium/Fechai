@@ -9,7 +9,22 @@ import type { ReminderRule } from "@/modules/scheduling/config";
 import type { listMonthAppointments } from "@/modules/scheduling/repository";
 import { parseReminderOverride } from "@/modules/scheduling/reminder-override";
 import { timeInZone } from "@/modules/scheduling/time";
+import {
+  ATTENDANCE_LABELS,
+  KIND_LABELS,
+  ORIGIN_HOURS_LABELS,
+  SITUATION_LABELS,
+  SOURCE_LABELS,
+  attendanceOf,
+  canConfirm,
+  canMarkAttendance,
+  parseKind,
+  situationOf,
+  sourceOf,
+  type OriginHours,
+} from "@/modules/scheduling/dimensions";
 import { AppointmentActions } from "./AppointmentActions";
+import { AppointmentClassification } from "./AppointmentClassification";
 import { AppointmentReminders } from "./AppointmentReminders";
 import { ClinicorpAppointmentItem } from "./ClinicorpAppointmentItem";
 import { NewAppointmentDialog } from "./NewAppointmentDialog";
@@ -38,6 +53,8 @@ export function DayPanel({
   agentReminders,
   location,
   reminderSentAt,
+  originByAppointment,
+  now,
   dialog,
 }: {
   label: string | null;
@@ -52,6 +69,10 @@ export function DayPanel({
   location: string;
   /** "id|início" → quando o lembrete saiu (consultas do Clinicorp). */
   reminderSentAt: Map<string, Date>;
+  /** Horário de origem por compromisso, calculado na leitura (`originHours`). */
+  originByAppointment: Map<string, OriginHours>;
+  /** Um relógio só para a lista inteira: o que é "passado" não muda no meio do desenho. */
+  now: Date;
   dialog: Omit<ComponentProps<typeof NewAppointmentDialog>, "triggerLabel">;
 }) {
   const clinicorpCount = entries.filter((e) => e.kind === "clinicorp").length;
@@ -113,13 +134,34 @@ export function DayPanel({
               const leadDisplayName = appointment.patientName || appointment.lead?.name || appointment.lead?.phone || appointment.title;
               const avatarInitial = leadDisplayName.slice(0, 1).toUpperCase();
 
-              // Status visual sutil como no módulo de conversas (sem pílulas chamativas)
+              // Cada dimensão é uma pergunta própria (ver modules/scheduling/dimensions.ts):
+              // a faixa segue o que mais importa agora — cancelada, faltou, compareceu, de pé.
+              const situation = situationOf(appointment);
+              const attendance = attendanceOf(appointment);
+              const kind = parseKind(appointment.kind);
+              const origin = originByAppointment.get(appointment.id) ?? "unclassified";
+              const past = appointment.startsAt.getTime() <= now.getTime();
               const statusConfig =
-                appointment.status === "scheduled"
-                  ? { text: "marcado", color: "text-success", bar: "bg-success" }
-                  : appointment.status === "canceled"
-                    ? { text: "cancelado", color: "text-danger", bar: "bg-danger" }
-                    : { text: "realizado", color: "text-white/40", bar: "bg-white/25" };
+                situation === "canceled"
+                  ? { text: SITUATION_LABELS.canceled, color: "text-danger", bar: "bg-danger" }
+                  : attendance === "no_show"
+                    ? { text: SITUATION_LABELS[situation], color: "text-warn", bar: "bg-warn" }
+                    : attendance === "attended"
+                      ? { text: SITUATION_LABELS[situation], color: "text-white/50", bar: "bg-white/25" }
+                      : { text: SITUATION_LABELS[situation], color: "text-success", bar: "bg-success" };
+              const dimensions = [
+                { label: "Tipo", value: kind ? KIND_LABELS[kind] : "Não classificado", muted: !kind },
+                ...(appointment.procedure ? [{ label: "Procedimento", value: appointment.procedure, muted: false }] : []),
+                ...(situation !== "canceled" && !past
+                  ? [{ label: "Confirmação", value: appointment.confirmedAt ? "Confirmado" : "Não confirmado", muted: !appointment.confirmedAt }]
+                  : []),
+                // Comparecimento só existe depois do horário (ou se alguém já marcou).
+                ...(situation !== "canceled" && (past || attendance !== "unknown")
+                  ? [{ label: "Comparecimento", value: ATTENDANCE_LABELS[attendance], muted: attendance === "unknown" }]
+                  : []),
+                { label: "Origem", value: SOURCE_LABELS[sourceOf(appointment.source)], muted: false },
+                { label: "Horário de origem", value: ORIGIN_HOURS_LABELS[origin], muted: origin === "unclassified" },
+              ];
 
               return (
                 <li
@@ -149,16 +191,20 @@ export function DayPanel({
                         </span>
                         <span className="truncate font-semibold text-white text-sm">{appointment.title}</span>
 
-                        {/* Status e Origem como texto discreto estilizado (padrão conversas) */}
+                        {/* Situação como texto discreto (padrão conversas) */}
                         <span className={cn("font-mono text-micro uppercase tracking-wider font-medium ml-1", statusConfig.color)}>
                           {statusConfig.text}
                         </span>
-                        {appointment.source === "agent" && (
-                          <span className="font-mono text-micro uppercase tracking-wider text-iris/80">
-                            • pelo agente
-                          </span>
-                        )}
                       </div>
+
+                      <dl className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
+                        {dimensions.map((d) => (
+                          <div key={d.label} className="flex items-baseline gap-1 text-xs">
+                            <dt className="font-mono text-micro uppercase tracking-wider text-white/40">{d.label}</dt>
+                            <dd className={d.muted ? "text-white/45" : "text-white/80"}>{d.value}</dd>
+                          </div>
+                        ))}
+                      </dl>
 
                       {appointment.lead && (
                         <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-white/60">
@@ -211,9 +257,16 @@ export function DayPanel({
                     </div>
                   </div>
 
-                  {appointment.status === "scheduled" && (
-                    <div className="flex shrink-0 items-center gap-2 border-t border-white/10 pt-2 sm:border-t-0 sm:pt-0">
-                      <AppointmentReminders
+                  {/* Legado `done` também entra: é uma consulta de pé com comparecimento marcado. */}
+                  {situation !== "canceled" && (
+                    <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-white/10 pt-2 sm:border-t-0 sm:pt-0">
+                      <AppointmentClassification
+                        id={appointment.id}
+                        title={appointment.title}
+                        kind={kind}
+                        procedure={appointment.procedure}
+                      />
+                      {!past && <AppointmentReminders
                         id={appointment.id}
                         title={appointment.title}
                         override={parseReminderOverride(appointment.reminderOverride)}
@@ -221,8 +274,15 @@ export function DayPanel({
                         location={location}
                         lastSentAt={appointment.reminderSentAt}
                         closedCount={appointment.remindersSent.length}
+                      />}
+                      <AppointmentActions
+                        id={appointment.id}
+                        title={appointment.title}
+                        confirmed={Boolean(appointment.confirmedAt)}
+                        attendance={attendance}
+                        canConfirm={canConfirm(appointment, now)}
+                        canMarkAttendance={canMarkAttendance(appointment, now)}
                       />
-                      <AppointmentActions id={appointment.id} title={appointment.title} />
                     </div>
                   )}
                 </li>

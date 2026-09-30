@@ -4,6 +4,7 @@ import { getUsageSummary } from "@/modules/billing/usage";
 import { INJECTION_GUARD } from "@/modules/agent-engine/injection-guard";
 import { sanitizeUnresolvedPlaceholders } from "@/modules/agent-engine/reply-sanitizer";
 import { completeBackgroundText } from "@/modules/agent-engine/summary";
+import { DEFAULT_AGENT_TIMEZONE, nowLabel, transcriptStamp } from "@/modules/agent-engine/time-context";
 import { MAX_FOLLOWUP_MESSAGE_LENGTH } from "./config";
 
 /**
@@ -36,6 +37,7 @@ Regras:
 - Não invente preço, horário, promoção ou qualquer fato que não esteja na conversa.
 - Não diga que é mensagem automática e não peça desculpas por insistir.
 - Não use "bom dia", "boa tarde" ou "boa noite": a mensagem pode sair em qualquer hora.
+- Cada mensagem da conversa vem com o dia em que foi escrita. "Hoje", "amanhã" e parecidos nelas valem para aquele dia: nunca os copie; recalcule a partir da data de agora ou diga a data.
 - Responda só com o texto da mensagem, sem aspas e sem explicação.`;
 
 export type ComposedFollowUp = {
@@ -52,6 +54,9 @@ export async function composeFollowUp(input: {
   reference: string;
   /** Valores da conversa, para limpar variável que a IA copiar crua. */
   values: Record<string, string>;
+  /** Fuso da agenda do agente — base das datas da transcrição. */
+  timeZone?: string;
+  now?: Date;
 }): Promise<ComposedFollowUp> {
   const fallback: ComposedFollowUp = { text: input.reference, byAi: false };
 
@@ -64,11 +69,16 @@ export async function composeFollowUp(input: {
       where: { conversationId: input.conversationId, role: { in: ["user", "assistant"] } },
       orderBy: { createdAt: "desc" },
       take: MAX_MESSAGES_IN_PROMPT,
-      select: { role: true, content: true },
+      select: { role: true, content: true, createdAt: true },
     });
+    // A esteira `declined` sai com dias de intervalo: sem a data em cada linha,
+    // o "amanhã às 10h" de uma mensagem antiga voltava no follow-up como se
+    // fosse de hoje (mesmo bug do atendimento, ver `time-context.ts`).
+    const now = input.now ?? new Date();
+    const timeZone = input.timeZone ?? DEFAULT_AGENT_TIMEZONE;
     const transcript = recent
       .reverse()
-      .map((m) => `${m.role === "user" ? "Contato" : "Você"}: ${m.content}`)
+      .map((m) => `[${transcriptStamp(m.createdAt, now, timeZone)}] ${m.role === "user" ? "Contato" : "Você"}: ${m.content}`)
       .join("\n");
 
     // A conversa vai como UMA mensagem de usuário, não como histórico: o
@@ -81,7 +91,7 @@ export async function composeFollowUp(input: {
       },
       {
         role: "user",
-        content: `Conversa até agora:\n\n${transcript}\n\nMensagem de referência:\n${input.reference}`,
+        content: `Agora: ${nowLabel(now, timeZone)} (fuso ${timeZone}).\n\nConversa até agora:\n\n${transcript}\n\nMensagem de referência:\n${input.reference}`,
       },
     ];
 

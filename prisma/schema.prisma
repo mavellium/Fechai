@@ -137,6 +137,7 @@ model Tenant {
   broadcastReceipts BroadcastReceipt[]
   monthlyRoiReports MonthlyRoiReport[]
   monthlyRoiAiChats MonthlyRoiAiChat[]
+  monthlyRoiPendencies MonthlyRoiPendency[]
   reportEvents      ReportEvent[]
   knowledgeGaps     KnowledgeGap[]
   knowledgeGapSettings KnowledgeGapSettings?
@@ -321,6 +322,28 @@ model MonthlyRoiAiChat {
   updatedAt DateTime @updatedAt
 
   @@unique([tenantId, month])
+}
+
+/// Acompanhamento da central de pendências de uma competência, por tópico
+/// (`modules/reports/monthly-pendencies.ts`). A pendência em si é calculada na
+/// leitura; aqui fica só o que a Mavellium registrou. Fica fora de
+/// `MonthlyRoiReport` para não mexer no `updatedAt` que protege a revisão.
+model MonthlyRoiPendency {
+  id           String    @id @default(cuid())
+  tenantId     String
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  month        String // YYYY-MM
+  topic        String // PENDENCY_TOPICS
+  assignee     String    @default("") // pessoa da clínica que responde; vazio = a área
+  requestedAt  DateTime?
+  requestedVia String? // whatsapp | email | copy
+  answer       String    @default("")
+  answeredAt   DateTime?
+  updatedBy    String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([tenantId, month, topic])
 }
 
 /// Eventos explícitos, sem inferir qualificação ou desconhecimento do texto.
@@ -847,9 +870,33 @@ model Appointment {
   notes                  String?
   startsAt               DateTime
   endsAt                 DateTime
-  status                 String    @default("scheduled") // scheduled | done | canceled
-  source                 String    @default("agent") // agent | manual
-  serviceType            String? // tipo explicitamente escolhido; relatórios de avaliações
+  /// Só o ciclo de vida: de pé ou cancelada. Confirmação, remarcação e
+  /// comparecimento são dimensões próprias (abaixo) — misturá-las aqui fazia
+  /// "concluído" valer como "compareceu". `done` é legado: linhas antigas até
+  /// `scripts/separa-dimensoes-agendamento.ts` rodar (ver `dimensions.ts`).
+  status                 String    @default("scheduled") // scheduled | canceled (legado: done)
+  source                 String    @default("agent") // agent | manual (humano)
+  /// Duração/categoria escolhida (nome da lista do agente ou da clínica).
+  serviceType            String?
+  /// Tipo da consulta: evaluation | return | procedure. Null = não classificado.
+  /// Só vem de escolha explícita (tela, tool com `categoria`), nunca deduzido
+  /// do nome do serviço, das notas ou da conversa.
+  kind                   String?
+  /// Procedimento de interesse (implante, clareamento), como o contato ou a
+  /// clínica informou. Independente do tipo: avaliação PARA implante.
+  procedure              String?
+  /// Confirmação da presença futura. Não é comparecimento: confirmar nunca
+  /// muda `attendance`. Remarcar limpa (a confirmação era do horário antigo).
+  confirmedAt            DateTime?
+  confirmationSource     String? // human | integration
+  /// Última remarcação. Null = nunca remarcada.
+  rescheduledAt          DateTime?
+  /// unknown (não verificado) | attended | no_show. Nasce `unknown` e só muda
+  /// por marcação humana depois do horário (ou status mapeado do Clinicorp):
+  /// agendar ou confirmar NUNCA vira "compareceu".
+  attendance             String    @default("unknown")
+  attendanceSource       String? // human | integration
+  attendanceAt           DateTime?
   /// Id do evento espelhado no Google Agenda, quando a conta está integrada.
   /// Null = só existe aqui (integração desligada ou sincronização falhou).
   googleEventId          String?

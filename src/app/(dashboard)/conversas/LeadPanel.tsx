@@ -14,7 +14,7 @@ export type LeadPanelData = {
   agentPaused: boolean;
   followUpSentAt: Date | null;
   updatedAt: Date;
-  agent: { name: string } | null;
+  agent: { name: string; enabled: boolean; archived: boolean } | null;
   lead: { name: string | null; phone: string; status: string; createdAt: Date };
   messageCount: number;
   summary: string | null;
@@ -44,6 +44,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 export function LeadPanel({ conversation }: { conversation: LeadPanelData }) {
   const status = leadStatusLabel(conversation.lead.status);
   const wa = waLink(conversation.lead.phone);
+  const agentAvailable = Boolean(conversation.agent?.enabled && !conversation.agent.archived);
 
   return (
     <div className="space-y-5">
@@ -88,7 +89,7 @@ export function LeadPanel({ conversation }: { conversation: LeadPanelData }) {
         <Row label="Mensagens trocadas">
           <span className="tabular-nums">{conversation.messageCount}</span>
         </Row>
-        <Row label="Atendido por">{conversation.agent?.name ?? "Agente removido"}</Row>
+        <Row label="Atendido por">{conversation.agent?.name ?? "Sem agente atribuído"}</Row>
         {conversation.followUpSentAt && (
           <Row label="Follow-up">
             <time dateTime={conversation.followUpSentAt.toISOString()}>
@@ -98,11 +99,18 @@ export function LeadPanel({ conversation }: { conversation: LeadPanelData }) {
         )}
       </dl>
 
+      {!agentAvailable && (
+        <p className="text-xs leading-relaxed text-amber-200">
+          Esta conversa está sem agente ativo. Reative o atendimento para atribuí-la ao agente ativo padrão.
+        </p>
+      )}
+
       <div className="space-y-2">
         <ResolveButton
           conversationId={conversation.id}
           needsHuman={conversation.needsHuman}
           agentPaused={conversation.agentPaused}
+          agentAvailable={agentAvailable}
         />
         {wa ? (
           <ButtonLink

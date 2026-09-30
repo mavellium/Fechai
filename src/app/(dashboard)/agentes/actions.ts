@@ -674,10 +674,7 @@ export async function deleteAgentVoice(agentId: string): Promise<Result> {
   return { ok: true, info: "Voz removida. O agente volta a responder só em texto." };
 }
 
-/**
- * Exclui o agente (e, por cascade, sua base e ações). As conversas ficam: o
- * vínculo é `SetNull`, então o histórico e os leads sobrevivem ao agente.
- */
+/** Exclui o agente depois de transferir suas conversas para outro agente ativo. */
 export async function deleteAgent(agentId: string): Promise<Result> {
   const { tenantId, agent } = await requireAgent(agentId);
   if (!agent) return { ok: false, error: "Agente não encontrado" };
@@ -685,6 +682,15 @@ export async function deleteAgent(agentId: string): Promise<Result> {
   const total = await prisma.agent.count({ where: { tenantId, archived: false } });
   if (total <= 1) {
     return { ok: false, error: "Sua conta precisa de pelo menos um agente." };
+  }
+
+  const replacement = await prisma.agent.findFirst({
+    where: { tenantId, id: { not: agent.id }, archived: false, enabled: true },
+    orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }],
+    select: { id: true },
+  });
+  if (!replacement) {
+    return { ok: false, error: "Ative outro agente antes de excluir este. As conversas precisam de alguém para atendê-las." };
   }
 
   // Snapshot ANTES do delete: depois não há mais o que ler, e é este JSON que
@@ -710,20 +716,19 @@ export async function deleteAgent(agentId: string): Promise<Result> {
     },
   });
 
-  await prisma.agent.delete({ where: { id: agent.id } });
-
-  // Se o excluído era o principal, promove outro — a conta não pode ficar sem
-  // ninguém atendendo o WhatsApp.
-  if (agent.isPrimary) {
-    const next = await prisma.agent.findFirst({
-      where: { tenantId, archived: false },
-      orderBy: { createdAt: "asc" },
-      select: { id: true },
+  await prisma.$transaction(async (tx) => {
+    await tx.conversation.updateMany({
+      where: { tenantId, agentId: agent.id },
+      data: { agentId: replacement.id },
     });
-    if (next) await prisma.agent.update({ where: { id: next.id }, data: { isPrimary: true } });
-  }
+    if (agent.isPrimary) {
+      await tx.agent.update({ where: { id: replacement.id }, data: { isPrimary: true } });
+    }
+    await tx.agent.delete({ where: { id: agent.id } });
+  });
 
   revalidatePath("/agentes");
+  revalidatePath("/conversas");
   revalidatePath("/inicio");
   return { ok: true, info: "Agente excluído." };
 }

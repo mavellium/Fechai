@@ -21,6 +21,7 @@ import * as agentTools from "@/modules/agent-engine/tools";
  */
 
 const db = vi.hoisted(() => ({
+  message: { findFirst: vi.fn() },
   conversation: {
     findUnique: vi.fn(),
     findFirst: vi.fn(async () => ({ variables: {}, lead: { name: null, phone: "sandbox:test" } })),
@@ -100,6 +101,20 @@ beforeEach(() => {
   usage.getUsageSummary.mockResolvedValue({ atLimit: false });
   conversation.appendMessage.mockResolvedValue({ id: "msg-1" });
   conversation.getRecentMessages.mockResolvedValue([]);
+  db.message.findFirst.mockResolvedValue({ content: "oi" });
+});
+
+it("retoma mensagem existente sem registrar uma segunda fala do contato", async () => {
+  agente(true);
+
+  const result = await turno({ existingUserMessageId: "entrada-1" });
+
+  expect(result.status).toBe("ok");
+  expect(db.message.findFirst).toHaveBeenCalledWith({
+    where: { id: "entrada-1", conversationId: CONVERSA, role: "user" },
+    select: { content: true },
+  });
+  expect(conversation.appendMessage).not.toHaveBeenCalledWith(CONVERSA, "user", "oi");
 });
 
 it("oferece alternativas verificadas sem deixar a IA confirmar antes da nova escolha", async () => {
@@ -128,6 +143,18 @@ it("oferece alternativas verificadas sem deixar a IA confirmar antes da nova esc
 });
 
 describe("agente desligado", () => {
+  it("marca a conversa sem agente e não chama a IA", async () => {
+    db.agent.findFirst.mockResolvedValue(null);
+
+    const r = await turno({ agentId: "agente-removido" });
+
+    expect(r.status).toBe("no_agent");
+    expect(db.conversation.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { needsHuman: true } }),
+    );
+    expect(ai.complete).not.toHaveBeenCalled();
+  });
+
   it("cala o agente no caminho do cliente (WhatsApp, widget)", async () => {
     agente(false);
 
