@@ -7,7 +7,7 @@ Uma linha por milestone concluído (mais recente no topo).
 Decisões do Vinícius (30/09). Regras em `src/app/(dashboard)/relatorios/README.md`
 ("Modelo revisado" e "PDF e painel: a ordem do relatório").
 **Schema:** `WhatsappIncident`, `Tenant.uptimeTrackedSince`,
-`MonthlyRoiReport.previousActions`, `caseFacts`, `approvalVersion` — `db push` +
+`MonthlyRoiReport.previousActions`, `caseFacts` — `db push` +
 `generate` na web e no worker.
 
 - **Todos os leads entram**, de dentro e de fora do expediente; a divisão é um

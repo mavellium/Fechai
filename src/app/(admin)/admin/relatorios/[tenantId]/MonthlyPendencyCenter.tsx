@@ -36,9 +36,9 @@ export function MonthlyPendencyCenter({ tenantId, month, clinicName, monthLabel,
 }) {
   const due = new Date(dueAt);
   const format = (at: string, withTime = false) => new Intl.DateTimeFormat("pt-BR", { timeZone: timezone, day: "2-digit", month: "2-digit", ...(withTime ? { hour: "2-digit", minute: "2-digit" } : {}) }).format(new Date(at));
-  const pending = rows.filter(isOpenPendency);
-  // Opcional (retorno estimado desligado) não conta nem como confirmado nem como pendente.
-  const required = rows.filter((r) => r.status !== "optional");
+  // Opcional (retorno estimado desligado ou tópico opcional do v2) não conta nem como confirmado nem como pendente.
+  const required = rows.filter((r) => r.status !== "optional" && !r.optional);
+  const pending = required.filter(isOpenPendency);
   const answered = rows.filter((r) => r.status === "answered").length;
   const daysLeft = Math.ceil((due.getTime() - new Date(now).getTime()) / 86_400_000);
   const owners = (Object.keys(PENDENCY_OWNERS) as PendencyOwner[]).map((owner) => ({ owner, items: rows.filter((r) => r.owner === owner) })).filter((g) => g.items.length);
@@ -81,7 +81,8 @@ function PendencyItem({ tenantId, month, row, format }: { tenantId: string; mont
         <p className="font-medium text-ink panel:text-white">{row.title}</p>
         <p className="mt-0.5 text-sm text-neutral panel:text-white/60">Responsável: {row.ownerLabel}{row.assignee ? ` · ${row.assignee}` : ""}</p>
       </div>
-      <Badge tone={STATUS_TONE[row.status]}>{PENDENCY_STATUS_LABELS[row.status]}</Badge>
+      {/* No relatório v2 o financeiro é opcional: sem o dado, só o bloco de retorno estimado some. */}
+      {row.optional && open ? <Badge tone="neutral">Opcional · ativa o retorno estimado</Badge> : <Badge tone={STATUS_TONE[row.status]}>{PENDENCY_STATUS_LABELS[row.status]}</Badge>}
     </div>
     {open && <>
       <ul className="mt-3 list-disc space-y-1 pl-4 text-sm">{row.details.map((d) => <li key={d}>{d}</li>)}</ul>
@@ -117,7 +118,7 @@ function PendencyRequest({ tenantId, month, clinicName, monthLabel, due, now, ti
   const [via, setVia] = useState<Via | null>(null);
   const save = useSaveFeedback({ entity: "solicitação", gender: "f" });
   const requestable = requestableRows(rows);
-  const pending = rows.filter(isOpenPendency);
+  const pending = rows.filter((r) => isOpenPendency(r) && !r.optional);
   const base = { rows, clinicName, contactName: contact.name, monthLabel, dueAt: due, now, timezone };
   const text = buildPendencyRequest({ ...base, format: "whatsapp" });
   const phone = whatsappNumber(contact.phone);

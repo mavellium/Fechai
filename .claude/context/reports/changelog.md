@@ -8,7 +8,7 @@
 
 **Razão:** decisões do Vinícius (30/09): tudo que dá para medir aparece, todos os leads contam, regra conservadora só no retorno estimado.
 
-**Impacto:** schema (`WhatsappIncident`, `Tenant.uptimeTrackedSince`, `MonthlyRoiReport.previousActions`/`caseFacts`/`approvalVersion`) → `db push` + `generate` (web e worker); `hasUnplanned` e `UNPLANNED_ITEMS` removidos; `executiveSummary().unplanned` mudou de forma; fechar exige avaliar as ações do mês anterior e não exige mais texto na parte 05; disponibilidade só existe em meses medidos.
+**Impacto:** schema (`WhatsappIncident`, `Tenant.uptimeTrackedSince`, `MonthlyRoiReport.previousActions`/`caseFacts`) → `db push` + `generate` (web e worker); `hasUnplanned` e `UNPLANNED_ITEMS` removidos; `executiveSummary().unplanned` mudou de forma; fechar exige avaliar as ações do mês anterior e não exige mais texto na parte 05; disponibilidade só existe em meses medidos.
 
 ### [2026-10-01] — Decisor (dono) separado do contato operacional
 

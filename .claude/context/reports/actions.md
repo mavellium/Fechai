@@ -14,7 +14,7 @@ Admin (`src/app/(admin)/admin/relatorios/[tenantId]/actions.ts`), todas `require
 - `previousActions` (JSON; só status/resultado valem, a lista vem do snapshot anterior aprovado) e `caseConversationId` + `caseAge` (fatos lidos por `loadMonthlyCaseFacts`; vazio apaga; conversa inválida é recusada). Caso do mês recusa data exata.
 
 ## finalizeMonthlyRoi(tenantId, month, acknowledged: string[])
-- Recusa também ações do mês anterior sem status/resultado. Não exige mais texto em "O que não saiu como planejado". Grava `approvalVersion + 1` e `snapshot.approval`.
+- Recusa também ações do mês anterior sem status/resultado. Não exige mais texto em "O que não saiu como planejado". Grava `version + 1`, a linha em `MonthlyRoiReportVersion` e `snapshot.approval`.
 - Fluxo: `computeMonthlyReport(..., false)` → recusa mês em andamento, limitações sem confirmação, lista ≠ `acknowledged` (`sameLimitations`), textos vazios → grava `snapshot` (`evidence` + `quality` + `limitations`).
 - Pendência **não** bloqueia; nem selo "inconsistente". Sem retorno estimado, nada financeiro é pedido. Auditoria: chaves das limitações + `unverified`.
 - Recusa por `decisionMakerProblem(report, tenant.ownerNames)`: decisor vazio, fora dos donos/sócios ou igual ao contato operacional.

@@ -14,6 +14,9 @@ import type { CaseFacts } from "@/modules/reports/monthly-case";
 import { ACCOUNT_OWNERS_MAX, PERSON_NAME_MAX, decisionMakerProblem, parseAccountOwners } from "@/modules/reports/monthly-decision-maker";
 import { monthlyOverridesSchema, parseMonthlyOverrides, editableMonthlyMetrics } from "@/modules/reports/monthly-overrides";
 import { recordAudit } from "@/modules/audit/log";
+import { createHash } from "node:crypto";
+import { agentChangesSchema, type ReportedAgentChange } from "@/modules/reports/monthly-agent-changes";
+import { blockingIssues, validateMonthlyReport } from "@/modules/reports/monthly-validate";
 
 type Result = { ok: boolean; error?: string; info?: string };
 function invalidate(tenantId: string) {
@@ -72,6 +75,17 @@ export async function saveMonthlyRoi(tenantId: string, month: string, _previous:
     if (!Array.isArray(raw) || raw.length > ACCOUNT_OWNERS_MAX || !raw.every((v) => typeof v === "string" && v.length <= PERSON_NAME_MAX)) return { ok: false, error: `Informe até ${ACCOUNT_OWNERS_MAX} donos ou sócios, com até ${PERSON_NAME_MAX} caracteres cada.` };
     accountOwners = parseAccountOwners(raw);
   }
+  const decisionMakerRole = text("decisionMakerRole");
+  if (!["", "owner", "partner"].includes(decisionMakerRole)) return { ok: false, error: "Revise o decisor e o contato operacional." };
+  // Ausente no formulário = mantém as salvas (mesma regra das próximas ações).
+  let agentChanges: ReportedAgentChange[] | undefined;
+  if (form.has("agentChanges")) {
+    let raw: unknown;
+    try { raw = JSON.parse(String(form.get("agentChanges"))); } catch { return { ok: false, error: "Mudanças no agente inválidas." }; }
+    const parsedChanges = agentChangesSchema.safeParse(raw);
+    if (!parsedChanges.success) return { ok: false, error: parsedChanges.error.issues[0]?.message ?? "Revise as mudanças no agente." };
+    agentChanges = parsedChanges.data;
+  }
   // Ausente no formulário = mantém as salvas (mesma regra dos indicadores).
   let nextActions: MonthlyNextAction[] | undefined;
   if (form.has("nextActions")) {
@@ -93,7 +107,8 @@ export async function saveMonthlyRoi(tenantId: string, month: string, _previous:
     if (problem) return { ok: false, error: problem };
   }
   const actionsText = (nextActions ?? []).map((a) => `${a.action} ${a.owner} ${a.indicator}`).join(" ");
-  if (featuredCase || highlights || limitationsNote || actionsText) {
+  const changesText = (agentChanges ?? []).map((c) => c.text).join(" ");
+  if (featuredCase || highlights || limitationsNote || actionsText || changesText) {
     // Os textos vão para o decisor e para o PDF: nenhum contato atendido no mês
     // pode ser reconhecido pelo nome, telefone ou e-mail.
     const window = monthlyWindow(month, parsed.data.timezone);
@@ -103,7 +118,8 @@ export async function saveMonthlyRoi(tenantId: string, month: string, _previous:
     const problem = (featuredCase && featuredCaseProblem(featuredCase, names))
       || (highlights && reviewTextProblem("Resumo do período", highlights, names))
       || (limitationsNote && reviewTextProblem("O que não saiu como planejado", limitationsNote, names))
-      || (actionsText && reviewTextProblem("Próximas ações", actionsText, names));
+      || (actionsText && reviewTextProblem("Próximas ações", actionsText, names))
+      || (changesText && reviewTextProblem("O que ajustamos no agente", changesText, names));
     if (problem) return { ok: false, error: problem };
   }
   if (!await validAgents(tenantId, parsed.data.agentIds)) return { ok: false, error: "Selecione somente agentes deste cliente." };
@@ -138,7 +154,7 @@ export async function saveMonthlyRoi(tenantId: string, month: string, _previous:
     if (existing && form.has("revision") && String(form.get("revision")) !== existing.updatedAt.toISOString()) return false;
     const metricOverrides = overrides?.success ? overrides.data : parseMonthlyOverrides(existing?.assumptions);
     const data = { assumptions: { ...parsed.data, metricOverrides }, adjustments, nextMonth, decisionMaker, operationalContact, featuredCase, highlights, limitationsNote,
-      ...(nextActions ? { nextActions } : {}), ...(previousActions ? { previousActions } : {}),
+      ...(form.has("decisionMakerRole") ? { decisionMakerRole } : {}), ...(nextActions ? { nextActions } : {}), ...(agentChanges ? { agentChanges } : {}), ...(previousActions ? { previousActions } : {}),
       ...(caseFacts !== undefined ? { caseFacts: caseFacts ?? Prisma.DbNull } : {}), preparedBy: session.user.id };
     if (!existing) await tx.monthlyRoiReport.create({ data: { tenantId, month, ...data } });
     else if ((await tx.monthlyRoiReport.updateMany({ where: { id: existing.id, tenantId, status: "draft", updatedAt: existing.updatedAt }, data })).count !== 1) return false;
@@ -147,7 +163,7 @@ export async function saveMonthlyRoi(tenantId: string, month: string, _previous:
     return true;
   });
   if (!saved) return { ok: false, error: "O relatório está fechado ou mudou durante a edição. Atualize e reabra a revisão antes de alterar." };
-  await recordAudit({ event: "report.monthly_saved", tenantId, target: { type: "MonthlyRoiReport", id: `${tenantId}:${month}`, label: month }, after: { assumptions: parsed.data, metricOverrides: overrides?.success ? overrides.data : undefined, adjustments, nextMonth, decisionMaker, operationalContact, accountOwners, featuredCase, highlights, limitationsNote, nextActions, previousActions,
+  await recordAudit({ event: "report.monthly_saved", tenantId, target: { type: "MonthlyRoiReport", id: `${tenantId}:${month}`, label: month }, after: { assumptions: parsed.data, metricOverrides: overrides?.success ? overrides.data : undefined, adjustments, nextMonth, decisionMaker, operationalContact, accountOwners, featuredCase, highlights, limitationsNote, nextActions, previousActions, decisionMakerRole, agentChanges,
     ...(caseFacts !== undefined ? { caseFacts: caseFacts && { ...caseFacts } } : {}) } });
   invalidate(tenantId);
   return { ok: true, info: "Indicadores, premissas e revisão salvos para este mês." };
@@ -159,7 +175,7 @@ export async function saveMonthlyRoi(tenantId: string, month: string, _previous:
  * sem evidência seguem nulos e vão congelados como "não verificado".
  */
 export async function finalizeMonthlyRoi(tenantId: string, month: string, acknowledged: string[]): Promise<Result> {
-  await requireSuperadmin();
+  const session = await requireSuperadmin();
   if (!validMonth(month)) return { ok: false, error: "Competência inválida." };
   if (!Array.isArray(acknowledged) || acknowledged.length > 50 || !acknowledged.every((v) => typeof v === "string" && v.length <= 1000)) return { ok: false, error: "Confirmação inválida." };
   const saved = await prisma.monthlyRoiReport.findUnique({ where: { tenantId_month: { tenantId, month } } });
@@ -169,7 +185,7 @@ export async function finalizeMonthlyRoi(tenantId: string, month: string, acknow
   const limitations = report.limitations ?? [];
   if (limitations.length && !acknowledged.length) return { ok: false, error: "Confirme as limitações do fechamento antes de fechar." };
   if (!sameLimitations(acknowledged, limitations)) return { ok: false, error: "As limitações mudaram desde a sua conferência. Revise a lista e confirme de novo." };
-  if (!report.adjustments || !hasNextPlan(report)) return { ok: false, error: "Preencha decisor, ajustes e as próximas ações." };
+  if (!(report.adjustments || report.agentChanges?.length) || !hasNextPlan(report)) return { ok: false, error: "Preencha decisor, ajustes e as próximas ações." };
   // O relatório vai para quem decide a mensalidade: dono ou sócio da conta, nunca a recepção.
   const account = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { ownerNames: true } });
   const decisorProblem = decisionMakerProblem(report, parseAccountOwners(account?.ownerNames));
@@ -177,15 +193,26 @@ export async function finalizeMonthlyRoi(tenantId: string, month: string, acknow
   // O que foi combinado no relatório anterior volta com status e o número que comprova.
   const previousProblem = previousActionsProblem(report.previousActions);
   if (previousProblem) return { ok: false, error: previousProblem };
+  // Relatório v2: número que não fecha ou decisor errado, o decisor da clínica veria.
+  const blocking = report.data ? blockingIssues(validateMonthlyReport(report.data, report)) : [];
+  if (blocking.length) return { ok: false, error: `${blocking[0].message} ${blocking[0].action}` };
   // "O que não saiu como planejado" não é mais obrigatório: sem incidente
   // comprovado nos dados nem texto, a seção diz que não houve incidente.
   const finalizedAt = new Date();
-  // Cada aprovação é uma versão: o PDF entregue diz de qual snapshot saiu.
-  const approval = { version: (saved.approvalVersion ?? 0) + 1, approvedAt: finalizedAt.toISOString() };
-  const updated = await prisma.monthlyRoiReport.updateMany({ where: { id: saved.id, tenantId, status: "draft", updatedAt: saved.updatedAt },
-    data: { status: "ready", finalizedAt, approvalVersion: approval.version, snapshot: JSON.parse(JSON.stringify({ ...report, status: "ready", finalizedAt: finalizedAt.toISOString(), approval })) as Prisma.InputJsonValue } });
+  // Cada fechamento vira uma versão: reabrir e fechar de novo não apaga a
+  // entregue, e o PDF diz de qual snapshot saiu.
+  const version = (saved.version ?? 0) + 1;
+  const approval = { version, approvedAt: finalizedAt.toISOString() };
+  const snapshot = JSON.parse(JSON.stringify({ ...report, status: "ready", finalizedAt: finalizedAt.toISOString(), snapshotVersion: version, approval })) as Prisma.InputJsonValue;
+  const contentHash = createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
+  const updated = await prisma.$transaction(async (tx) => {
+    const changed = await tx.monthlyRoiReport.updateMany({ where: { id: saved.id, tenantId, status: "draft", updatedAt: saved.updatedAt },
+      data: { status: "ready", finalizedAt, snapshot, version } });
+    if (changed.count) await tx.monthlyRoiReportVersion.create({ data: { reportId: saved.id, tenantId, version, snapshot, contentHash, finalizedBy: session.user.id, finalizedAt } });
+    return changed;
+  });
   if (!updated.count) return { ok: false, error: "A revisão mudou durante o fechamento. Atualize e confira novamente." };
-  await recordAudit({ event: "report.monthly_finalized", tenantId, target: { type: "MonthlyRoiReport", id: saved.id, label: month }, meta: { version: approval.version, limitations: limitations.map((l) => l.key), unverified: unverifiedMetrics(report) } });
+  await recordAudit({ event: "report.monthly_finalized", tenantId, target: { type: "MonthlyRoiReport", id: saved.id, label: month }, meta: { limitations: limitations.map((l) => l.key), unverified: unverifiedMetrics(report), version, contentHash } });
   invalidate(tenantId);
   return { ok: true, info: limitations.length
     ? "Relatório fechado com cobertura parcial. As limitações e os números não verificados foram congelados para entrega."

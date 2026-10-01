@@ -1,5 +1,6 @@
 import { financialEnabled, normalizeLabel, type MonthlyAssumptions } from "./monthly-config";
 import type { MonthlyMetrics } from "./monthly";
+import type { MonthlyReportData } from "./monthly-data";
 
 /*
  * Central de pendências do fechamento mensal.
@@ -26,10 +27,11 @@ const OWNER_ORDER: PendencyOwner[] = ["reception", "agenda", "finance", "mavelli
 
 /** O que falta: um dado que ninguém passou, algo a confirmar ou um número a conferir. */
 export type PendencyKind = "data" | "confirm" | "check";
-export type AffectedMetric = "classification" | "scheduled" | "attended" | "revenue" | "savings" | "investment" | "roi";
+export type AffectedMetric = "classification" | "scheduled" | "attended" | "revenue" | "savings" | "investment" | "roi" | "qualified" | "transferred" | "leads";
 export const AFFECTED_METRIC_LABELS: Record<AffectedMetric, string> = {
   classification: "Dentro/fora do horário", scheduled: "Avaliações agendadas", attended: "Avaliações realizadas",
   revenue: "Receita estimada", savings: "Economia estimada", investment: "Investimento mensal", roi: "ROI do mês",
+  qualified: "Qualificados", transferred: "Passadas para a recepção", leads: "Qualidade dos leads",
 };
 const MONEY_METRICS: AffectedMetric[] = ["revenue", "savings", "investment", "roi"];
 /** O que a falta segura. Com o retorno estimado desligado, dinheiro não entra na lista. */
@@ -38,11 +40,19 @@ export function affectedLabels(topic: PendencyTopic, config: MonthlyAssumptions)
   return TOPIC_DEFS[topic].affects.filter((m) => money || !MONEY_METRICS.includes(m)).map((m) => AFFECTED_METRIC_LABELS[m]);
 }
 
-export const PENDENCY_TOPICS = ["hours", "attendance", "classification", "ticket", "team", "consistency", "investment"] as const;
+export const PENDENCY_TOPICS = ["hours", "attendance", "classification", "ticket", "team", "consistency", "investment", "qualification", "handoff", "city"] as const;
 export type PendencyTopic = (typeof PENDENCY_TOPICS)[number];
 export function isPendencyTopic(value: string): value is PendencyTopic {
   return (PENDENCY_TOPICS as readonly string[]).includes(value);
 }
+
+/** Só existem no relatório v2: saem dos avisos de `MonthlyReportData`. */
+const V2_TOPICS: ReadonlySet<string> = new Set(["qualification", "handoff", "city"]);
+/**
+ * No relatório v2 o financeiro é opcional: sem estes dados o bloco de retorno
+ * estimado some, e mais nada. Não são pendência nem limitação do fechamento.
+ */
+const OPTIONAL_TOPICS: ReadonlySet<string> = new Set(["ticket", "team", "consistency"]);
 
 type TopicDef = { owner: PendencyOwner; kind: PendencyKind; affects: AffectedMetric[]; title: (monthName: string) => string };
 export const TOPIC_DEFS: Record<PendencyTopic, TopicDef> = {
@@ -53,20 +63,23 @@ export const TOPIC_DEFS: Record<PendencyTopic, TopicDef> = {
   team: { owner: "finance", kind: "data", affects: ["savings", "roi"], title: () => "Custo e tempo da equipe" },
   consistency: { owner: "mavellium", kind: "check", affects: ["attended", "revenue", "roi"], title: () => "Conferência dos indicadores" },
   investment: { owner: "mavellium", kind: "data", affects: ["investment", "roi"], title: (monthName) => `Mensalidade de ${monthName}` },
+  qualification: { owner: "mavellium", kind: "check", affects: ["qualified"], title: () => "Registro da qualificação pelo agente" },
+  handoff: { owner: "mavellium", kind: "check", affects: ["transferred"], title: () => "Registro do transbordo pelo agente" },
+  city: { owner: "mavellium", kind: "check", affects: ["leads"], title: () => "Cidade informada pelos contatos" },
 };
 /** Só a clínica responde estes; os da Mavellium nunca entram na solicitação. */
 export const askedFromClinic = (topic: PendencyTopic) => TOPIC_DEFS[topic].owner !== "mavellium";
 
-export type MonthlyPendency = { topic: PendencyTopic; text: string };
+export type MonthlyPendency = { topic: PendencyTopic; text: string; optional?: boolean };
 
 /**
  * O que ainda falta para fechar a competência, na ordem em que o relatório
  * sempre listou. Recebe as métricas já com procedimentos, economia e
  * mensalidade calculados; a receita é derivada DEPOIS, a partir daqui.
  */
-export function detectMonthlyPendencies(m: MonthlyMetrics, config: MonthlyAssumptions): MonthlyPendency[] {
+export function detectMonthlyPendencies(m: MonthlyMetrics, config: MonthlyAssumptions, data?: MonthlyReportData): MonthlyPendency[] {
   const found: MonthlyPendency[] = [];
-  const add = (topic: PendencyTopic, text: string) => found.push({ topic, text });
+  const add = (topic: PendencyTopic, text: string) => found.push({ topic, text, ...(data && OPTIONAL_TOPICS.has(topic) ? { optional: true } : {}) });
   if (!config.humanHours) add("hours", "Horário humano não informado.");
   if (m.attendanceUnknown) add("attendance", `${m.attendanceUnknown} avaliação(ões) sem comparecimento confirmado.`);
   if (m.untypedAppointments) add("classification", `${m.untypedAppointments} agendamento(s) sem tipo de atendimento; confira se são avaliações.`);
@@ -82,6 +95,12 @@ export function detectMonthlyPendencies(m: MonthlyMetrics, config: MonthlyAssump
   if (outside !== m.attended.outside) add("consistency", "Confira as avaliações realizadas fora do horário: o total deve corresponder à soma por procedimento.");
   if (m.savingsCents === null) add("team", "Informe custo e carga mensal do atendente e o tempo por mensagem (ou por conversa) para a economia estimada.");
   if (m.investmentCents === null) add("investment", "Mensalidade não informada.");
+  if (data) {
+    const scheduled = data.schedule.cohort.total.total.value ?? 0, transferred = data.service.transferred.value ?? 0;
+    if (data.schedule.qualified.total.status === "partial") add("qualification", `${data.schedule.qualified.total.value} qualificados para ${scheduled} avaliações agendadas: o agente não está registrando a qualificação.`);
+    if (transferred > 0 && !data.service.handoffEvents.value) add("handoff", `${transferred} conversas tiveram resposta da equipe e o agente não registrou nenhum transbordo.`);
+    if (data.leads.withCity.status === "partial") add("city", `Só ${data.leads.withCity.value} de ${data.service.contacts.total.value} contatos informaram a cidade: ajustar o agente para perguntar.`);
+  }
   return found;
 }
 export const blocksRevenue = (pendencies: MonthlyPendency[]) => pendencies.some((p) => TOPIC_DEFS[p.topic].affects.includes("revenue"));
@@ -136,6 +155,8 @@ export const PENDENCY_STATUS_LABELS: Record<PendencyStatus, string> = {
 export type PendencyRow = {
   topic: PendencyTopic; title: string; owner: PendencyOwner; ownerLabel: string; status: PendencyStatus;
   details: string[]; question: string | null; affects: string[]; askedFromClinic: boolean;
+  /** Relatório v2: não é pendência, só ativa o bloco de retorno estimado. */
+  optional?: boolean;
   assignee: string; requestedAt: string | null; requestedVia: string | null; answer: string; answeredAt: string | null;
 };
 
@@ -145,11 +166,11 @@ export type PendencyRow = {
  * último pedido vira "Resposta a aplicar": ela não muda número sozinha.
  */
 export function buildPendencyBoard(input: {
-  metrics: MonthlyMetrics; config: MonthlyAssumptions; monthName: string; tracking: PendencyTracking[];
+  metrics: MonthlyMetrics; config: MonthlyAssumptions; monthName: string; tracking: PendencyTracking[]; data?: MonthlyReportData;
 }): PendencyRow[] {
-  const found = detectMonthlyPendencies(input.metrics, input.config);
+  const found = detectMonthlyPendencies(input.metrics, input.config, input.data);
   const tracked = new Map(input.tracking.filter((t) => isPendencyTopic(t.topic)).map((t) => [t.topic, t]));
-  return PENDENCY_TOPICS.map((topic): PendencyRow => {
+  return PENDENCY_TOPICS.filter((topic) => input.data || !V2_TOPICS.has(topic)).map((topic): PendencyRow => {
     const def = TOPIC_DEFS[topic], t = tracked.get(topic);
     const details = found.filter((p) => p.topic === topic).map((p) => p.text);
     const answered = Boolean(t?.answeredAt && (!t.requestedAt || t.answeredAt >= t.requestedAt));
@@ -157,6 +178,7 @@ export function buildPendencyBoard(input: {
     const status: PendencyStatus = optional ? "optional" : !details.length ? "confirmed" : answered ? "answered" : t?.requestedAt ? "requested" : def.kind;
     return {
       topic, title: def.title(input.monthName), owner: def.owner, ownerLabel: PENDENCY_OWNERS[def.owner], status, details,
+      ...(input.data && OPTIONAL_TOPICS.has(topic) ? { optional: true } : {}),
       question: details.length ? pendencyQuestion(topic, input.metrics, input.config) : null,
       affects: affectedLabels(topic, input.config), askedFromClinic: askedFromClinic(topic),
       assignee: t?.assignee ?? "", requestedAt: t?.requestedAt?.toISOString() ?? null, requestedVia: t?.requestedVia ?? null,

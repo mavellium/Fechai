@@ -14,7 +14,82 @@ sugeridas para o tráfego. Os números vêm de `loadLeadQuality`
 [`lead-insights/README.md`](../../../modules/lead-insights/README.md). O mesmo
 resumo entra no relatório mensal (bloco + 2ª página do PDF).
 
-### ROI mensal odontológico (P-79)
+### Relatório mensal v2 (`?visao=mensal`, rótulo "Relatório mensal")
+
+Mede o que o Fechai controla: atendimento, agendamento e comparecimento. A
+âncora é **avaliações agendadas e realizadas**; todos os contatos entram, dentro
+e fora do expediente, e o financeiro é um bloco opcional. Três camadas, nesta
+ordem: **o motor calcula e valida → a IA só redige a partir dos números
+validados → painel e PDF só apresentam o snapshot**. Nenhum número nasce em
+componente, prompt ou gerador de PDF.
+
+- **Contrato** (`modules/reports/monthly-data.ts`): `MonthlyReportData`, em
+  `MonthlyReport.data`. Cada número é um `Metric { value, status, source }`;
+  status `measured`, `confirmed`, `estimated`, `partial`, `unverified` ou
+  `unavailable` (a linha some). Montado dentro de `evaluateMonthlyMetrics`
+  (mesma entrada, nenhuma consulta nova) e congelado no snapshot. **Snapshot
+  sem `data` é mês fechado antes da v2 e segue na visão antiga** (`MonthlyView`
+  + `monthly-pdf.ts`); não remova a visão antiga sem migrar esses meses.
+- **Definições.** *Contato atendido*: escreveu no mês e recebeu resposta (IA ou
+  equipe) depois disso; a unidade é o contato, não a conversa respondida pelo
+  agente nem o lead criado (era a origem do "117 × 277"). *Expediente × fora*:
+  pela primeira mensagem do contato no mês, contra o expediente cadastrado;
+  sem expediente só o total aparece. *Transferidas*: mensagem da equipe depois
+  da primeira mensagem do contato, **ou** evento de transbordo; *só agente* é
+  `contatos − transferidas`. *1ª resposta do agente*: mediana, só quando a
+  primeira resposta foi da IA. *Recepção*: do transbordo (sem evento, da última
+  mensagem do contato) à primeira mensagem da equipe. *Tempo de texto*:
+  mensagens de texto × `secondsPerMessage` (padrão 30), sempre `estimated`.
+  *Coorte*: avaliações do agente **criadas** no mês, cada uma `attended`,
+  `no_show`, `upcoming` ou `unverified`; consulta passada sem status mapeado é
+  não verificada, **nunca falta**. A falta do Clinicorp vem de
+  `assumptions.noShowStatusTypes`. Criadas antes e realizadas no mês vão numa
+  linha à parte, fora da taxa. *Motivo principal*: um por contato que não
+  agendou (`lossKeyOf`); sem motivo registrado cai em "Outros", para a soma
+  fechar em `contatos − agendaram`. *Comparativo*: só com o mês anterior
+  inteiro medido; senão `comparison = null` e a coluna some.
+- **Retorno estimado** (`estimatedReturn`): `null` sem expediente, mensalidade,
+  custo da equipe ou ticket/conversão. Nulo, o bloco não é renderizado: nada
+  de "pendente", zero ou convite. A receita só de quem chegou com a recepção
+  fechada vale **apenas** aqui. Não é a visão Financeira (`computeFinancialSummary`),
+  que segue com a própria regra; unificar as duas é decisão futura.
+- **Validador** (`monthly-validate.ts`). Bloqueiam o fechamento: só agente +
+  transferidas ≠ contatos; coorte que não soma; expediente + fora ≠ total;
+  motivos ≠ contatos − agendaram; decisor ausente ou igual ao contato
+  operacional; resumo com número fora dos dados; texto com data completa.
+  Avisos (não bloqueiam, viram tópico da central): qualificados < agendados,
+  equipe respondeu sem transbordo registrado, mediana do agente > 300 s,
+  cidade em menos de 50% dos contatos, comparecimento não verificado,
+  expediente não cadastrado. Ticket, conversão e custo da equipe não são
+  pendência: na central aparecem como "Opcional · ativa o retorno estimado".
+- **Documento** (`monthly-v2/MonthlyReportDocument.tsx`): a folha que o decisor
+  recebe, igual no painel e no PDF. Sem cálculo, sem componente de admin e sem
+  variante `panel:` (a folha é sempre clara). Textos fixos e formatos em
+  `monthly-format.ts`.
+- **PDF** (`monthly-print.ts`): o Chromium do servidor abre
+  `/imprimir/relatorio-mensal?token=…` e imprime em A4. O token
+  (`lib/print-token.ts`) é assinado pela rota de PDF depois de conferir a
+  sessão e vale 5 minutos. Precisa de `chromium` na imagem (`CHROMIUM_PATH`,
+  `PDF_BASE_URL`); sem navegador, a rota redireciona para a página de
+  impressão. Arquivo: `fechai-relatorio-{clínica}-{YYYY-MM}-v{versão}.pdf`.
+- **Decisor** é o dono ou sócio (`decisionMakerRole`); a recepção é
+  `operationalContact`, em cópia. **Mudanças no agente** são lista estruturada
+  (`agentChanges`, `monthly-agent-changes.ts`).
+- **Versões**: cada fechamento grava `MonthlyRoiReportVersion` (snapshot +
+  hash) e sobe `MonthlyRoiReport.version`; reabrir não apaga o entregue.
+- **Guardas da IA** (`monthly-text-guard.ts`): todo número do resumo precisa
+  existir em `data` ("9h40", "78%", "R$ 8.960"); senão o rascunho é descartado
+  e o fechamento bloqueia.
+- **Ainda não feito**: cadastro de incidentes (a disponibilidade fica
+  `unavailable` até existir fonte; o motor já aceita `MonthlyInput.incidents`),
+  avaliação das ações do mês anterior, "Ver registros" dos números novos
+  (`evidence.contacts`/`evidence.cohort` já são gravados), feriados no
+  expediente. Disparo conta como mensagem da equipe (`sentBy: "human"`): um
+  disparo depois de o contato escrever no mês marca o contato como transferido.
+- Testes: `tests/relatorio-mensal-v2-*.test.ts`, com a fixture de aceite em
+  `tests/fixtures/monthly-report-v2.ts`.
+
+### ROI mensal odontológico (P-79, visão anterior à v2)
 
 A visão `?visao=mensal&mes=YYYY-MM` apresenta relatórios revisados pela Mavellium.
 No tenant, a aba só aparece quando há relatório `ready` com snapshot. O seletor
@@ -190,7 +265,7 @@ Decisões do Vinícius (30/09/2026), valendo para o painel e o PDF:
    aponta para conferência todo número que não está nos fatos nem no contexto
    do administrador. Continua rascunho até a Mavellium salvar.
 3. **O PDF apresenta só o que foi aprovado e versionado** — o snapshot do
-   fechamento. Cada fechamento é uma versão (`MonthlyRoiReport.approvalVersion`,
+   fechamento. Cada fechamento é uma versão (`MonthlyRoiReport.version` + `MonthlyRoiReportVersion`,
    `snapshot.approval = { version, approvedAt }`), impressa no rodapé de toda
    página. O PDF da clínica sai de `loadApprovedReport` (snapshot ou 404, nunca
    um cálculo na hora); o do admin em rascunho é prévia e diz "RASCUNHO · NÃO
@@ -464,7 +539,7 @@ trabalho da recepção assumido pelo agente. Regras que não se quebram:
   o caso do mês fica em "03 O que ajustamos no agente"; a duração dos
   atendimentos por resultado só aparece no painel.
 
-`/relatorios` tem **três visões do produto**, trocadas por um toggle no topo (querystring `?visao=`), além da visão de afiliados para participantes do programa:
+`/relatorios` tem **cinco visões**, trocadas por um toggle no topo (querystring `?visao=`): Operacional, Financeiro, Qualidade dos leads (`leads`), Relatório mensal (`mensal`, só com mês publicado) e Afiliados (só para quem está no programa). As três do produto com regra própria:
 
 - **Operacional** (padrão): KPIs com delta vs. período anterior, gráficos (fluxo, resultados, atendimento IA×humano, leads fechados IA×humano, donut por agente, leads por status, funil de conversão, resolução autônoma, recuperação por follow-up, horários de pico, tempo até a primeira resposta, comparecimento/no-show — compareceu × faltou pelo horário da consulta, com "não verificado" na tabela; cancelada não entra) e exportação CSV.
 - **Financeiro**: retorno financeiro **estimado** do investimento no projeto — KPIs (Retorno, Investido, ROI, Ponto de equilíbrio), gráfico de retorno acumulado × investido, retorno por agente, retorno mês a mês e custo por lead fechado. O valor por lead é definido manualmente pelo dono da conta; sem ele, os gráficos que dependem desse valor mostram um estado vazio com a chamada para definir, nunca uma série de zeros. No fim da visão fica **"O que o agente filtrou"** (triagem): contatos que o agente encerrou por não serem clientes em potencial, e o tempo/dinheiro que isso poupou.
