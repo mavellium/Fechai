@@ -21,6 +21,13 @@ ARG NODE_VERSION=22-bookworm-slim
 FROM node:${NODE_VERSION} AS base
 WORKDIR /app
 ENV NODE_ENV=production
+# OpenSSL em TODOS os estágios: o Prisma escolhe o engine pela libssl que
+# encontra. Sem ela aqui, o `prisma generate` do estágio deps gerava para
+# openssl-1.1.x e a imagem final (que ganha a libssl3 junto com o Chromium)
+# pedia 3.0.x; o /api/health falhava e o deploy era abortado.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends openssl ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 
 # ---------- deps ----------
 FROM base AS deps
