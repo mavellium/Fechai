@@ -4,6 +4,10 @@
 generator client {
   provider        = "prisma-client-js"
   previewFeatures = ["postgresqlExtensions"]
+  // O engine precisa bater com o OpenSSL de onde o app RODA, não de onde foi
+  // gerado. A imagem de produção tem OpenSSL 3 (bookworm); sem declarar, um
+  // estágio de build sem a libssl gera só o 1.1.x e toda consulta falha.
+  binaryTargets   = ["native", "debian-openssl-3.0.x"]
 }
 
 datasource db {
