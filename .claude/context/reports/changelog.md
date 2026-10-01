@@ -2,6 +2,23 @@
 
 **Instrução:** Atualize aqui cada vez que mexer neste módulo.
 
+### [2026-10-01] — Corrigir valor do lead versus criar nova vigência
+
+**Motivo:** “Alterar valor” sempre criava uma vigência nova, deixando R$ 10,00
+no período já iniciado e devolvendo uma mensagem de sucesso que parecia
+impedir a edição.
+
+**Alterações:** o modal começa com o valor exibido e separa correção da
+vigência existente (padrão) de valor novo a partir de agora. A correção
+preserva a data e recalcula todos os períodos que usam aquela linha; o efeito
+é explicado antes de salvar. `FinancialSummary.valueId` identifica a vigência;
+`saveLeadValue` usa tenant e update condicional por id/valor/data. Registra
+auditoria antes/depois e não altera snapshots mensais aprovados. Inputs são
+reiniciados com o valor exibido ao reabrir o modal. Sem alteração de schema.
+
+**Validação:** testes de recálculo real por `computeFinancialSummary`, nova
+vigência, isolamento do tenant, edição concorrente, sessão e limites do valor.
+
 ### [2026-10-01] — Erros do assistente de fechamento e chave financeira acessível
 
 **Motivo:** a análise relia `FormData` após o await, quando o fieldset estava

@@ -46,6 +46,7 @@ export type AuditGroup = keyof typeof AUDIT_GROUPS;
  */
 export const AUDIT_EVENTS = {
   "report.monthly_saved": { label: "Revisou as premissas do ROI mensal", kind: "update", group: "admin" },
+  "report.lead_value_saved": { label: "Definiu ou corrigiu o valor do lead", kind: "update", group: "conta" },
   "report.monthly_finalized": { label: "Fechou o relatório mensal", kind: "update", group: "admin" },
   "report.monthly_reopened": { label: "Reabriu o relatório mensal", kind: "update", group: "admin" },
   "report.monthly_delivered": { label: "Registrou envio ou reunião do relatório", kind: "update", group: "admin" },

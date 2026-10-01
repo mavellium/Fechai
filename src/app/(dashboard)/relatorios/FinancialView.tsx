@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useActionToast } from "@/components/ui/toast";
 import { useActionState } from "react";
 import { Pencil, TrendingUp, X } from "lucide-react";
@@ -12,6 +12,7 @@ import { FormFeedback } from "@/components/ui/alert";
 import { Stat } from "@/components/ui/stat";
 import { CurrencyInput } from "@/components/ui/currency-input";
 import { Field, fieldProps } from "@/components/ui/field";
+import { SelectMenu } from "@/components/ui/select-menu";
 import { dateLabel, formatBRL } from "@/lib/format";
 import type { FinancialSummary } from "@/modules/reports/service";
 import { saveLeadValue } from "./actions";
@@ -34,6 +35,9 @@ export function FinancialView({ summary }: { summary: FinancialSummary }) {
   const confirmNavigation = useUnsavedNavigation();
   const close = () => confirmNavigation(() => dialog.current?.close(), dialog.current);
   const [state, formAction, pending] = useActionState(saveLeadValue, null);
+  const [mode, setMode] = useState("correct");
+  const [dialogVersion, setDialogVersion] = useState(0);
+  const [previousFeedback, setPreviousFeedback] = useState(state);
   useActionToast(state, pending, { entity: "valor do lead" });
 
   useEffect(() => {
@@ -46,7 +50,12 @@ export function FinancialView({ summary }: { summary: FinancialSummary }) {
   const leadsLabel = summary.closedLeads === 1 ? "lead fechado" : "leads fechados";
   const hasValue = summary.valuePerLeadCents !== null;
 
-  const openValueDialog = () => dialog.current?.showModal();
+  const canCorrect = Boolean(summary.valueId && summary.valueStartsAt);
+  const openValueDialog = () => {
+    setMode(canCorrect ? "correct" : "new");
+    setPreviousFeedback(state); setDialogVersion((v) => v + 1);
+    dialog.current?.showModal();
+  };
 
   return (
     <div className="space-y-6">
@@ -175,22 +184,37 @@ export function FinancialView({ summary }: { summary: FinancialSummary }) {
           </button>
         </div>
 
-        <UnsavedForm action={formAction} result={state} label="Valor do lead" className="space-y-4">
+        <UnsavedForm key={dialogVersion} action={formAction} result={state} label="Valor do lead" className="space-y-4">
+          {canCorrect ? <div className="space-y-1.5"><p id="valor-do-lead-modo" className="text-sm font-medium">Como aplicar a alteração</p>
+            <SelectMenu label="Como aplicar a alteração" labelledBy="valor-do-lead-modo" name="mode" value={mode} onChange={setMode} disabled={pending}
+              options={[{ value: "correct", label: "Corrigir o valor exibido" }, { value: "new", label: "Novo valor a partir de agora" }]} /></div>
+            : <input type="hidden" name="mode" value="new" />}
+          {canCorrect && <>
+            <input type="hidden" name="valueId" value={summary.valueId!} />
+            <input type="hidden" name="valueBefore" value={summary.valuePerLeadCents ?? ""} />
+            <input type="hidden" name="valueStartsAt" value={new Date(summary.valueStartsAt!).toISOString()} />
+          </>}
           <Field
             label="Valor por lead (R$)"
             htmlFor="valor-do-lead-valor"
-            hint="Ex.: 500,00. Passa a valer a partir de agora — períodos já iniciados mantêm o valor anterior."
+            hint="Ex.: 500,00. Estimativa por contato que agendou."
           >
             <CurrencyInput
               {...fieldProps("valor-do-lead-valor")}
               name="value"
+              defaultValueCents={summary.valuePerLeadCents}
               autoFocus
               required
               placeholder="0,00"
             />
           </Field>
 
-          <FormFeedback error={state?.error} info={state?.ok ? state.info : undefined} />
+          <p className="text-sm text-white/65">{canCorrect && mode === "correct"
+            ? `Corrige a vigência de ${dateLabel(summary.valueStartsAt!)} e recalcula todos os períodos que usam esse valor, inclusive o exibido. Relatórios mensais aprovados mantêm o snapshot entregue.`
+            : hasValue ? "Cria uma nova vigência a partir de agora. Períodos iniciados antes continuam usando o valor anterior."
+              : "Define a primeira estimativa por lead. Períodos sem uma vigência anterior também usam este valor."}</p>
+
+          <FormFeedback error={state !== previousFeedback ? state?.error : undefined} info={state !== previousFeedback && state?.ok ? state.info : undefined} />
 
           <div className="flex justify-end gap-2">
             <Button
@@ -203,7 +227,7 @@ export function FinancialView({ summary }: { summary: FinancialSummary }) {
               Cancelar
             </Button>
             <Button type="submit" size="sm" loading={pending} loadingLabel="Salvando valor">
-              Salvar
+              {canCorrect && mode === "correct" ? "Salvar correção" : "Salvar novo valor"}
             </Button>
           </div>
         </UnsavedForm>

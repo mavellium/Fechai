@@ -775,7 +775,16 @@ recontados localmente.
 - **`months`**: meses de calendário (fuso do painel) tocados pela janela, mínimo 1. "Hoje"/"7"/"30" dentro do mesmo mês → 1. Para `"tudo"`, ancora na **criação da conta** (`Tenant.createdAt`).
 - **`investedCents`**: `priceCents × months`, onde `priceCents` é `Tenant.priceCentsOverride ?? planOf(tenant.planKey).priceCents` — o admin pode fixar o preço negociado da conta sem mexer no plano (que mudaria a cota junto).
 - **`months` nunca começa antes da conta existir**: o início da janela é clampado em `Tenant.createdAt`. Sem esse corte, "últimos 30 dias" numa conta criada dia 09/09 tocava agosto E setembro e cobrava 2 meses de quem pagou 1 — o "Investido" ficava maior que a fatura e o ROI, menor que a realidade. Mês tocado conta **inteiro**, não proporcional aos dias: é o que a pessoa de fato pagou; ratear daria um ROI mais bonito que o extrato.
-- **Valor por lead** (`TenantLeadValue`): entradas com vigência (`startsAt`). O valor usado é o **em vigor no início da janela** (`maior startsAt ≤ from`); sem nenhum até lá, usa o mais antigo (valor definido no meio de uma janela curta). `"tudo"` usa o valor **atual** (mais recente). **Mudar o valor não recalcula períodos que já começaram** — é o contrato do "histórico por período".
+- **Valor por lead** (`TenantLeadValue`): entradas com vigência (`startsAt`). O valor usado é o **em vigor no início da janela** (`maior startsAt ≤ from`); sem nenhum até lá, usa o mais antigo (valor definido no meio de uma janela curta). `"tudo"` usa o valor **atual** (mais recente). **Criar nova vigência não recalcula períodos que já começaram**; correção explícita da vigência é a exceção descrita abaixo.
+- **Editar × nova vigência (01/10/2026):** o modal do valor do lead abre com o
+  valor exibido e oferece “Corrigir o valor exibido” (padrão quando existe) ou
+  “Novo valor a partir de agora”. Correção atualiza `valueCents` da vigência
+  escolhida, preservando `startsAt`: todos os períodos que usam essa vigência
+  são recalculados. A data e esse efeito aparecem antes do salvar. Nova vigência
+  preserva o contrato anterior. `FinancialSummary.valueId` identifica a linha;
+  a action exige tenant e faz `updateMany` condicional por id/valor/data para
+  impedir alteração entre contas ou sobrescrita concorrente. Ambas as opções
+  registram auditoria, sem alterar `MonthlyRoiReport` ou snapshot aprovado.
 - **`returnCents`**: `closedLeads × valuePerLeadCents` (null enquanto não há valor definido).
 - **`roiPercent`**: `(retorno − investido) / investido × 100`, arredondado. `null` se `investedCents = 0` (Plano Grátis) ou sem valor definido.
 - **`cumulative`** (`null` sem valor por lead): retorno acumulado × investido acumulado, por bucket. Investido é o total dividido em partes iguais pelos buckets — aproximação estimada (o plano é mensal, não por bucket).

@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { payloadTooLarge } from "@/lib/rate-limit";
+import { recordAudit } from "@/modules/audit/log";
 import {
   MAX_HOURLY_COST_CENTS,
   MAX_MINUTES_PER_LEAD,
@@ -23,9 +24,9 @@ function parseReais(raw: string): number | null {
 
 /**
  * Define (ou altera) o valor de um lead fechado na visão Financeira de
- * /relatorios. Cada salvamento cria uma entrada nova com vigência a partir de
- * agora: janelas que JÁ começaram continuam usando o valor que estava em vigor
- * no início delas, então mudar o número não recalcula períodos passados.
+ * /relatorios. `new` cria vigência a partir de agora; `correct` corrige a
+ * vigência exibida, mantendo a data e recalculando as consultas que a usam.
+ * Nenhuma das opções altera snapshots mensais aprovados.
  */
 export async function saveLeadValue(_prev: Result | null, formData: FormData): Promise<Result> {
   const tooLarge = payloadTooLarge(formData);
@@ -41,12 +42,33 @@ export async function saveLeadValue(_prev: Result | null, formData: FormData): P
     return { ok: false, error: "Valor muito alto (máx. R$ 10 milhões)." };
   }
 
-  await prisma.tenantLeadValue.create({
-    data: { tenantId, valueCents: cents, startsAt: new Date() },
-  });
+  const mode = String(formData.get("mode") ?? "new");
+  if (mode !== "new" && mode !== "correct") return { ok: false, error: "Escolha corrigir o valor exibido ou definir um novo valor." };
+  if (mode === "correct") {
+    const id = String(formData.get("valueId") ?? "");
+    const before = Number(formData.get("valueBefore"));
+    const startsAt = new Date(String(formData.get("valueStartsAt") ?? ""));
+    if (!id || id.length > 100 || !Number.isSafeInteger(before) || before <= 0 || before > MAX_CENTS || !Number.isFinite(startsAt.getTime())) {
+      return { ok: false, error: "Atualize a página e abra novamente o valor que deseja corrigir." };
+    }
+    // Checagem e escrita atômicas: não sobrescrever correção concorrente nem
+    // permitir um id de outra conta, mesmo que o formulário seja adulterado.
+    const changed = await prisma.tenantLeadValue.updateMany({
+      where: { id, tenantId, valueCents: before, startsAt }, data: { valueCents: cents },
+    });
+    if (!changed.count) return { ok: false, error: "Este valor mudou ou não está disponível nesta conta. Atualize a página e confira antes de salvar." };
+    await recordAudit({ event: "report.lead_value_saved", tenantId, target: { type: "TenantLeadValue", id },
+      before: { valueCents: before, startsAt }, after: { valueCents: cents, startsAt }, meta: { mode } });
+  } else {
+    const saved = await prisma.tenantLeadValue.create({ data: { tenantId, valueCents: cents, startsAt: new Date() } });
+    await recordAudit({ event: "report.lead_value_saved", tenantId, target: { type: "TenantLeadValue", id: saved.id },
+      after: { valueCents: cents, startsAt: saved.startsAt }, meta: { mode } });
+  }
 
   revalidatePath("/relatorios");
-  return { ok: true, info: "Valor por lead salvo — períodos já iniciados mantêm o valor anterior." };
+  return { ok: true, info: mode === "correct"
+    ? "Valor do lead corrigido. O financeiro foi recalculado com esse valor."
+    : "Novo valor salvo a partir de agora. O período selecionado pode continuar usando a vigência anterior." };
 }
 
 /**
