@@ -26,12 +26,12 @@ const text = (r: MonthlyReport) => html(r).replace(/<[^>]+>/g, " ").replace(/\s+
 describe("documento do relatório mensal v2", () => {
   it("mostra os números do motor na ordem de leitura do decisor", () => {
     const out = text(report());
-    expect(out).toContain("Em setembro, o Fechai atendeu 214 contatos e marcou 31 avaliações. 21 pacientes já compareceram. 88 contatos chegaram com a recepção fechada");
+    expect(out).toContain("Em setembro, o Fechai atendeu 214 contatos e marcou 31 avaliações. 21 pacientes já compareceram. 1 comparecimento ainda precisa de verificação. 3 consultas ainda vão acontecer. 88 contatos chegaram com a recepção fechada");
     expect(out).toContain("126 no expediente · 88 fora");
-    expect(out).toContain("78% das consultas já realizadas");
-    expect(out).toContain("9h40"); expect(out).toContain("R$ 7.712"); expect(out).toContain("5,2x");
+    expect(out).toContain("21 comparecimentos confirmados; 1 não verificado; 3 consultas futuras");
+    expect(out).toContain("9h40"); expect(out).toContain("ROI total Indisponível"); expect(out).not.toContain("5,2x");
     expect(out).toContain("Dr. Rafael Teixeira (sócio)"); expect(out).toContain("seg a sex 8h–18h, sáb 8h–12h");
-    expect(out.indexOf("Próximo mês")).toBeLessThan(out.indexOf("Atendimento"));
+    expect(out.indexOf("Próximo mês")).toBeGreaterThan(out.indexOf("O que não saiu como planejado"));
     expect(text({ ...report() }).length).toBeGreaterThan(0);
   });
   it("abre o bloco 03 com as ações do mês anterior já avaliadas e mostra os fatos do caso", () => {
@@ -50,7 +50,7 @@ describe("documento do relatório mensal v2", () => {
   it("na tela, as próximas ações ficam no fim e o retorno estimado por último", () => {
     const out = html(report(), false).replace(/<[^>]+>/g, " ");
     expect(out.indexOf("Próximo mês")).toBeGreaterThan(out.indexOf("O que não saiu como planejado"));
-    expect(out.indexOf("Retorno estimado")).toBeGreaterThan(out.indexOf("Próximo mês"));
+    expect(out.indexOf("Retorno financeiro")).toBeGreaterThan(out.indexOf("Próximo mês"));
   });
   it("sem premissa financeira, o PDF não fala em ROI, retorno nem pendente (D4)", () => {
     const input = v2Input();
@@ -104,7 +104,7 @@ describe("guardas dos textos da IA", () => {
   const data = evaluateMonthlyMetrics(v2Input()).data;
   const allowed = allowedNumbers(data, { month: "2026-09", previousMonth: "2026-08" });
   it("aceita os números do motor em qualquer forma em que o relatório os mostra", () => {
-    expect(unknownNumbers("Em setembro o agente atendeu 214 contatos, marcou 31 avaliações (78% de comparecimento, 22% de faltas), devolveu 9h40 e respondeu em 38 s. A recepção levou 22 minutos. Retorno estimado de R$ 7.712, 5,2x. Atende 24h por dia.", allowed)).toEqual([]);
+    expect(unknownNumbers("Em setembro o agente atendeu 214 contatos, marcou 31 avaliações (78% de comparecimento, 22% de faltas), devolveu 9h40 e respondeu em 38 s. A recepção levou 22 minutos. Economia operacional estimada de R$ 242. Atende 24h por dia.", allowed)).toEqual([]);
   });
   it("recusa número que o motor não calculou", () => {
     expect(unknownNumbers("O agente atendeu 277 contatos e gerou R$ 12.345.", allowed)).toEqual(["277", "12.345"]);

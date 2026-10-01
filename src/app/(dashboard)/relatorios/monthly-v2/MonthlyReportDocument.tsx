@@ -1,12 +1,14 @@
 import type { ReactNode } from "react";
 import type { MonthlyReport } from "@/modules/reports/monthly";
+import { monthlyFinancialPresentation } from "@/modules/reports/monthly-data";
 import type { Metric, MetricStatus, MonthlyReportData, Split } from "@/modules/reports/monthly-data";
 import { AGENT_CHANGE_LABELS } from "@/modules/reports/monthly-agent-changes";
 import { ACTION_STATUS_LABEL, type ActionStatus } from "@/modules/reports/monthly-previous-actions";
 import { caseFactItems } from "@/modules/reports/monthly-case";
-import { NO_PROBLEMS, STATUS_SEAL, deltaLabel, formatCount, formatPercent, formatReais, formatSpan, hoursLabel, humanClosedDatesLabel, openingSentence, periodLabel, problemText } from "@/modules/reports/monthly-format";
+import { NO_PROBLEMS, STATUS_SEAL, attendanceSummary, deltaLabel, formatCount, formatPercent, formatReais, formatSpan, hoursLabel, humanClosedDatesLabel, openingSentence, periodLabel, problemText } from "@/modules/reports/monthly-format";
 import { SUGGESTION_DISCLAIMER } from "@/modules/lead-insights/summary";
 import { cn } from "@/lib/utils";
+import { formatBRL } from "@/lib/format";
 
 /*
  * O relatório mensal v2, como o decisor da clínica recebe: uma folha só, na
@@ -73,20 +75,14 @@ const valued = (m: Metric, format: (v: number) => string = formatCount) => m.val
 const shown = (m: Metric) => m.status !== "unavailable" && m.value !== null;
 
 function HourBands({ data }: { data: MonthlyReportData }) {
-  const bands = data.service.hourBands, max = Math.max(1, ...bands.map((b) => b.contacts));
-  // Só para desenhar: dia claro, noite escura. A classificação dentro/fora é a do expediente.
-  const night = (from: number) => from < 8 || from >= 18;
-  return <figure className="break-inside-avoid">
+  const weekdays = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
+  const arrivals = data.service.arrivalsByWeekday;
+  return <figure className="space-y-3 break-inside-avoid">
     <figcaption className="text-sm font-semibold text-ink">Quando os contatos chegaram</figcaption>
-    <div className="mt-3 grid h-36 grid-cols-6 items-end gap-2 border-b border-ink/15" role="img"
-      aria-label={`Contatos por faixa de horário: ${bands.map((b) => `${b.from} às ${b.to} horas, ${b.contacts}`).join("; ")}`}>
-      {bands.map((b) => <div key={b.from} className="flex h-full flex-col items-center justify-end gap-1">
-        <span className="font-mono text-xs tabular-nums text-ink">{b.contacts}</span>
-        <span className={cn("w-full max-w-14 rounded-t-sm", night(b.from) ? "bg-ink" : "bg-iris")} style={{ height: `${Math.max(2, b.contacts / max * 78)}%` }} />
-      </div>)}
-    </div>
-    <div className="mt-1 grid grid-cols-6 gap-2 text-center font-mono text-micro text-neutral">{bands.map((b) => <span key={b.from}>{b.from}–{b.to}h</span>)}</div>
-    <p className="mt-2 flex gap-4 text-xs text-neutral"><span><i className="mr-1.5 inline-block h-2.5 w-2.5 rounded-sm bg-iris align-[-1px]" />dia</span><span><i className="mr-1.5 inline-block h-2.5 w-2.5 rounded-sm bg-ink align-[-1px]" />noite</span></p>
+    {arrivals ? <Table head={["Dia", "Dentro", "Fora", "Não class."]}
+      rows={arrivals.map((row) => [weekdays[row.weekday], formatCount(row.inside), formatCount(row.outside), formatCount(row.unclassified)])} />
+      : <Table head={["Hora local", "Contatos"]} rows={data.service.hourBands.map((row) => [`${row.from}–${row.to}h`, formatCount(row.contacts)])} />}
+    <p className="text-xs text-neutral">Classificação pelo dia da semana e expediente cadastrado, incluindo pausas e dias sem recepção. Sem expediente informado, a chegada permanece sem classificação.</p>
   </figure>;
 }
 
@@ -116,10 +112,10 @@ const CHIP: Record<string, string> = { added: "bg-success/15 text-emerald-800", 
 
 /**
  * `print`: a página 1 do PDF é o que o decisor lê primeiro (cabeçalho, frase,
- * os quatro números e as próximas ações); o resto segue como anexo. Na tela,
- * a ordem é a de leitura corrida, com as próximas ações no fim.
+ * os quatro números); o documento flui na mesma ordem do painel, com
+ * as próximas ações depois dos resultados e problemas.
  */
-export function MonthlyReportDocument({ report: r, print = false }: { report: MonthlyReport; print?: boolean }) {
+export function MonthlyReportDocument({ report: r }: { report: MonthlyReport; print?: boolean }) {
   const d = r.data;
   if (!d) return null;
   const s = d.service, a = d.schedule, c = d.comparison;
@@ -131,11 +127,12 @@ export function MonthlyReportDocument({ report: r, print = false }: { report: Mo
   const cohortRow = (label: ReactNode, x: Split) => split ? [label, valued(x.inside), valued(x.outside), valued(x.total)] : [label, valued(x.total)];
   const upcoming = a.cohort.upcoming.total.value ?? 0, unverified = a.cohort.unverified.total.value ?? 0;
   const earlier = (a.fromEarlierMonths.attended.value ?? 0) + (a.fromEarlierMonths.noShow.value ?? 0);
-  const changes = r.agentChanges ?? [];
+  const changes = (r.agentChanges ?? []).filter((change) => change.date && change.purpose?.trim());
   // Só as já avaliadas: ação sem status é pendência da revisão, não conteúdo do relatório.
   const reviewed = (r.previousActions ?? []).filter((item) => item.status);
   const actions = r.nextActions ?? [];
-  const leads = d.leads, er = d.estimatedReturn;
+  const leads = d.leads;
+  const { estimatedReturn: er, financialSummary: financial } = monthlyFinancialPresentation(d, r.assumptions);
   const hasLeads = leads.firstDoubts.length > 0 || leads.reasons.length > 0 || shown(leads.outOfArea);
   const role = OWNER_ROLE[r.decisionMakerRole ?? ""];
   const meeting = r.meetingAt ? new Intl.DateTimeFormat("pt-BR", { timeZone: d.meta.timezone, day: "2-digit", month: "2-digit" }).format(new Date(r.meetingAt)) : null;
@@ -143,11 +140,11 @@ export function MonthlyReportDocument({ report: r, print = false }: { report: Mo
   const nextMonth = <Block number="06" title="Próximo mês">
       {actions.length ? <ol className="space-y-2.5">{actions.map((item, i) => <li key={i} className="grid grid-cols-[1.75rem_minmax(0,1fr)] gap-3 rounded-control border border-ink/10 p-3 break-inside-avoid">
         <span aria-hidden className="flex h-6 w-6 items-center justify-center rounded-full bg-iris font-mono text-xs font-medium text-white">{i + 1}</span>
-        <div><p className="font-semibold">{item.action}</p><p className="mt-0.5 text-sm text-neutral">{item.owner} · meta: {item.indicator}</p></div>
+        <div><p className="font-semibold">{item.action}</p><p className="mt-0.5 text-sm text-neutral">{item.owner} · meta: {item.indicator}</p>{item.reason && <p className="mt-1 text-sm text-neutral">Motivo: {item.reason}</p>}</div>
       </li>)}</ol> : <p className="whitespace-pre-wrap text-neutral">{r.nextMonth || "Plano do próximo mês em definição."}</p>}
     </Block>;
 
-  return <article className="mx-auto max-w-[860px] space-y-8 rounded-surface border border-ink/10 bg-white p-6 font-sans text-[15px] leading-relaxed text-ink sm:p-10 print:max-w-none print:rounded-none print:border-0 print:p-0">
+  return <article className="mx-auto max-w-[860px] space-y-8 rounded-surface border border-ink/10 bg-white p-6 font-sans text-[15px] leading-relaxed text-ink sm:p-10 print:max-w-none print:rounded-none print:border-0 print:p-0 print:space-y-6 print:text-sm print:leading-normal">
     <header className="space-y-4 border-b-2 border-ink pb-5">
       <div className="flex flex-wrap justify-between gap-2 font-mono text-micro font-medium uppercase tracking-[0.15em] text-neutral">
         <span><b className="text-iris">Fechai</b> · Relatório mensal</span><span>Mavellium</span>
@@ -168,15 +165,13 @@ export function MonthlyReportDocument({ report: r, print = false }: { report: Mo
       <Kpi label="Contatos atendidos" value={valued(s.contacts.total)} sub={splitLine(s.contacts)} delta={c && deltaLabel(s.contacts.total.value, c.contacts, previousName)} />
       <Kpi anchor label="Avaliações agendadas" value={valued(a.cohort.total.total)} sub={splitLine(a.cohort.total)} delta={c && deltaLabel(a.cohort.total.total.value, c.scheduled, previousName)} />
       <Kpi label="Compareceram" value={valued(a.cohort.attended.total)}
-        sub={shown(a.attendanceRatePercent) ? `${formatPercent(a.attendanceRatePercent.value)} das consultas já realizadas` : "nenhuma consulta realizada ainda"}
+        sub={attendanceSummary(a)}
         delta={upcoming ? `${upcoming} ainda ${upcoming === 1 ? "vai" : "vão"} acontecer` : null} />
       <Kpi label="1ª resposta do agente" value={shown(s.agentFirstResponseSeconds) ? formatSpan(s.agentFirstResponseSeconds.value) : "—"} sub="mediana · 24h por dia"
         delta={c?.agentFirstResponseSeconds != null ? `era ${formatSpan(c.agentFirstResponseSeconds)} em ${previousName}` : null} />
     </div>
 
-    {print && nextMonth}
-
-    <Block number="01" title="Atendimento" className={print ? "break-before-page" : undefined}>
+    <Block number="01" title="Atendimento">
       <div className="grid items-start gap-6 sm:grid-cols-2">
         <div className="space-y-4">
           <div className="grid grid-cols-3 gap-3">
@@ -194,17 +189,21 @@ export function MonthlyReportDocument({ report: r, print = false }: { report: Mo
         </div>
         <HourBands data={d} />
       </div>
-      {(s.transferred.value ?? 0) > 0 && <Table head={["Conversas passadas para a recepção", monthName]} rows={[
+      {(s.transferred.value ?? 0) > 0 && <div className="space-y-2 break-inside-avoid"><Table head={["Conversas passadas para a recepção", monthName]} rows={[
         ["Respondidas pela recepção", `${valued(s.reception.answered)} de ${valued(s.transferred)}`],
         ...(shown(s.reception.firstResponseSeconds) ? [["1ª resposta da recepção (mediana)", formatSpan(s.reception.firstResponseSeconds.value)]] : []),
-        ["Esperaram mais de 1 hora", valued(s.reception.waitedOverHour)],
+        ["Respondidas em até 1 hora (% de todas as transferidas)", s.reception.withinHourPercent ? valued(s.reception.withinHourPercent, formatPercent) : "Não medido nesta versão"],
+        ...(s.reception.targetMinutes && s.reception.withinTargetPercent ? [[`Respondidas na meta da clínica (até ${s.reception.targetMinutes} min)`, valued(s.reception.withinTargetPercent, formatPercent)]] : []),
+        ["Respondidas após mais de 1 hora", valued(s.reception.waitedOverHour)],
         ["Ainda sem resposta no fim do mês", valued(s.reception.unanswered)],
-      ]} />}
+      ]} />
+        <p className="text-xs text-neutral">Tempo corrido entre a transferência e a primeira resposta humana; sem transferência registrada, usa a última mensagem do contato antes da resposta. Respostas contabilizadas até {s.reception.countedUntil ? new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short", timeZone: d.meta.timezone }).format(new Date(s.reception.countedUntil)) : `o fim de ${monthName}`} (corte exclusivo). Quem segue sem resposta está fora do numerador e dentro da base das taxas. {s.reception.targetMinutes ? "Meta informada pela clínica." : "Meta da clínica ainda não definida; 1 hora é apenas um indicador de acompanhamento."}</p>
+      </div>}
       {split && shown(s.contacts.outside) && <p className="text-xs text-neutral">Os {valued(s.contacts.outside)} contatos com a recepção fechada incluem noites, fins de semana e qualquer horário fora do expediente cadastrado.</p>}
     </Block>
 
     <Block number="02" title="Agenda" tag="O número principal">
-      {s.contexts ? <div className="space-y-3">
+      {s.contexts ? <div className="space-y-3 break-inside-avoid">
         <p className="text-sm font-semibold">Conversão por contexto de entrada</p>
         <Table head={["Contexto", "Contatos", "Agendaram", "Conversão"]} rows={s.contexts.groups.filter((g) => g.contacts > 0)
           .map((g) => [g.label, formatCount(g.contacts), formatCount(g.scheduledContacts), formatPercent(g.conversionPercent)])} />
@@ -213,7 +212,7 @@ export function MonthlyReportDocument({ report: r, print = false }: { report: Mo
         {s.contexts.unattributedEvaluations > 0 && <p className="text-xs text-neutral">{formatCount(s.contexts.unattributedEvaluations)} avaliações sem vínculo com entrada anterior nesta janela estão no total de avaliações, fora das taxas por contexto.</p>}
       </div> : <Funnel data={d} />}
       <div className="grid items-start gap-6 sm:grid-cols-2">
-        <div>
+        <div className="break-inside-avoid">
           <Table head={split ? [`Avaliações marcadas em ${monthName}`, "Exped.", "Fora", "Total"] : [`Avaliações marcadas em ${monthName}`, "Total"]} strongLast rows={[
             cohortRow("Compareceram", a.cohort.attended),
             cohortRow("Faltaram", a.cohort.no_show),
@@ -238,8 +237,8 @@ export function MonthlyReportDocument({ report: r, print = false }: { report: Mo
       <p>O agente travou em <strong className="tabular-nums">{valued(d.unanswered)}</strong> {d.unanswered.value === 1 ? "pergunta" : "perguntas"} este mês{c ? <> ({c.unanswered === 1 ? "era" : "eram"} <span className="tabular-nums">{c.unanswered}</span> em {previousName})</> : null}.</p>
       {changes.length > 0 ? <ul className="space-y-2.5">{changes.map((change, i) => <li key={i} className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-3">
         <span className={cn("whitespace-nowrap rounded-full px-2 py-0.5 font-mono text-micro font-medium uppercase tracking-wide", CHIP[change.kind])}>{AGENT_CHANGE_LABELS[change.kind]}</span>
-        <span>{change.text}</span>
-      </li>)}</ul> : r.adjustments ? <p className="whitespace-pre-wrap">{r.adjustments}</p> : null}
+        <span><strong className="font-semibold">{change.date?.split("-").reverse().join("/")}</strong> · {change.text}<span className="mt-1 block text-sm text-neutral">Finalidade: {change.purpose}</span></span>
+      </li>)}</ul> : <p className="text-sm text-neutral">Nenhuma alteração detalhada com data e finalidade foi conferida nesta revisão.</p>}
       {r.featuredCase && <figure className="space-y-1.5 rounded-control border border-ink/10 bg-paper p-4 break-inside-avoid">
         <figcaption className="font-mono text-micro font-medium uppercase tracking-[0.15em] text-neutral">Caso do mês</figcaption>
         <blockquote className="whitespace-pre-wrap">{r.featuredCase}</blockquote>
@@ -252,10 +251,12 @@ export function MonthlyReportDocument({ report: r, print = false }: { report: Mo
         {leads.firstDoubts.length > 0 && <Table head={["Primeira dúvida", "% dos contatos"]} rows={leads.firstDoubts.map((x) => [x.label, formatPercent(x.percent)])} />}
         {leads.reasons.length > 0 && <Table head={["Motivo principal de não agendar", "Contatos"]} strongLast rows={[
           ...leads.reasons.map((x) => [x.label, formatCount(x.contacts)]),
-          ["Total", formatCount(leads.reasons.reduce((n, x) => n + x.contacts, 0))],
+          ...(leads.population ? [["Total", formatCount(leads.population.notScheduled)]] : []),
         ]} />}
       </div>
+      {leads.population && <p className="text-xs text-neutral">População: {formatCount(leads.population.attended)} contatos que escreveram e receberam resposta no mês, incluindo novos contatos, retornos e abordagens. Cada contato entra uma vez; {formatCount(leads.population.scheduled)} agendaram e {formatCount(leads.population.notScheduled)} não agendaram. A primeira dúvida usa os {formatCount(leads.population.withDoubt)} contatos com dúvida registrada.</p>}
       {shown(leads.outOfArea) && (leads.withCity.value ?? 0) > 0 && <p>Dos <span className="tabular-nums">{valued(leads.withCity)}</span> contatos que disseram a cidade, <span className="tabular-nums">{valued(leads.outOfArea)}</span> eram de fora da área atendida, e {leads.outOfAreaScheduled.value === 1 ? "só 1 agendou" : `${valued(leads.outOfAreaScheduled)} agendaram`}.<Seal status={leads.withCity.status} /></p>}
+      {(leads.withCity.value ?? 0) > 0 && <p className="text-xs text-neutral">Amostra de cidades: {valued(leads.withCity)} respostas{leads.population ? ` de ${formatCount(leads.population.attended)} contatos (${formatPercent(leads.population.cityCoveragePercent)})` : ""}. Este recorte não caracteriza toda a base nem comprova origem em tráfego pago. {Number(leads.withCity.value) < 10 ? "Amostra inferior ao mínimo de 10 respostas para sugestões de segmentação." : ""}</p>}
       {leads.suggestions.length > 0 && <div className="space-y-1.5">
         <p className="font-semibold">Sugestões para o tráfego pago</p>
         <ul className="list-disc space-y-1 pl-5">{leads.suggestions.map((x) => <li key={x}>{x}</li>)}</ul>
@@ -264,14 +265,29 @@ export function MonthlyReportDocument({ report: r, print = false }: { report: Mo
     </Block>}
 
     <Block number="05" title="O que não saiu como planejado">
-      {d.problems.length ? <ul className="space-y-2 rounded-control bg-warn/10 p-4">{d.problems.map((p, i) => {
+      {d.problems.length ? <ul className="space-y-2 rounded-control bg-warn/10 p-4 break-inside-avoid">{d.problems.map((p, i) => {
         const text = problemText(p, d.meta.timezone);
         return <li key={i}><strong className="font-semibold">{text.title}</strong> <span className="text-ink/80">{text.detail}</span></li>;
       })}</ul> : <p className="text-neutral">{NO_PROBLEMS}</p>}
+      {Boolean(r.limitations?.length) && <div className="space-y-2"><p className="font-semibold">Limitações dos dados</p><ul className="list-disc space-y-1 pl-5">{(r.limitations ?? []).map((limitation) => <li className="break-inside-avoid" key={limitation.key}>{limitation.text}</li>)}</ul></div>}
       {r.limitationsNote && <p className="whitespace-pre-wrap text-sm text-neutral">{r.limitationsNote}</p>}
     </Block>
 
-    {!print && nextMonth}
+    {nextMonth}
+
+    {financial?.status === "incomplete" && <Block number="+" title="Retorno financeiro" tag="Cálculo incompleto">
+      <div className="space-y-3 break-inside-avoid">
+        <Table head={["Conta", "Valor"]} rows={[
+          ["Receita potencial de tratamentos", financial.revenueCents === null ? "Não calculável" : formatBRL(financial.revenueCents)],
+          ["Economia operacional estimada", financial.savingsCents === null ? "Não calculável" : formatBRL(financial.savingsCents)],
+          ["Investimento mensal", financial.investmentCents === null ? "Não informado" : formatBRL(financial.investmentCents)],
+          ["ROI total", "Indisponível"],
+          ...(financial.operatingBalanceCents !== null ? [["Saldo operacional estimado (economia − mensalidade)", formatBRL(financial.operatingBalanceCents)]] : []),
+        ]} />
+        <p className="text-sm text-neutral">Receita desconhecida não significa receita zero. O saldo operacional não representa ROI total nem faturamento real. A economia depende do custo/hora e do tempo humano equivalente informados na revisão.</p>
+        <ul className="list-disc space-y-1 pl-5 text-sm text-neutral">{financial.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
+      </div>
+    </Block>}
 
     {er && <Block number="+" title="Retorno estimado" tag="Estimativa">
       <div className="space-y-3 rounded-control border border-dashed border-ink/20 p-4 break-inside-avoid">

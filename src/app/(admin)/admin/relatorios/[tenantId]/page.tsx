@@ -10,7 +10,7 @@ import { validateMonthlyReport } from "@/modules/reports/monthly-validate";
 import { PageHeader } from "@/components/ui/page-header";
 import { ButtonLink } from "@/components/ui/button";
 import { MonthPicker } from "@/components/ui/month-picker";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Download } from "lucide-react";
 import { MonthlyCloseWizard } from "./MonthlyRoiEditor";
 import { MonthlyPendencyCenter } from "./MonthlyPendencyCenter";
 import { buildPendencyBoard } from "@/modules/reports/monthly-pendencies";
@@ -42,7 +42,7 @@ export default async function MonthlyRoiPage({ params, searchParams }: {
   const sources = { ...monthlyAccountPrice(tenant), agents: agents.map(monthlyAgentSource) };
   return <div className="space-y-6">
     <PageHeader eyebrow="Relatórios" title={report.tenantName} description="Feche o mês em cinco etapas: conferir os dados, resolver pendências, validar o retorno, escrever a análise e entregar ao decisor." />
-    <div className="flex flex-wrap items-center justify-between gap-3"><MonthPicker value={month} href={`/admin/relatorios/${tenantId}`} /><ButtonLink href={`/admin/relatorios?mes=${month}`} size="sm" variant="ghost"><ArrowLeft size={14} aria-hidden />Todos os clientes</ButtonLink></div>
+    <div className="flex flex-wrap items-center justify-between gap-3"><div className="flex flex-wrap items-center gap-3"><MonthPicker value={month} href={`/admin/relatorios/${tenantId}`} /><ButtonLink href={`/admin/relatorios/${tenantId}/pdf?mes=${month}`} size="sm" variant="outline" target="_blank" rel="noopener noreferrer"><Download size={14} aria-hidden />Exportar PDF{open ? " (rascunho salvo)" : ""}</ButtonLink></div><ButtonLink href={`/admin/relatorios?mes=${month}`} size="sm" variant="ghost"><ArrowLeft size={14} aria-hidden />Todos os clientes</ButtonLink></div>
     {requested && /^20\d{2}-(0[1-9]|1[0-2])$/.test(requested) && requested < month && <Alert>A conta foi criada em {month.split("-").reverse().join("/")}. Abrimos a primeira competência com dados deste cliente.</Alert>}
     {/* Relatório v2 tem a própria página; o resumo executivo fica para os relatórios sem `data`. */}
     {!report.data && <MonthlyRoiSummary report={report} />}

@@ -55,6 +55,14 @@ export function hoursLabel(humanHours: MonthlyAssumptions["humanHours"]): string
 
 const plural = (n: number, one: string, many: string) => `${formatCount(n)} ${n === 1 ? one : many}`;
 
+/** Estado completo da coorte, sem transformar a taxa de uma amostra em destaque. */
+export function attendanceSummary(schedule: MonthlyReportData["schedule"]): string {
+  const c = schedule.cohort;
+  return [plural(c.attended.total.value ?? 0, "comparecimento confirmado", "comparecimentos confirmados"),
+    plural(c.unverified.total.value ?? 0, "não verificado", "não verificados"),
+    plural(c.upcoming.total.value ?? 0, "consulta futura", "consultas futuras")].join("; ");
+}
+
 /**
  * A frase que abre o relatório. Texto fixo, montado dos números do motor: o
  * decisor lê primeiro o que o Fechai fez, sem depender de redação.
@@ -68,6 +76,10 @@ export function openingSentence(monthName: string, data: MonthlyReportData): str
   }
   const attended = cohort.attended.total.value ?? 0;
   if (attended > 0) parts.push(`${plural(attended, "paciente já compareceu", "pacientes já compareceram")}.`);
+  const unverified = cohort.unverified.total.value ?? 0;
+  if (unverified) parts.push(`${plural(unverified, "comparecimento ainda precisa", "comparecimentos ainda precisam")} de verificação.`);
+  const upcoming = cohort.upcoming.total.value ?? 0;
+  if (upcoming) parts.push(`${plural(upcoming, "consulta ainda vai", "consultas ainda vão")} acontecer.`);
   const outside = contacts.outside.value;
   if (outside) parts.push(`${plural(outside, "contato chegou", "contatos chegaram")} com a recepção fechada e ${outside === 1 ? "foi atendido" : "foram atendidos"} do mesmo jeito.`);
   return parts.join(" ");

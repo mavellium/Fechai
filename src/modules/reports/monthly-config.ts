@@ -48,6 +48,7 @@ export const monthlyAssumptionsSchema = z.object({
   // conversão e custo do atendente conferidos com a clínica. Ausente = revisão
   // anterior à chave; ver `financialEnabled`.
   financialEnabled: z.boolean().optional(),
+  receptionTargetMinutes: nullableNumber(10080).refine((v) => v === null || v > 0).optional(),
 });
 export type MonthlyAssumptions = z.infer<typeof monthlyAssumptionsSchema>;
 export const EMPTY_ASSUMPTIONS: MonthlyAssumptions = {

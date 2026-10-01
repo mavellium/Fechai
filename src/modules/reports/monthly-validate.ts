@@ -70,6 +70,12 @@ export function validateMonthlyReport(data: MonthlyReportData, texts: Texts): Mo
     add("blocking", "decision_maker", "Decisor", "O decisor é a mesma pessoa do contato operacional.", "O decisor é o dono ou sócio; a recepção entra como contato operacional, em cópia.");
   }
 
+  // Um número existente em outro indicador não autoriza um ROI incompleto no resumo.
+  if (texts.highlights && data.financialSummary?.status === "incomplete"
+      && /(?:ROI(?:\s+total)?|retorno\s+(?:total|financeiro|líquido))\s*(?:(?:de|foi|é|está|estimado|em|:)\s*){0,3}(?:R\$\s*[−-]?\s*\d|[−-]?\s*\d+(?:[.,]\d+)?\s*(?:x|%))/iu.test(texts.highlights)) {
+    add("blocking", "financial_claim", "Resumo financeiro", "O resumo apresenta retorno total apesar do cálculo financeiro incompleto.", "Explique que o ROI total está indisponível; economia e saldo operacional são parcelas separadas.");
+  }
+
   // O resumo do período é rascunho da IA: número que o motor não calculou não chega ao decisor.
   if (texts.highlights && texts.month) {
     const unknown = unknownNumbers(texts.highlights, allowedNumbers(data, { month: texts.month, previousMonth: texts.previousMonth }));

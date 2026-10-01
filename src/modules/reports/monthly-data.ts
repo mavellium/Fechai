@@ -5,7 +5,7 @@ import { attendanceOf, parseKind } from "@/modules/scheduling/dimensions";
 import { doubtLabel, lossLabel } from "@/modules/lead-insights/categories";
 import { lossKeyOf, summarizeLeadQuality, type LeadRow } from "@/modules/lead-insights/summary";
 import { classifyCity } from "@/modules/lead-insights/service-area";
-import { normalizeLabel, outsideHumanHours, type MonthlyAssumptions } from "./monthly-config";
+import { financialEnabled, normalizeLabel, outsideHumanHours, type MonthlyAssumptions } from "./monthly-config";
 import type { MonthlyAppointment, MonthlyConversation, MonthlyInput } from "./monthly";
 import type { Bucket, CohortStatus, MonthlyEvidence } from "./monthly-evidence";
 import type { MonthlyTimeMetrics } from "./monthly-time";
@@ -24,7 +24,8 @@ import type { AvailabilityIncident, AvailabilityMetrics } from "./monthly-operat
  * respondido, pela IA ou pela equipe. Todos entram, dentro e fora do
  * expediente; o expediente é só uma quebra dentro de cada número. A regra
  * conservadora (receita só de quem chegou com a recepção fechada) vale apenas
- * no retorno estimado, que some quando falta premissa.
+ * no retorno estimado. Ligado com dados insuficientes, mostra parcelas
+ * independentes e ROI indisponível; desligado, o bloco some.
  *
  * Puro e sem dado de paciente: contagens, durações e nomes de procedimento.
  */
@@ -79,11 +80,12 @@ export type MonthlyReportData = {
     handoffEvents: Metric;
     agentFirstResponseSeconds: Metric;
     availabilityPercent: Metric;
-    reception: { answered: Metric; firstResponseSeconds: Metric; waitedOverHour: Metric; unanswered: Metric };
+    reception: { withinHourPercent?: Metric; targetMinutes?: number | null; withinTargetPercent?: Metric; countedUntil?: string; answered: Metric; firstResponseSeconds: Metric; waitedOverHour: Metric; unanswered: Metric };
     time: {
       audios: Metric; audioSeconds: Metric; longestAudioSeconds: Metric; longAudios: Metric;
       textMessages: Metric; textSeconds: Metric; totalSeconds: Metric;
     };
+    arrivalsByWeekday?: { weekday: number; inside: number; outside: number; unclassified: number }[];
     hourBands: { from: number; to: number; contacts: number }[];
   };
   schedule: {
@@ -100,6 +102,7 @@ export type MonthlyReportData = {
   };
   unanswered: Metric;
   leads: {
+    population?: { attended: number; scheduled: number; notScheduled: number; withDoubt: number; cityCoveragePercent: number };
     withCity: Metric; outOfArea: Metric; outOfAreaScheduled: Metric;
     firstDoubts: { key: string; label: string; contacts: number; percent: number }[];
     /** Um motivo por contato que não agendou: a soma é contatos − agendaram. */
@@ -110,9 +113,10 @@ export type MonthlyReportData = {
   incidents: AvailabilityIncident[];
   /** Só o que os dados comprovam. Vazio = "nenhum incidente relevante". */
   problems: MonthlyProblem[];
-  /** Null quando falta premissa: o bloco não aparece, sem "pendente" nem zero. */
+  /** ROI completo só com premissas e coorte financeira verificadas. */
   estimatedReturn: EstimatedReturn | null;
-  /** Por que o retorno estimado está desligado (só o admin vê). */
+  financialSummary?: { status: "complete" | "incomplete"; revenueCents: number | null; savingsCents: number | null; investmentCents: number | null; operatingBalanceCents: number | null; warnings: string[] } | null;
+  /** Premissas/confirmacões ausentes quando o retorno financeiro está ligado. */
   estimatedReturnMissing: string[];
   /** Null quando o mês anterior não é comparável: a coluna não aparece. */
   comparison: MonthlyComparison | null;
@@ -353,16 +357,21 @@ export function buildMonthlyReportData(input: MonthlyInput, time: MonthlyTimeMet
   if (!hoursConfigured) missing.push("Expediente da clínica não cadastrado.");
   if (config.attendantMonthlyCents === null || !config.attendantMonthlyHours) missing.push("Custo e carga mensal da equipe não informados.");
   if (!config.investmentCents) missing.push("Mensalidade não informada.");
-  if (!config.procedures.length) missing.push("Ticket e conversão por procedimento não informados.");
+  if (!config.procedures.length || config.procedures.some((p) => p.ticketCents === null || p.conversionBps === null)) missing.push("Ticket e conversão por procedimento não informados.");
+  if (config.secondsPerMessage == null) missing.push("Tempo humano equivalente por mensagem não informado; o padrão de visualização não valida economia financeira.");
+  if (cohort.unverified.outside || cohort.unverified.unclassified) missing.push("Há comparecimentos sem verificação na base do retorno financeiro.");
+  if (cohort.upcoming.outside || cohort.upcoming.unclassified) missing.push("Há avaliações futuras na base do retorno financeiro.");
+  if (cohort.total.unclassified) missing.push("Há avaliações sem classificação por expediente.");
+  const revenueWarnings = missing.filter((warning) => !warning.startsWith("Custo e carga") && !warning.startsWith("Mensalidade") && !warning.startsWith("Tempo humano"));
   const lines: EstimatedReturn["lines"] = [];
   for (const [name, n] of attendedOutside) {
     const premise = config.procedures.find((p) => normalizeLabel(p.name) === normalizeLabel(name));
-    if (premise?.ticketCents == null || premise.conversionBps == null) { missing.push(`Ticket ou conversão de "${name}" não informados.`); continue; }
+    if (premise?.ticketCents == null || premise.conversionBps == null) { const warning = `Ticket ou conversão de "${name}" não informados.`; missing.push(warning); revenueWarnings.push(warning); continue; }
     lines.push({ procedure: premise.name, attended: n, conversionBps: premise.conversionBps, ticketCents: premise.ticketCents,
       revenueCents: Math.round(n * premise.ticketCents * premise.conversionBps / 10_000) });
   }
   let estimatedReturn: EstimatedReturn | null = null;
-  if (!missing.length) {
+  if (financialEnabled(config) && !missing.length) {
     const hourCents = Math.round(config.attendantMonthlyCents! / config.attendantMonthlyHours!);
     const revenueCents = lines.reduce((n, l) => n + l.revenueCents, 0);
     const returnedSeconds = audioSeconds + textSeconds;
@@ -373,6 +382,22 @@ export function buildMonthlyReportData(input: MonthlyInput, time: MonthlyTimeMet
       returnedSeconds, hourCents, savingsCents, investmentCents, netCents, multiple: Math.round(netCents / investmentCents * 10) / 10 };
   }
 
+  // Cada parcela tem suas próprias premissas; desconhecido nunca vira zero.
+  const partialSavings = config.secondsPerMessage != null && config.attendantMonthlyCents !== null && config.attendantMonthlyHours
+    ? Math.round((audioSeconds + textSeconds) / HOUR * config.attendantMonthlyCents / config.attendantMonthlyHours) : null;
+  const financialSummary = financialEnabled(config) ? {
+    status: estimatedReturn ? "complete" as const : "incomplete" as const,
+    revenueCents: revenueWarnings.length ? null : lines.reduce((sum, line) => sum + line.revenueCents, 0),
+    savingsCents: partialSavings, investmentCents: config.investmentCents,
+    operatingBalanceCents: partialSavings !== null && config.investmentCents !== null ? partialSavings - config.investmentCents : null,
+    warnings: [...missing, ...(time.unmeasuredAudios ? ["A economia tem cobertura parcial: há áudios sem duração medida."] : [])],
+  } : null;
+  const arrivalsByWeekday = [1, 2, 3, 4, 5, 6, 0].map((weekday) => {
+    const arrivals = list.filter((c) => partsInZone(c.arrival, config.timezone).weekday === weekday);
+    return { weekday, inside: arrivals.filter((c) => c.bucket === "inside").length,
+      outside: arrivals.filter((c) => c.bucket === "outside").length, unclassified: arrivals.filter((c) => c.bucket === "unclassified").length };
+  });
+  const within = (seconds: number) => transferred.length ? Math.round(answered.filter((c) => c.receptionSeconds! <= seconds).length / transferred.length * 1000) / 10 : null;
   const contexts = summarizeContactContexts({ start, end, conversations, events: input.events,
     bookings: evidence.cohort.filter((a) => !a.earlier).map((a) => ({ id: a.appointmentId, conversationId: a.conversationId, createdAt: new Date(a.createdAt) })) });
   evidence.contexts = contexts.records;
@@ -388,6 +413,10 @@ export function buildMonthlyReportData(input: MonthlyInput, time: MonthlyTimeMet
       agentFirstResponseSeconds: agentMedian === null ? metric(null, "unavailable", "messages") : metric(Math.round(agentMedian), "measured", "messages", "mediana"),
       availabilityPercent: availability,
       reception: {
+        withinHourPercent: metric(within(HOUR), "measured", "messages+events"),
+        targetMinutes: config.receptionTargetMinutes ?? null,
+        withinTargetPercent: metric(config.receptionTargetMinutes ? within(config.receptionTargetMinutes * 60) : null, "measured", "messages+events"),
+        countedUntil: new Date(Math.min(end.getTime(), now.getTime())).toISOString(),
         answered: metric(answered.length, "measured", "messages"),
         firstResponseSeconds: receptionMedian === null ? metric(null, "unavailable", "messages") : metric(Math.round(receptionMedian), "measured", "messages+events", "mediana"),
         waitedOverHour: metric(waitedOverHour, "measured", "messages+events"),
@@ -402,6 +431,7 @@ export function buildMonthlyReportData(input: MonthlyInput, time: MonthlyTimeMet
         textSeconds: metric(textSeconds, "estimated", "assumption:secondsPerMessage", textNote),
         totalSeconds: metric(audioSeconds + textSeconds, "estimated", "messages+assumption:secondsPerMessage", textNote),
       },
+      arrivalsByWeekday,
       hourBands: HOUR_BANDS.map(([from, to], i) => ({ from, to, contacts: bands[i] })),
     },
     schedule: {
@@ -420,6 +450,8 @@ export function buildMonthlyReportData(input: MonthlyInput, time: MonthlyTimeMet
     },
     unanswered: metric(unanswered, "measured", "events"),
     leads: {
+      population: { attended: total, scheduled: scheduledIds.size, notScheduled: total - scheduledIds.size,
+        withDoubt, cityCoveragePercent: total ? Math.round(quality.withCity / total * 1000) / 10 : 0 },
       withCity: metric(quality.withCity, cityCoverage, "insights"),
       outOfArea: area ? metric(quality.outOfRadius, cityCoverage, "insights+serviceArea") : metric(null, "unavailable", "serviceArea"),
       outOfAreaScheduled: area ? metric(outScheduled, cityCoverage, "insights+serviceArea") : metric(null, "unavailable", "serviceArea"),
@@ -427,9 +459,29 @@ export function buildMonthlyReportData(input: MonthlyInput, time: MonthlyTimeMet
     },
     incidents,
     problems,
-    estimatedReturn, estimatedReturnMissing: missing,
+    estimatedReturn, financialSummary, estimatedReturnMissing: financialEnabled(config) ? missing : [],
     comparison: null,
   };
+}
+
+/** Snapshots antigos não ganham cálculos novos: só reapresentamos parcelas congeladas seguras. */
+export function monthlyFinancialPresentation(data: MonthlyReportData, config: MonthlyAssumptions) {
+  if (!financialEnabled(config)) return { estimatedReturn: null, financialSummary: null };
+  if (data.financialSummary !== undefined) return { estimatedReturn: data.estimatedReturn, financialSummary: data.financialSummary };
+  const er = data.estimatedReturn;
+  if (!er) return { estimatedReturn: null, financialSummary: null };
+  const warnings: string[] = [];
+  if (!config.humanHours || data.schedule.cohort.total.unclassified) warnings.push("Classificação por expediente incompleta neste fechamento.");
+  if (!config.procedures.length || config.procedures.some((p) => p.ticketCents === null || p.conversionBps === null)) warnings.push("Ticket e conversão não informados neste fechamento.");
+  if (data.schedule.cohort.unverified.outside.value || data.schedule.cohort.upcoming.outside.value) warnings.push("Comparecimentos não verificados ou consultas futuras na base financeira deste fechamento.");
+  const savingsValid = config.secondsPerMessage != null && config.attendantMonthlyCents !== null && Boolean(config.attendantMonthlyHours);
+  if (!savingsValid) warnings.push("Economia sem custo e tempo humano equivalente completos neste fechamento.");
+  if (!warnings.length) return { estimatedReturn: er, financialSummary: null };
+  return { estimatedReturn: null, financialSummary: {
+    status: "incomplete" as const, revenueCents: null, savingsCents: savingsValid ? er.savingsCents : null,
+    investmentCents: er.investmentCents, operatingBalanceCents: null,
+    warnings: [...warnings, "Reabra e confira a revisão para produzir uma nova versão; o snapshot anterior permanece preservado."],
+  } };
 }
 
 /** O que o mês anterior empresta ao comparativo. Só é chamado quando ele é comparável. */

@@ -14,6 +14,7 @@ export const NEXT_ACTIONS_MAX = 3;
 export const nextActionSchema = z.object({
   action: z.string().trim().min(1, "Descreva cada ação.").max(120),
   owner: z.string().trim().min(1, "Informe o responsável de cada ação.").max(60),
+  reason: z.string().trim().max(200).optional(),
   indicator: z.string().trim().min(1, "Informe o indicador de cada ação.").max(100),
 }).strict();
 export const nextActionsSchema = z.array(nextActionSchema).max(NEXT_ACTIONS_MAX, `Use no máximo ${NEXT_ACTIONS_MAX} ações.`);

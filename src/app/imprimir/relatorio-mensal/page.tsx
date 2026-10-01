@@ -1,3 +1,4 @@
+import { PrintToolbar } from "./PrintToolbar";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { verifyPrintToken } from "@/lib/print-token";
@@ -23,8 +24,15 @@ export default async function MonthlyReportPrintPage({ searchParams }: { searchP
     <style>{`
       @page { size: A4; margin: 15mm; }
       html, body { background: #fff; }
+      @media print {
+        [data-print-toolbar] { display: none !important; }
+        h1, h2, h3, figcaption, thead { break-after: avoid; }
+        tr, figure { break-inside: avoid; }
+        p, li { orphans: 3; widows: 3; }
+      }
       * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     `}</style>
+    <PrintToolbar />
     <MonthlyReportDocument report={report} print />
   </main>;
 }

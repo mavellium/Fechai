@@ -73,7 +73,7 @@ export function applyMonthlyOverrides(auto: MonthlyMetrics, overrides: MonthlyMe
   // Regra única do que falta (a central de pendências lê a mesma função).
   const pendencies = detectMonthlyPendencies(m, config);
   m.missing = pendencies.map((p) => p.text);
-  m.revenueCents = blocksRevenue(pendencies) ? null : m.procedures.reduce((sum, p) => sum + (p.revenueCents ?? 0), 0);
+  m.revenueCents = blocksRevenue(pendencies) || (m.agenda?.upcoming.outside ?? 0) > 0 || (m.agenda?.upcoming.unclassified ?? 0) > 0 ? null : m.procedures.reduce((sum, p) => sum + (p.revenueCents ?? 0), 0);
   m.roiPercent = m.revenueCents !== null && m.savingsCents !== null && m.investmentCents !== null && m.investmentCents > 0
     ? Math.round((m.revenueCents + m.savingsCents - m.investmentCents) / m.investmentCents * 1000) / 10 : null;
   // Retorno estimado desligado: nenhum valor em dinheiro existe (nem economia

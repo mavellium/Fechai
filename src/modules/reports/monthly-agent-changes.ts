@@ -16,8 +16,9 @@ export const AGENT_CHANGES_MAX = 8;
 export const agentChangeSchema = z.object({
   kind: z.enum(AGENT_CHANGE_KINDS),
   text: z.string().trim().min(1, "Descreva cada mudança.").max(200),
+  purpose: z.string().trim().max(200).optional(),
   /** Dia da mudança (YYYY-MM-DD), quando registrado. */
-  date: z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/, "Data inválida.").nullable().default(null),
+  date: z.iso.date({ error: "Data inválida." }).nullable().default(null),
 }).strict();
 export const agentChangesSchema = z.array(agentChangeSchema).max(AGENT_CHANGES_MAX, `Use no máximo ${AGENT_CHANGES_MAX} mudanças.`);
 export type ReportedAgentChange = z.infer<typeof agentChangeSchema>;
