@@ -5,7 +5,7 @@ import { payloadTooLarge, rateLimit } from "@/lib/rate-limit";
 import { monthKey, monthlyWindow } from "@/modules/reports/monthly-config";
 import { computeMonthlyReport } from "@/modules/reports/monthly";
 import { monthlyAgentSource } from "@/modules/reports/monthly-import";
-import { monthlyAiDraftSchema, monthlyAiRequestSchema } from "@/modules/reports/monthly-ai";
+import { monthlyAiDraftSchema, monthlyAiRequestSchema, monthlyDraftProblem } from "@/modules/reports/monthly-ai";
 import { allowedNumbers, unknownNumbers } from "@/modules/reports/monthly-text-guard";
 import { answerMonthlyAi, draftMonthlyAnalysis, monthlyAiMessages, type MonthlyAiAnswer } from "@/modules/reports/monthly-ai-service";
 import { createMonthlyAiToolbox } from "@/modules/reports/monthly-ai-tools";
@@ -87,7 +87,8 @@ export async function generateMonthlyRoiAnalysis(tenantId: string, month: string
   try { raw = JSON.parse(String(form.get("request"))); } catch { return { ok: false, error: "Pedido inválido." }; }
   const draft = monthlyAiDraftSchema.safeParse(raw?.draft);
   const request = monthlyAnalysisRequestSchema.safeParse({ context: raw?.context ?? "" });
-  if (!draft.success || !request.success) return { ok: false, error: "Confira os dados da revisão antes de gerar a análise." };
+  if (!draft.success) return { ok: false, error: monthlyDraftProblem(draft.error.issues) };
+  if (!request.success) return { ok: false, error: "Revise o contexto para a análise: respeite o limite de caracteres informado." };
   const ids = draft.data.assumptions.agentIds ?? [];
   if (ids.length && await prisma.agent.count({ where: { tenantId, id: { in: ids } } }) !== ids.length) return { ok: false, error: "Selecione somente agentes deste cliente." };
   const saved = await prisma.monthlyRoiReport.findUnique({ where: { tenantId_month: { tenantId, month } }, select: { status: true } });

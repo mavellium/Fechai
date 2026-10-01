@@ -59,6 +59,17 @@ describe("análise do mês (etapa 4)", () => {
     data.set("request", JSON.stringify({ context, draft: { assumptions: { ...report.assumptions, agentIds: ids }, metricOverrides: { current: {}, previous: {} }, adjustments: "", nextMonth: "", decisionMaker: "", highlights: "", limitationsNote: "" } }));
     return data;
   };
+  it("aponta o campo e a etapa quando a revisão é inválida, sem chamar a IA", async () => {
+    const form = request(); const raw = JSON.parse(String(form.get("request")));
+    raw.draft.assumptions.evaluationTypes = [];
+    form.set("request", JSON.stringify(raw));
+    expect(await generateMonthlyRoiAnalysis("own", "2026-09", form)).toEqual({ ok: false, error: "Confira: Tipos de atendimento considerados avaliações (etapa 2)." });
+    expect(mocks.analysis).not.toHaveBeenCalled(); expect(mocks.compute).not.toHaveBeenCalled();
+  });
+  it("gera rascunho com decisor, ajustes e plano vazios: são preenchidos antes de fechar", async () => {
+    expect((await generateMonthlyRoiAnalysis("own", "2026-09", request())).ok).toBe(true);
+    expect(mocks.analysis).toHaveBeenCalledOnce();
+  });
   beforeEach(() => {
     mocks.db.agent.count.mockResolvedValue(1);
     mocks.analysis.mockResolvedValue({ highlights: "H", limitationsNote: "", adjustments: "", nextMonth: "N", notes: "", providerLabel: "Modelo" });

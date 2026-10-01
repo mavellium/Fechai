@@ -2,6 +2,25 @@
 
 **Instrução:** Atualize aqui cada vez que mexer neste módulo.
 
+### [2026-10-01] — Erros do assistente de fechamento e chave financeira acessível
+
+**Motivo:** a análise relia `FormData` após o await, quando o fieldset estava
+desabilitado e os controles não eram serializados. A aprovação com cobertura
+parcial devolvia erro genérico sobre requisitos da etapa 4.
+
+**Alterações:** capturar o rascunho antes da chamada e preservá-lo na resposta
+da IA e no recálculo; validação com nomes dos campos e etapas; requisitos
+editoriais compartilhados por painel e servidor (`monthlyCloseProblems`),
+listados antes da aprovação com retorno à etapa 4. Sem ajustes executados,
+registrar explicitamente; não inventar melhorias para preencher o campo.
+Chave de retorno estimado no topo do rascunho, com salvar também na etapa 5,
+preservando premissas e snapshots aprovados. Tentativa de leitura do Clinicorp
+na etapa 2 e orientação para conferir presenças na agenda; a causa da resposta
+inválida da API não foi comprovada no ambiente local.
+
+**Validação:** 98 arquivos / 1.459 testes passaram; TypeScript, lint e diff
+check passaram. Sem alteração de schema nem validação em produção.
+
 ### [2026-10-01] — Iniciativa da conversa e conversão por contexto
 
 **Motivo:** a Thalita aborda pacientes e contatos antigos; atendimento total

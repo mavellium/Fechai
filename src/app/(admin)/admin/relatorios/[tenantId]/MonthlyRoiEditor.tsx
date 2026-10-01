@@ -34,7 +34,8 @@ import { MonthlyMetricFields } from "./MonthlyMetricFields";
 import { MonthlyAgentImport } from "./MonthlyAgentImport";
 import { MonthlyClinicorpStatus } from "./MonthlyClinicorpStatus";
 import { MonthlyRoiAiAssistant } from "./MonthlyRoiAiAssistant";
-import { monthlyAiDraftSchema, applyMonthlyAiChanges, type MonthlyAiDraft, type MonthlyAiChange } from "@/modules/reports/monthly-ai";
+import { monthlyAiDraftSchema, monthlyDraftProblem, applyMonthlyAiChanges, type MonthlyAiDraft, type MonthlyAiChange } from "@/modules/reports/monthly-ai";
+import { monthlyCloseProblems } from "@/modules/reports/monthly-close-check";
 import { monthlyScheduleSuggestion, type MonthlyImportSources } from "@/modules/reports/monthly-import";
 import { saveMonthlyRoi, finalizeMonthlyRoi, reopenMonthlyRoi, recordMonthlyDelivery, previewMonthlyRoiImport } from "./actions";
 import { generateMonthlyRoiAnalysis } from "./ai-actions";
@@ -187,6 +188,7 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, owners, caseCandidates
   const [busy, start] = useTransition();
   const [state, submit, saving] = useActionState(saveMonthlyRoi.bind(null, tenantId, r.month), null);
   useActionToast(state, saving, { entity: "relatório mensal" });
+  useActionToast(actionFeedback, false, { entity: "relatório mensal" });
   const confirmNavigation = useUnsavedNavigation();
   const locked = r.status === "ready";
   const pending = busy || saving;
@@ -211,9 +213,11 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, owners, caseCandidates
     const form = new FormData(formRef.current);
     const assumptions = readAssumptions(form);
     assumptions.procedures = assumptions.procedures.filter((p) => p.name.trim() || p.ticketCents !== null || p.conversionBps !== null);
-    return monthlyAiDraftSchema.parse({ assumptions, metricOverrides,
+    const parsed = monthlyAiDraftSchema.safeParse({ assumptions, metricOverrides,
       adjustments: String(form.get("adjustments") ?? ""), nextMonth: String(form.get("nextMonth") ?? ""), decisionMaker: String(form.get("decisionMaker") ?? ""),
       highlights: String(form.get("highlights") ?? ""), limitationsNote: String(form.get("limitationsNote") ?? ""), nextActions: readNextActions(form, false) });
+    if (!parsed.success) throw new Error(monthlyDraftProblem(parsed.error.issues));
+    return parsed.data;
   };
   const applyAi = (basis: MonthlyAiDraft, changes: MonthlyAiChange[]) => {
     const current = getAiDraft();
@@ -255,21 +259,21 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, owners, caseCandidates
   const recalculate = () => start(async () => {
     if (!formRef.current) return;
     try {
+      const draft = getAiDraft();
       const done = await loadPreview();
       if (!done) return;
-      const draft = getAiDraft();
       const base = draftAnalysisBase(done.report, draft);
       setCheck({ current: base.current, quality: base.quality, limitations: base.limitations, assumptions: draft.assumptions, metricOverrides: draft.metricOverrides, fresh: true });
     } catch (err) { setError(err instanceof Error && err.name !== "ZodError" ? err.message : "Não foi possível recalcular. Confira os campos e tente novamente."); }
   });
   const generateAnalysis = () => start(async () => {
     try {
+      // Capturar antes do await: controles disabled não entram em FormData.
+      const current = getAiDraft();
       const form = new FormData();
-      form.set("request", JSON.stringify({ draft: getAiDraft(), context: aiContext.trim() }));
+      form.set("request", JSON.stringify({ draft: current, context: aiContext.trim() }));
       const result = await generateMonthlyRoiAnalysis(tenantId, r.month, form);
       if (!result.ok) { setError(result.error); return; }
-      // Lido de novo: o que foi digitado durante a espera não se perde.
-      const current = getAiDraft();
       const a = result.analysis;
       setDefaults({ ...current, highlights: a.highlights || current.highlights, limitationsNote: a.limitationsNote || current.limitationsNote,
         adjustments: a.adjustments || current.adjustments, nextActions: a.nextActions.length ? a.nextActions : current.nextActions });
@@ -281,6 +285,7 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, owners, caseCandidates
   const pdfHref = `/admin/relatorios/${tenantId}/pdf?mes=${r.month}`;
   const limitations = r.limitations ?? [];
   const unverified = unverifiedMetrics(r);
+  const closeProblems = monthlyCloseProblems(r, owners);
 
   return <Card className="text-ink panel:text-white/85">
     <CardTitle action={<Badge tone={locked ? "success" : "neutral"}>{locked ? "Fechado" : "Rascunho"}</Badge>}>Fechamento do mês</CardTitle>
@@ -288,6 +293,14 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, owners, caseCandidates
       <div className="max-w-xl text-sm text-neutral panel:text-white/60"><p>{locked ? `Relatório disponível para a clínica${r.decisionMaker ? ` · decisor (dono): ${r.decisionMaker}` : ""}${r.operationalContact ? ` · cópia: ${r.operationalContact}` : ""}.` : "Siga as etapas na ordem ou pule para qualquer uma. Nada trava o avanço: o que ficar sem evidência sai como limitação explícita no fechamento."}</p><p className="mt-1">Prazo de entrega: {new Intl.DateTimeFormat("pt-BR", { timeZone: c.timezone }).format(new Date(r.dueAt))}.</p></div>
       {!locked && <Button variant="outline" disabled={pending} onClick={() => setAiOpen(true)}><Sparkles size={15} aria-hidden />Perguntar à I.A</Button>}
     </div>
+
+    {!locked && <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-control border border-ink/10 p-4 panel:border-white/10">
+      <div className="flex items-start gap-3"><Switch checked={financial} onCheckedChange={setFinancial} disabled={pending} label="Incluir retorno estimado no relatório" />
+        <div><p className="text-sm font-medium">Retorno estimado · {financial ? "ligado" : "desligado"}</p><p className="mt-1 text-xs text-neutral panel:text-white/60">{financial ? "Inclui receita, economia e ROI quando as premissas estiverem completas. Confira os valores na etapa 2." : "Receita, economia e ROI ficam fora do painel e do PDF."} Salve a revisão para aplicar.</p></div>
+      </div>
+      <input type="hidden" name="financialToggle" form="roi-edit-form" value={String(financial)} />
+      {step === 4 && <Button type="submit" form="roi-edit-form" variant="outline" size="sm" loading={saving} disabled={pending}>Salvar revisão</Button>}
+    </div>}
 
     <ol className="mt-6 grid gap-2 sm:grid-cols-5" aria-label="Etapas do fechamento">
       {STEPS.map((s, i) => {
@@ -366,6 +379,10 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, owners, caseCandidates
             <div className="flex items-start gap-3"><Switch label="Agendamentos antigos sem tipo conferidos como avaliações" checked={untyped} onCheckedChange={setUntyped} disabled={pending} /><p className="text-sm">Conferi que as marcações antigas do agente sem tipo são avaliações.</p></div><input type="hidden" name="untypedConfirmed" value={String(untyped)} />
             <div><p className="text-sm font-medium">Status que comprovam comparecimento no Clinicorp</p><p className="mt-1 text-sm text-neutral panel:text-white/55">Confira com a clínica. Confirmado e agendado não comprovam presença.</p></div>
             <MonthlyClinicorpStatus report={loaded} />
+            {loaded.clinicorpError && <div className="flex flex-wrap items-center gap-3">
+              <Button type="button" variant="outline" size="sm" loading={busy} disabled={pending} onClick={importData}><RefreshCw size={14} aria-hidden />Consultar Clinicorp novamente</Button>
+              <p className="text-sm text-neutral panel:text-white/60">Se a leitura continuar falhando, confira cada avaliação na Agenda do Fechai e marque o comparecimento após a consulta. Salve a revisão para atualizar as limitações.</p>
+            </div>}
             {[...new Map([...c.completedStatusTypes.map((type) => ({ type, description: type })), ...loaded.clinicorpStatusTypes].map((s) => [s.type, s])).values()].map((s) => <div key={s.type} className="flex items-center gap-3"><Switch label={`Comparecimento: ${s.description}`} disabled={pending || s.type.toUpperCase() === "CONFIRMED"} checked={statuses.includes(s.type)} onCheckedChange={(checked) => setStatuses(checked ? [...statuses, s.type] : statuses.filter((type) => type !== s.type))} /><span className="text-sm">{s.description}</span></div>)}<input type="hidden" name="completedStatusTypes" value={JSON.stringify(statuses)} />
             {v2 && <><div><p className="text-sm font-medium">Status que comprovam a falta no Clinicorp</p><p className="mt-1 text-sm text-neutral panel:text-white/55">Sem este mapeamento, consulta passada sem presença fica como não verificada, nunca como falta.</p></div>
               {[...new Map([...noShowStatuses.map((type) => ({ type, description: type })), ...loaded.clinicorpStatusTypes].map((s) => [s.type, s])).values()].filter((s) => !statuses.includes(s.type)).map((s) => <div key={s.type} className="flex items-center gap-3"><Switch label={`Falta: ${s.description}`} disabled={pending || s.type.toUpperCase() === "CONFIRMED"} checked={noShowStatuses.includes(s.type)} onCheckedChange={(checked) => setNoShowStatuses(checked ? [...noShowStatuses, s.type] : noShowStatuses.filter((type) => type !== s.type))} /><span className="text-sm">{s.description}</span></div>)}</>}
@@ -376,7 +393,7 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, owners, caseCandidates
           </div></section>
           <section className="space-y-4 border-t border-ink/10 pt-6 panel:border-white/10">
             <CardTitle as="h3" hint="O relatório mede atendimento, agendamento e comparecimento. O financeiro da clínica é opcional.">Retorno estimado (opcional)</CardTitle>
-            <div className="flex items-start gap-3"><Switch checked={financial} onCheckedChange={setFinancial} disabled={pending} label="Ativar retorno estimado" /><p className="text-sm">Ativar receita, economia e ROI. Ligue só com ticket, conversão e custo do atendente conferidos com a clínica.</p></div>
+            <p className="text-sm text-neutral panel:text-white/60">Use a chave de retorno estimado no topo do assistente. Ligue só com ticket, conversão e custo do atendente conferidos com a clínica.</p>
             {!financial && <Alert>Desligado: o relatório não mostra receita, economia nem ROI, e a falta dessas premissas não é pendência nem limitação. O fechamento segue normalmente.</Alert>}
           </section>
           {/* Desligado, os campos seguem no formulário (ocultos) para o que já foi levantado não se perder. */}
@@ -398,7 +415,7 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, owners, caseCandidates
 
         {/* 3 · Validar resultados */}
         <div hidden={step !== 2}>{v2
-          ? <DataCheck report={loaded} fresh={loaded !== r} onRecalculate={() => start(async () => { try { await loadPreview(); } catch { setError("Não foi possível recalcular. Confira os campos e tente novamente."); } })} pending={pending} />
+          ? <DataCheck report={loaded} financial={financial} fresh={loaded !== r} onRecalculate={() => start(async () => { try { await loadPreview(); } catch { setError("Não foi possível recalcular. Confira os campos e tente novamente."); } })} pending={pending} />
           : <ResultsCheck report={loaded} check={check} investmentSource={loaded.investmentSource} onRecalculate={recalculate} pending={pending} />}</div>
 
         {/* 4 · Análise com IA */}
@@ -429,7 +446,7 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, owners, caseCandidates
               </div>
             </div>)}
           </section>}
-          <div className="grid gap-5 lg:grid-cols-2"><Field label="O que ajustamos no agente" htmlFor="roi-adjustments" hint="Até 400 caracteres. Melhorias executadas neste mês."><Textarea {...fieldProps("roi-adjustments", { hint: true })} name="adjustments" maxLength={400} defaultValue={defaults.adjustments} rows={4} /></Field></div>
+          <div className="grid gap-5 lg:grid-cols-2"><Field label="O que ajustamos no agente" htmlFor="roi-adjustments" hint="Até 400 caracteres. Registre só melhorias executadas. Se não houve ajustes neste mês, informe isso; a IA não inventa mudanças."><Textarea {...fieldProps("roi-adjustments", { hint: true })} name="adjustments" maxLength={400} defaultValue={defaults.adjustments} rows={4} /></Field></div>
           {v2 && <AgentChangesFields value={agentChanges} onChange={setAgentChanges} disabled={pending} />}
           <NextActionsFields defaults={defaults.nextActions} legacy={defaults.nextMonth} />
           <section className="space-y-4">
@@ -496,6 +513,11 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, owners, caseCandidates
     {/* 5 · Aprovar e entregar */}
     {step === 4 && <div className="mt-6 space-y-5 border-t border-ink/10 pt-6 panel:border-white/10">
       {!locked && <p className="text-sm text-neutral panel:text-white/60">O fechamento usa a revisão <strong>salva</strong>. Salve antes de aprovar: os números, as premissas, os textos e as limitações ficam congelados para a entrega.</p>}
+      {!locked && closeProblems.length > 0 && <Alert tone="warn" title="Complete a revisão na etapa 4">
+        <p>A cobertura parcial permite entregar números incompletos. O destinatário e o plano do relatório precisam estar revisados e salvos.</p>
+        <ul className="mt-2 list-disc space-y-1 pl-4">{closeProblems.map((problem) => <li key={problem}>{problem}</li>)}</ul>
+        <Button type="button" variant="outline" size="sm" className="mt-3" onClick={() => goTo(3)}>Completar análise e destinatário</Button>
+      </Alert>}
       {!locked && blocking.length > 0 && <Alert tone="danger" title="Não dá para fechar ainda"><ul className="list-disc space-y-1 pl-4">{blocking.map((i) => <li key={i.key + i.metric}>{i.message} {i.action}</li>)}</ul></Alert>}
       {limitations.length > 0 ? <Alert tone="warn" title={locked ? "Fechado com cobertura parcial" : `${count(limitations.length, "limitação", "limitações")} neste fechamento`}>
         <p>{v2 ? "Os números afetados saem com o selo de parcial ou não verificado." : unverified.length ? `Sairão como não verificados: ${unverified.join(", ")}.` : "Nenhum valor fica sem cálculo, mas a cobertura dos registros é parcial."} Nada é estimado no lugar do que falta.</p>
@@ -513,7 +535,7 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, owners, caseCandidates
       <div className="flex flex-wrap items-center gap-3">
         <Button type="button" variant="outline" size="sm" aria-expanded={preview} aria-controls="roi-pdf-preview" onClick={() => setPreview(!preview)}><Eye size={14} aria-hidden />{preview ? "Fechar prévia" : "Visualizar PDF"}</Button>
         <ButtonLink href={pdfHref} variant="outline" size="sm"><Download size={14} aria-hidden />Baixar PDF{locked ? "" : " · rascunho"}</ButtonLink>
-        {!locked ? <Button size="sm" loading={busy} disabled={pending || r.partial || blocking.length > 0 || (limitations.length > 0 && !acknowledged)}
+        {!locked ? <Button size="sm" loading={busy} disabled={pending || r.partial || closeProblems.length > 0 || blocking.length > 0 || (limitations.length > 0 && !acknowledged)}
           onClick={() => confirmNavigation(() => act(() => finalizeMonthlyRoi(tenantId, r.month, acknowledged ? limitationFingerprint(limitations) : [])))}>{limitations.length ? "Aprovar com cobertura parcial" : "Aprovar e fechar"}</Button> : <>
           <Button size="sm" disabled={pending || Boolean(r.sentAt)} loading={busy} onClick={() => act(() => recordMonthlyDelivery(tenantId, r.month, "sent"))}>{r.sentAt ? "Envio registrado" : "Registrar envio ao decisor"}</Button><Button size="sm" variant="outline" disabled={pending || !r.sentAt || Boolean(r.meetingAt)} onClick={() => act(() => recordMonthlyDelivery(tenantId, r.month, "meeting"))}>{r.meetingAt ? "Reunião registrada" : "Registrar reunião com o decisor"}</Button>{!r.sentAt && <Button size="sm" variant="ghost" disabled={pending} onClick={() => act(() => reopenMonthlyRoi(tenantId, r.month))}>Reabrir revisão</Button>}
         </>}
@@ -522,7 +544,6 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, owners, caseCandidates
       {preview && <div id="roi-pdf-preview" className="overflow-hidden rounded-control border border-ink/10 panel:border-white/10">
         <iframe src={`${pdfHref}&ver=1`} title={`Prévia do PDF de ${r.label}`} className="h-[80vh] w-full bg-white" />
       </div>}
-      <FormFeedback error={actionFeedback?.error} info={actionFeedback?.info} />
       <p className="text-xs text-neutral panel:text-white/55">A Mavellium envia o PDF e apresenta os resultados. Registre o envio e a reunião depois que acontecerem.</p>
       {!locked && <Button type="button" variant="ghost" size="sm" onClick={() => goTo(3)}><ArrowLeft size={14} aria-hidden />Voltar</Button>}
     </div>}
@@ -641,11 +662,11 @@ function IssueList({ issues }: { issues: MonthlyIssue[] }) {
 }
 
 /** Etapa 3 (relatório v2): os números do motor, com o selo de cada um, e o estado do retorno estimado. */
-function DataCheck({ report, fresh, onRecalculate, pending }: { report: MonthlyReport; fresh: boolean; onRecalculate: () => void; pending: boolean }) {
+function DataCheck({ report, financial, fresh, onRecalculate, pending }: { report: MonthlyReport; financial: boolean; fresh: boolean; onRecalculate: () => void; pending: boolean }) {
   const d = report.data;
   if (!d) return null;
   const cell = (m: Metric, format: (v: number) => string = formatCount) => <span className="tabular-nums">{m.value === null ? "Sem fonte" : format(m.value)}{STATUS_SEAL[m.status] && <Badge tone="warn">{STATUS_SEAL[m.status]}</Badge>}</span>;
-  const s = d.service, a = d.schedule, er = d.estimatedReturn;
+  const s = d.service, a = d.schedule, er = financial ? d.estimatedReturn : null;
   const rows: [string, ReactNode][] = [
     ["Contatos atendidos", cell(s.contacts.total)], ["Só pelo agente", cell(s.aiOnly)], ["Passadas para a recepção", cell(s.transferred)],
     ["1ª resposta do agente (mediana)", cell(s.agentFirstResponseSeconds, formatSpan)], ["1ª resposta da recepção (mediana)", cell(s.reception.firstResponseSeconds, formatSpan)],
@@ -664,7 +685,8 @@ function DataCheck({ report, fresh, onRecalculate, pending }: { report: MonthlyR
     <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2 lg:grid-cols-3">{rows.map(([label, value]) => <div key={label} className="flex items-center justify-between gap-3 border-b border-ink/10 py-1.5 panel:border-white/10"><dt className="text-neutral panel:text-white/60">{label}</dt><dd className="flex items-center gap-2 font-medium">{value}</dd></div>)}</dl>
     <div className="rounded-control border border-ink/10 p-4 panel:border-white/10">
       <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm font-medium">Retorno estimado (bloco opcional)</p><Badge tone={er ? "success" : "neutral"}>{er ? "Aparece no relatório" : "Não aparece"}</Badge></div>
-      {er ? <p className="mt-2 text-sm text-neutral panel:text-white/60">{formatReais(er.revenueCents)} em tratamentos potenciais + {formatReais(er.savingsCents)} de tempo devolvido − {formatReais(er.investmentCents)} de investimento = {formatReais(er.netCents)} ({er.multiple.toLocaleString("pt-BR")}x). Receita só de quem chegou com a recepção fechada.</p>
+      {!financial ? <p className="mt-2 text-sm text-neutral panel:text-white/60">Desligado na revisão: salve para retirar receita, economia e ROI do painel e do PDF.</p>
+        : er ? <p className="mt-2 text-sm text-neutral panel:text-white/60">{formatReais(er.revenueCents)} em tratamentos potenciais + {formatReais(er.savingsCents)} de tempo devolvido − {formatReais(er.investmentCents)} de investimento = {formatReais(er.netCents)} ({er.multiple.toLocaleString("pt-BR")}x). Receita só de quem chegou com a recepção fechada.</p>
         : <><p className="mt-2 text-sm text-neutral panel:text-white/60">Sem estes dados o bloco some do painel e do PDF, sem “pendente” nem zero:</p><ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-neutral panel:text-white/60">{d.estimatedReturnMissing.map((m) => <li key={m}>{m}</li>)}</ul></>}
     </div>
   </section>;
