@@ -50,6 +50,13 @@ RUN npm run build
 # ---------- runner: imagem final, usuário não-root ----------
 FROM base AS runner
 
+# Chromium imprime o PDF do relatório mensal a partir da própria página
+# (src/modules/reports/monthly-print.ts). Só o serviço "web" usa.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends chromium fonts-liberation \
+  && rm -rf /var/lib/apt/lists/*
+ENV CHROMIUM_PATH=/usr/bin/chromium PDF_BASE_URL=http://127.0.0.1:3000
+
 RUN groupadd --system --gid 1001 nodejs \
   && useradd --system --uid 1001 --gid nodejs app
 

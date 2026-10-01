@@ -63,18 +63,28 @@ export function leadOutcome(row: LeadRow, now: Date): { outcome: LeadOutcome; lo
   const conversation = row.conversation;
   if (conversation && (conversation.needsHuman || conversation.handoffEvents > 0)) return { outcome: "handoff", lossKey: null };
 
-  const explicit = row.insight?.lossReasonKey ?? null;
+  const lossKey = lossKeyOf(row, now);
+  return lossKey ? { outcome: "lost", lossKey } : { outcome: "open", lossKey: null };
+}
+
+/**
+ * O motivo de perda, sem olhar se o lead agendou ou transbordou. O relatório
+ * mensal usa direto: lá todo contato que não agendou tem um motivo principal,
+ * inclusive o que passou para a equipe.
+ */
+export function lossKeyOf(row: LeadRow, now: Date): string | null {
+  const conversation = row.conversation;
   const reason = conversation?.followUpReason;
   const idleSince = conversation?.lastInboundAt ?? row.createdAt;
   const idle = now.getTime() - idleSince.getTime() >= IDLE_AFTER_HOURS * 3_600_000;
 
-  let lossKey: string | null = explicit;
+  let lossKey: string | null = row.insight?.lossReasonKey ?? null;
   if (!lossKey && row.disqualified) lossKey = row.disqualifiedReason === "fora_da_area" ? "fora_da_regiao" : NOT_A_LEAD_KEY;
   if (!lossKey && reason === "declined") lossKey = "adiou";
   if (!lossKey && reason === "stop") lossKey = "sem_interesse";
   if (!lossKey && row.status === "lost") lossKey = "outro";
   if (!lossKey && idle) lossKey = IDLE_LOSS_KEY;
-  return lossKey ? { outcome: "lost", lossKey } : { outcome: "open", lossKey: null };
+  return lossKey;
 }
 
 export type RankItem = { key: string; label: string; count: number };

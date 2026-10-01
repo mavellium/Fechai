@@ -6,6 +6,7 @@ import { monthKey, monthlyWindow } from "@/modules/reports/monthly-config";
 import { computeMonthlyReport } from "@/modules/reports/monthly";
 import { monthlyAgentSource } from "@/modules/reports/monthly-import";
 import { monthlyAiDraftSchema, monthlyAiRequestSchema } from "@/modules/reports/monthly-ai";
+import { allowedNumbers, unknownNumbers } from "@/modules/reports/monthly-text-guard";
 import { answerMonthlyAi, draftMonthlyAnalysis, monthlyAiMessages, type MonthlyAiAnswer } from "@/modules/reports/monthly-ai-service";
 import { createMonthlyAiToolbox } from "@/modules/reports/monthly-ai-tools";
 import { draftAnalysisBase, monthlyAnalysisMessages, monthlyAnalysisRequestSchema, type MonthlyAgentChange, type MonthlyAnalysis } from "@/modules/reports/monthly-analysis";
@@ -114,6 +115,8 @@ export async function generateMonthlyRoiAnalysis(tenantId: string, month: string
     const { limitations } = draftAnalysisBase(report, draft.data);
     const analysis = await draftMonthlyAnalysis(monthlyAnalysisMessages(report, draft.data, changes, request.data.context), {
       limitations: limitations.length, hasFacts: changes.length > 0 || Boolean(request.data.context) || Boolean(draft.data.adjustments.trim()),
+      // Relatório v2: número que não está nos dados do mês derruba o resumo.
+      ...(report.data ? { unknownNumbers: (text: string) => unknownNumbers(text, allowedNumbers(report.data!, report)) } : {}),
     });
     return { ok: true, analysis };
   } catch (error) {

@@ -53,6 +53,27 @@ export type LeadEvidence = {
   outcome: LeadOutcome; lossKey: string | null; doubtKey: string | null;
 };
 
+/**
+ * Contato atendido no mês (relatório v2): escreveu no mês e recebeu resposta,
+ * da IA ou da equipe. `bucket` vem da primeira mensagem dele no mês.
+ */
+export type ContactEvidence = {
+  conversationId: string; arrivalAt: string; bucket: Bucket;
+  /** Teve mensagem da equipe ou evento de transbordo no mês. */
+  transferred: boolean;
+  /** Da primeira mensagem do mês à primeira resposta, quando ela foi da IA. */
+  agentSeconds: number | null;
+  /** Do transbordo (ou da última mensagem do contato) à primeira resposta da equipe; null = sem resposta. */
+  receptionSeconds: number | null;
+  scheduled: boolean;
+  /** Motivo principal de quem não agendou. */
+  reasonKey: string | null;
+};
+export type CohortStatus = "attended" | "no_show" | "upcoming" | "unverified";
+/** Avaliação do agente na coorte do mês (criada no mês) ou vinda de mês anterior (`earlier`). */
+export type CohortEvidence = { appointmentId: string; conversationId: string | null; createdAt: string; startsAt: string;
+  bucket: Bucket; status: CohortStatus; procedure: string | null; earlier: boolean };
+
 export type MonthlyEvidence = {
   version: 1;
   conversations: ConversationEvidence[];
@@ -67,8 +88,11 @@ export type MonthlyEvidence = {
   hours: number[];
   gaps: GapEvidence[];
   leads?: LeadEvidence[];
+  /** Relatório v2; ausentes em snapshots anteriores a ele. */
+  contacts?: ContactEvidence[];
+  cohort?: CohortEvidence[];
   /** Listas cortadas em `EVIDENCE_LIMIT`, com o total real. */
-  truncated: Partial<Record<"conversations" | "responses" | "appointments" | "events" | "messages" | "leads", number>>;
+  truncated: Partial<Record<"conversations" | "responses" | "appointments" | "events" | "messages" | "leads" | "contacts" | "cohort", number>>;
 };
 
 /**
@@ -85,7 +109,7 @@ export const emptyEvidence = (): MonthlyEvidence => ({
 
 /** Corta as listas longas no teto e anota o total. Muta e devolve o mesmo objeto. */
 export function capEvidence(evidence: MonthlyEvidence): MonthlyEvidence {
-  for (const key of ["conversations", "responses", "appointments", "events", "messages", "leads"] as const) {
+  for (const key of ["conversations", "responses", "appointments", "events", "messages", "leads", "contacts", "cohort"] as const) {
     const list = evidence[key];
     if (list && list.length > EVIDENCE_LIMIT) {
       evidence.truncated[key] = list.length;

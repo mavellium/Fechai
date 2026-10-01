@@ -21,14 +21,15 @@ import { QUALITY_KEY_LABEL, QUALITY_KEYS } from "./monthly-quality";
  */
 
 export type MonthlyLimitation = { key: string; text: string; affects: string[] };
-type Source = Pick<MonthlyReport, "current" | "assumptions" | "clinicorpError">;
+type Source = Pick<MonthlyReport, "current" | "assumptions" | "clinicorpError" | "data">;
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 export function monthlyLimitations(r: Source): MonthlyLimitation[] {
   const a = r.current, c = r.assumptions;
   const found: MonthlyLimitation[] = [];
-  const pendencies = detectMonthlyPendencies(a, c);
+  // No relatório v2 o financeiro é opcional: o que só desliga o retorno estimado não é limitação.
+  const pendencies = detectMonthlyPendencies(a, c, r.data).filter((p) => !p.optional);
   for (const topic of PENDENCY_TOPICS) {
     const texts = pendencies.filter((p) => p.topic === topic).map((p) => p.text);
     if (texts.length) found.push({ key: topic, text: texts.join(" "), affects: TOPIC_DEFS[topic].affects.map((m) => AFFECTED_METRIC_LABELS[m]) });

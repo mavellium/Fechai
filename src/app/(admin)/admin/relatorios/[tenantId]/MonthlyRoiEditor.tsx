@@ -34,6 +34,10 @@ import { monthlyAiDraftSchema, applyMonthlyAiChanges, type MonthlyAiDraft, type 
 import { monthlyScheduleSuggestion, type MonthlyImportSources } from "@/modules/reports/monthly-import";
 import { saveMonthlyRoi, finalizeMonthlyRoi, reopenMonthlyRoi, recordMonthlyDelivery, previewMonthlyRoiImport } from "./actions";
 import { generateMonthlyRoiAnalysis } from "./ai-actions";
+import { AGENT_CHANGES_MAX, AGENT_CHANGE_KINDS, AGENT_CHANGE_LABELS, type AgentChangeKind, type ReportedAgentChange } from "@/modules/reports/monthly-agent-changes";
+import { blockingIssues, type MonthlyIssue } from "@/modules/reports/monthly-validate";
+import { formatCount, formatReais, formatSpan, STATUS_SEAL } from "@/modules/reports/monthly-format";
+import type { Metric } from "@/modules/reports/monthly-data";
 
 const decimal = (v: number | null, scale = 1) => v === null ? "" : String(v / scale).replace(".", ",");
 function readNumber(value: FormDataEntryValue | null, scale = 1, currency = false): number | null {
@@ -79,7 +83,7 @@ type StepState = { done: boolean; hint: string };
 function stepStates(r: MonthlyReport): StepState[] {
   const a = r.current, coverage = coverageOf(r.limitations), pending = pendenciesOf(r.limitations);
   const unverified = [a.revenueCents, a.savingsCents, a.roiPercent].filter((v) => v === null).length;
-  const analysis = Boolean(r.adjustments && hasNextPlan(r) && r.decisionMaker);
+  const analysis = Boolean((r.adjustments || r.agentChanges?.length) && hasNextPlan(r) && r.decisionMaker);
   return [
     // Fechado antes da lista de limitações: não há como dizer "completa".
     { done: Boolean(r.revision), hint: !r.revision ? "revisão não salva" : !r.limitations ? "sem registro" : coverage.length ? count(coverage.length, "aviso de cobertura", "avisos de cobertura") : "cobertura completa" },
@@ -98,7 +102,9 @@ function initialStep(r: MonthlyReport): StepIndex {
   return 4;
 }
 
-type EditorProps = { tenantId: string; report: MonthlyReport; sources: MonthlyImportSources; caseCandidates?: MonthlyCaseCandidate[]; pendencyCenter?: ReactNode };
+type EditorProps = { tenantId: string; report: MonthlyReport; sources: MonthlyImportSources; caseCandidates?: MonthlyCaseCandidate[]; pendencyCenter?: ReactNode;
+  /** Relatório v2: o que o validador achou na revisão salva. */
+  issues?: MonthlyIssue[] };
 
 /**
  * Guarda a etapa fora do editor: salvar muda a revisão, o editor remonta (a
@@ -112,7 +118,7 @@ export function MonthlyCloseWizard(props: EditorProps) {
 
 type Check = { current: MonthlyMetrics; quality: MonthlyQuality; limitations: MonthlyLimitation[]; assumptions: MonthlyAssumptions; metricOverrides?: MonthlyOverrides; fresh: boolean };
 
-function MonthlyRoiEditor({ tenantId, report: r, sources, caseCandidates = [], pendencyCenter, step, onStep }: EditorProps & { step: StepIndex; onStep: (step: StepIndex) => void }) {
+function MonthlyRoiEditor({ tenantId, report: r, sources, caseCandidates = [], pendencyCenter, issues, step, onStep }: EditorProps & { step: StepIndex; onStep: (step: StepIndex) => void }) {
   const [defaults, setDefaults] = useState<MonthlyAiDraft>({ assumptions: r.assumptions, metricOverrides: r.metricOverrides ?? { current: {}, previous: {} }, adjustments: r.adjustments, nextMonth: r.nextMonth, decisionMaker: r.decisionMaker, highlights: r.highlights ?? "", limitationsNote: r.limitationsNote ?? "", nextActions: r.nextActions ?? [] });
   const c = defaults.assumptions;
   const [aiOpen, setAiOpen] = useState(false);
@@ -133,8 +139,15 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, caseCandidates = [], p
   const nextId = useRef(procedures.length);
   const [untyped, setUntyped] = useState(c.countUntypedAsEvaluations);
   const [statuses, setStatuses] = useState(c.completedStatusTypes);
+  const [noShowStatuses, setNoShowStatuses] = useState(c.noShowStatusTypes ?? []);
   // Controlado: preencher com a IA remonta o formulário, e o caso não passa por ela.
   const [featuredCase, setFeaturedCase] = useState(r.featuredCase ?? "");
+  // Controlados pelo mesmo motivo: a IA não mexe em decisor, cópia nem nas mudanças registradas.
+  const [operationalContact, setOperationalContact] = useState(r.operationalContact ?? "");
+  const [decisionMakerRole, setDecisionMakerRole] = useState(r.decisionMakerRole ?? "");
+  const [agentChanges, setAgentChanges] = useState<ReportedAgentChange[]>(r.agentChanges ?? []);
+  const v2 = Boolean(r.data);
+  const blocking = blockingIssues(issues ?? []);
   const [error, setError] = useState<string | null>(null);
   const [actionFeedback, setActionFeedback] = useState<{ ok: boolean; error?: string; info?: string } | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
@@ -160,7 +173,7 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, caseCandidates = [], p
     minutesPerConversation: readNumber(form.get("minutesPerConversation")), secondsPerMessage: readNumber(form.get("secondsPerMessage")),
     investmentCents: readNumber(form.get("investmentCents"), 100, true),
     procedureVariable: String(form.get("procedureVariable") ?? ""), evaluationTypes: String(form.get("evaluationTypes") ?? "").split("\n").map((v) => v.trim()).filter(Boolean),
-    countUntypedAsEvaluations: untyped, completedStatusTypes: statuses,
+    countUntypedAsEvaluations: untyped, completedStatusTypes: statuses, noShowStatusTypes: noShowStatuses.filter((type) => !statuses.includes(type)),
     procedures: procedures.map((p) => ({ name: String(form.get(`procedure-${p.id}`) ?? ""), ticketCents: readNumber(form.get(`ticket-${p.id}`), 100, true), conversionBps: readNumber(form.get(`conversion-${p.id}`), 100) })),
   });
   const getAiDraft = (): MonthlyAiDraft => {
@@ -273,6 +286,8 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, caseCandidates = [], p
         if (!monthlyOverridesSchema.safeParse(metricOverrides).success) throw new Error("Revise os indicadores: contagens devem ser inteiras e positivas ou zero; tempos podem ter decimais.");
         if (procedures.some((p) => !String(form.get(`procedure-${p.id}`) ?? "").trim())) { goTo(1); throw new Error("Dê nome a cada procedimento ou remova a linha vazia."); }
         try { form.set("nextActions", JSON.stringify(readNextActions(form, true))); } catch (err) { goTo(3); throw err; }
+        if (agentChanges.some((c) => !c.text.trim())) { goTo(3); throw new Error("Descreva cada mudança no agente ou remova a linha vazia."); }
+        form.set("agentChanges", JSON.stringify(agentChanges));
         const assumptions = readAssumptions(form);
         form.set("assumptions", JSON.stringify(assumptions)); setError(null); startTransition(() => submit(form));
       } catch (err) { setError(err instanceof Error ? err.message : "Revise os campos."); }
@@ -285,6 +300,7 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, caseCandidates = [], p
           <p className="text-sm text-neutral panel:text-white/60">Os indicadores do mês já vêm carregados da conta. Escolha os agentes, confira a cobertura e corrija só o que os registros não sustentam.</p>
           <MonthlyAgentImport sources={sources} agentIds={agentIds} onChange={setAgentIds} onImport={importData} pending={pending} />
           {importInfo && <Alert>{importInfo}</Alert>}
+          {issues && <IssueList issues={issues} />}
           <CoverageCheck report={loaded} />
           <MonthlyMetricFields key={importVersion} report={loaded} value={metricOverrides} onChange={setMetricOverrides} />
         </div>
@@ -315,14 +331,16 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, caseCandidates = [], p
             <div><p className="text-sm font-medium">Status que comprovam comparecimento no Clinicorp</p><p className="mt-1 text-sm text-neutral panel:text-white/55">Confira com a clínica. Confirmado e agendado não comprovam presença.</p></div>
             <MonthlyClinicorpStatus report={loaded} />
             {[...new Map([...c.completedStatusTypes.map((type) => ({ type, description: type })), ...loaded.clinicorpStatusTypes].map((s) => [s.type, s])).values()].map((s) => <div key={s.type} className="flex items-center gap-3"><Switch label={`Comparecimento: ${s.description}`} disabled={pending || s.type.toUpperCase() === "CONFIRMED"} checked={statuses.includes(s.type)} onCheckedChange={(checked) => setStatuses(checked ? [...statuses, s.type] : statuses.filter((type) => type !== s.type))} /><span className="text-sm">{s.description}</span></div>)}<input type="hidden" name="completedStatusTypes" value={JSON.stringify(statuses)} />
+            {v2 && <><div><p className="text-sm font-medium">Status que comprovam a falta no Clinicorp</p><p className="mt-1 text-sm text-neutral panel:text-white/55">Sem este mapeamento, consulta passada sem presença fica como não verificada, nunca como falta.</p></div>
+              {[...new Map([...noShowStatuses.map((type) => ({ type, description: type })), ...loaded.clinicorpStatusTypes].map((s) => [s.type, s])).values()].filter((s) => !statuses.includes(s.type)).map((s) => <div key={s.type} className="flex items-center gap-3"><Switch label={`Falta: ${s.description}`} disabled={pending || s.type.toUpperCase() === "CONFIRMED"} checked={noShowStatuses.includes(s.type)} onCheckedChange={(checked) => setNoShowStatuses(checked ? [...noShowStatuses, s.type] : noShowStatuses.filter((type) => type !== s.type))} /><span className="text-sm">{s.description}</span></div>)}</>}
           </section>
-          <section className="space-y-4 border-t border-ink/10 pt-6 panel:border-white/10"><CardTitle as="h3" hint="Campos vazios ficam pendentes até serem levantados com a clínica.">Investimento e equipe</CardTitle><div className="grid items-end gap-5 sm:grid-cols-2 xl:grid-cols-4">
+          <section className="space-y-4 border-t border-ink/10 pt-6 panel:border-white/10"><CardTitle as="h3" hint={v2 ? "A mensalidade é obrigatória. Custo e tempo da equipe são opcionais: ativam o bloco de retorno estimado." : "Campos vazios ficam pendentes até serem levantados com a clínica."}>Investimento e equipe</CardTitle><div className="grid items-end gap-5 sm:grid-cols-2 xl:grid-cols-4">
             {moneyField("investmentCents", "Mensalidade do Fechai (R$)", c.investmentCents)}{moneyField("attendantMonthlyCents", "Custo mensal do atendente (R$)", c.attendantMonthlyCents)}
             {numberField("attendantMonthlyHours", "Carga mensal do atendente (h)", c.attendantMonthlyHours)}
             {numberField("secondsPerMessage", "Tempo por mensagem (s)", c.secondsPerMessage, "Ler e responder cada mensagem que o agente atendeu. Somado aos minutos de áudio ouvidos, calcula a economia. Ex.: 30.")}
             {numberField("minutesPerConversation", "Tempo humano por conversa (min)", c.minutesPerConversation, "Usado só enquanto o tempo por mensagem estiver vazio.")}
           </div>{r.investmentSource && <p className="text-xs text-neutral panel:text-white/55">Mensalidade carregada de: {r.investmentSource}. Confira o valor cobrado nesta competência antes de salvar.</p>}</section>
-          <section className="space-y-4 border-t border-ink/10 pt-6 panel:border-white/10"><CardTitle as="h3" hint="Conversão é a porcentagem das avaliações que viram tratamento.">Ticket e conversão por procedimento</CardTitle>
+          <section className="space-y-4 border-t border-ink/10 pt-6 panel:border-white/10"><CardTitle as="h3" hint="Conversão é a porcentagem das avaliações que viram tratamento.">Ticket e conversão por procedimento{v2 && <Badge tone="neutral">Opcional · ativa o retorno estimado</Badge>}</CardTitle>
             {procedures.length === 0 && <p className="text-sm text-neutral panel:text-white/55">Adicione os procedimentos para estimar a receita.</p>}
             <div className="space-y-4">{procedures.map((p) => <div key={p.id} className="grid items-end gap-4 rounded-control border border-ink/10 p-4 panel:border-white/10 sm:grid-cols-[1fr_1fr_1fr_auto]">
               {/* Sem `required`: a seção pode estar oculta ao salvar de outra etapa, e o navegador recusaria o envio sem mostrar por quê. */}
@@ -335,7 +353,9 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, caseCandidates = [], p
         </div>
 
         {/* 3 · Validar resultados */}
-        <div hidden={step !== 2}><ResultsCheck check={check} investmentSource={loaded.investmentSource} onRecalculate={recalculate} pending={pending} /></div>
+        <div hidden={step !== 2}>{v2
+          ? <DataCheck report={loaded} fresh={loaded !== r} onRecalculate={() => start(async () => { try { await loadPreview(); } catch { setError("Não foi possível recalcular. Confira os campos e tente novamente."); } })} pending={pending} />
+          : <ResultsCheck check={check} investmentSource={loaded.investmentSource} onRecalculate={recalculate} pending={pending} />}</div>
 
         {/* 4 · Análise com IA */}
         <div hidden={step !== 3} className="space-y-6">
@@ -352,9 +372,14 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, caseCandidates = [], p
             {limitations.length ? <ul className="list-disc space-y-1 pl-5 text-sm text-neutral panel:text-white/60">{limitations.map((l) => <li key={l.key}>{l.text}</li>)}</ul>
               : <p className="text-sm text-neutral panel:text-white/55">Sem limitações na revisão salva: o texto não aparece no relatório.</p>}
           </div>
-          <div className="grid gap-5 lg:grid-cols-2"><Field label="O que ajustamos no agente" htmlFor="roi-adjustments" hint="Até 400 caracteres. Melhorias executadas neste mês."><Textarea {...fieldProps("roi-adjustments", { hint: true })} name="adjustments" maxLength={400} defaultValue={defaults.adjustments} rows={4} /></Field></div>
+          <div className="grid gap-5 lg:grid-cols-2"><Field label="O que ajustamos no agente" htmlFor="roi-adjustments" hint={v2 ? "Até 400 caracteres. Texto de apoio: no relatório aparece a lista de mudanças abaixo; sem lista, este texto." : "Até 400 caracteres. Melhorias executadas neste mês."}><Textarea {...fieldProps("roi-adjustments", { hint: true })} name="adjustments" maxLength={400} defaultValue={defaults.adjustments} rows={4} /></Field></div>
+          {v2 && <AgentChangesFields value={agentChanges} onChange={setAgentChanges} disabled={pending} />}
           <NextActionsFields defaults={defaults.nextActions} legacy={defaults.nextMonth} />
-          <Field label="Nome do decisor" htmlFor="roi-decisionMaker"><Input {...fieldProps("roi-decisionMaker")} name="decisionMaker" maxLength={100} defaultValue={defaults.decisionMaker} placeholder="Quem recebe e acompanha o resultado" /></Field>
+          <div className="grid items-end gap-5 lg:grid-cols-3">
+            <Field label="Nome do decisor" htmlFor="roi-decisionMaker" hint={v2 ? "O dono ou sócio que paga. Nunca a recepção." : undefined}><Input {...fieldProps("roi-decisionMaker", { hint: v2 })} name="decisionMaker" maxLength={100} defaultValue={defaults.decisionMaker} placeholder="Quem recebe e acompanha o resultado" /></Field>
+            {v2 && <><div><SelectMenu label="Papel do decisor" options={[{ value: "", label: "Não informado" }, { value: "owner", label: "Dono" }, { value: "partner", label: "Sócio" }]} value={decisionMakerRole} onChange={setDecisionMakerRole} disabled={pending} /><input type="hidden" name="decisionMakerRole" value={decisionMakerRole} /></div>
+              <Field label="Contato operacional (em cópia)" htmlFor="roi-operationalContact" hint="Recepção ou quem cuida da agenda."><Input {...fieldProps("roi-operationalContact", { hint: true })} name="operationalContact" maxLength={100} value={operationalContact} onChange={(e) => setOperationalContact(e.target.value)} placeholder="Ex.: recepção" /></Field></>}
+          </div>
           <Field label="Caso do mês (opcional)" htmlFor="roi-featuredCase" hint={`Até ${FEATURED_CASE_MAX} caracteres. Escrito por você, nunca pela IA. Só o perfil genérico, como "paciente de 74 anos": sem nome, telefone ou e-mail. Nomes de contatos do mês são recusados ao salvar.`}>
             <Textarea {...fieldProps("roi-featuredCase", { hint: true })} name="featuredCase" maxLength={FEATURED_CASE_MAX} value={featuredCase} onChange={(e) => setFeaturedCase(e.target.value)} rows={3}
               placeholder="Ex.: Uma paciente de 74 anos enviou 2 áudios de quase 5 minutos; o agente ouviu tudo, respondeu com paciência e deixou o retorno combinado." />
@@ -382,20 +407,21 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, caseCandidates = [], p
     {/* 5 · Aprovar e entregar */}
     {step === 4 && <div className="mt-6 space-y-5 border-t border-ink/10 pt-6 panel:border-white/10">
       {!locked && <p className="text-sm text-neutral panel:text-white/60">O fechamento usa a revisão <strong>salva</strong>. Salve antes de aprovar: os números, as premissas, os textos e as limitações ficam congelados para a entrega.</p>}
+      {!locked && blocking.length > 0 && <Alert tone="danger" title="Não dá para fechar ainda"><ul className="list-disc space-y-1 pl-4">{blocking.map((i) => <li key={i.key + i.metric}>{i.message} {i.action}</li>)}</ul></Alert>}
       {limitations.length > 0 ? <Alert tone="warn" title={locked ? "Fechado com cobertura parcial" : `${count(limitations.length, "limitação", "limitações")} neste fechamento`}>
-        <p>{unverified.length ? `Sairão como não verificados: ${unverified.join(", ")}.` : "Nenhum valor fica sem cálculo, mas a cobertura dos registros é parcial."} Nada é estimado no lugar do que falta.</p>
+        <p>{v2 ? "Os números afetados saem com o selo de parcial ou não verificado." : unverified.length ? `Sairão como não verificados: ${unverified.join(", ")}.` : "Nenhum valor fica sem cálculo, mas a cobertura dos registros é parcial."} Nada é estimado no lugar do que falta.</p>
         <ul className="mt-2 list-disc space-y-1 pl-4">{limitations.map((l) => <li key={l.key}>{l.text}</li>)}</ul>
         {!locked && <div className="mt-3 flex items-start gap-3"><Switch checked={acknowledged} onCheckedChange={setAcknowledged} disabled={pending} label="Limitações revisadas" /><p className="text-sm">Revisei as limitações. Fecho com cobertura parcial, e elas vão explícitas no painel e no PDF.</p></div>}
       </Alert> : r.limitations && <Alert tone="success">Cobertura completa: todos os números têm evidência nos registros.</Alert>}
       {!locked && <ul className="space-y-1 text-sm">{[
         [!r.partial, r.partial ? "O mês ainda está em andamento: o fechamento abre no mês seguinte." : "Mês encerrado."],
         [Boolean(r.revision), r.revision ? "Revisão salva." : "Salve a revisão."],
-        [Boolean(r.decisionMaker && r.adjustments && hasNextPlan(r)), r.decisionMaker && r.adjustments && hasNextPlan(r) ? "Decisor, ajustes e próximas ações preenchidos." : "Preencha decisor, ajustes e as próximas ações na etapa 4."],
+        [Boolean(r.decisionMaker && (r.adjustments || r.agentChanges?.length) && hasNextPlan(r)), r.decisionMaker && (r.adjustments || r.agentChanges?.length) && hasNextPlan(r) ? "Decisor, ajustes e próximas ações preenchidos." : "Preencha decisor, ajustes e as próximas ações na etapa 4."],
       ].map(([ok, label]) => <li key={String(label)} className="flex items-center gap-2"><span aria-hidden className={ok ? "text-success" : "text-warn"}>{ok ? "✓" : "•"}</span>{label}</li>)}</ul>}
       <div className="flex flex-wrap items-center gap-3">
         <Button type="button" variant="outline" size="sm" aria-expanded={preview} aria-controls="roi-pdf-preview" onClick={() => setPreview(!preview)}><Eye size={14} aria-hidden />{preview ? "Fechar prévia" : "Visualizar PDF"}</Button>
         <ButtonLink href={pdfHref} variant="outline" size="sm"><Download size={14} aria-hidden />Baixar PDF{locked ? "" : " · rascunho"}</ButtonLink>
-        {!locked ? <Button size="sm" loading={busy} disabled={pending || r.partial || (limitations.length > 0 && !acknowledged)}
+        {!locked ? <Button size="sm" loading={busy} disabled={pending || r.partial || blocking.length > 0 || (limitations.length > 0 && !acknowledged)}
           onClick={() => confirmNavigation(() => act(() => finalizeMonthlyRoi(tenantId, r.month, acknowledged ? limitationFingerprint(limitations) : [])))}>{limitations.length ? "Aprovar com cobertura parcial" : "Aprovar e fechar"}</Button> : <>
           <Button size="sm" disabled={pending || Boolean(r.sentAt)} loading={busy} onClick={() => act(() => recordMonthlyDelivery(tenantId, r.month, "sent"))}>{r.sentAt ? "Envio registrado" : "Registrar envio ao decisor"}</Button><Button size="sm" variant="outline" disabled={pending || !r.sentAt || Boolean(r.meetingAt)} onClick={() => act(() => recordMonthlyDelivery(tenantId, r.month, "meeting"))}>{r.meetingAt ? "Reunião registrada" : "Registrar reunião"}</Button>{!r.sentAt && <Button size="sm" variant="ghost" disabled={pending} onClick={() => act(() => reopenMonthlyRoi(tenantId, r.month))}>Reabrir revisão</Button>}
         </>}
@@ -494,5 +520,64 @@ function ResultsCheck({ check, investmentSource, onRecalculate, pending }: { che
       <ul className="mt-2 space-y-1 text-xs leading-relaxed text-neutral panel:text-white/60">{row.lines.map((line, i) => <li key={i}>{line}</li>)}</ul>
     </div>)}</div>
     {check.limitations.length > 0 && <p className="text-sm text-neutral panel:text-white/60">{count(check.limitations.length, "limitação segue", "limitações seguem")} nesta revisão. Dá para fechar assim: o que não tem evidência vai como não verificado.</p>}
+  </section>;
+}
+
+const SEVERITY_LABEL = { blocking: "Impede o fechamento", warning: "Aviso" } as const;
+
+/** Etapa 1 (relatório v2): o que o validador achou na revisão salva. */
+function IssueList({ issues }: { issues: MonthlyIssue[] }) {
+  return <section className="space-y-3">
+    <CardTitle as="h3" hint="Bloqueio é número que não fecha ou decisor errado. Aviso não impede fechar: o número sai com o selo que tem.">Validação dos números</CardTitle>
+    {issues.length ? <ul className="divide-y divide-ink/10 rounded-control border border-ink/10 panel:divide-white/10 panel:border-white/10">{issues.map((i) => <li key={i.key + i.metric} className="flex flex-wrap items-start gap-3 p-3 text-sm">
+      <Badge tone={i.severity === "blocking" ? "danger" : "warn"}>{SEVERITY_LABEL[i.severity]}</Badge>
+      <div className="min-w-0 flex-1"><p><span className="font-medium">{i.metric}:</span> {i.message}</p><p className="mt-0.5 text-neutral panel:text-white/60">{i.action}</p></div>
+    </li>)}</ul> : <Alert tone="success">Os números fecham entre si e nenhum aviso foi encontrado.</Alert>}
+  </section>;
+}
+
+/** Etapa 3 (relatório v2): os números do motor, com o selo de cada um, e o estado do retorno estimado. */
+function DataCheck({ report, fresh, onRecalculate, pending }: { report: MonthlyReport; fresh: boolean; onRecalculate: () => void; pending: boolean }) {
+  const d = report.data;
+  if (!d) return null;
+  const cell = (m: Metric, format: (v: number) => string = formatCount) => <span className="tabular-nums">{m.value === null ? "Sem fonte" : format(m.value)}{STATUS_SEAL[m.status] && <Badge tone="warn">{STATUS_SEAL[m.status]}</Badge>}</span>;
+  const s = d.service, a = d.schedule, er = d.estimatedReturn;
+  const rows: [string, ReactNode][] = [
+    ["Contatos atendidos", cell(s.contacts.total)], ["Só pelo agente", cell(s.aiOnly)], ["Passadas para a recepção", cell(s.transferred)],
+    ["1ª resposta do agente (mediana)", cell(s.agentFirstResponseSeconds, formatSpan)], ["1ª resposta da recepção (mediana)", cell(s.reception.firstResponseSeconds, formatSpan)],
+    ["Disponibilidade do agente", cell(s.availabilityPercent, (v) => `${v.toLocaleString("pt-BR")}%`)],
+    ["Tempo devolvido", cell(s.time.totalSeconds, formatSpan)], ["Qualificados", cell(a.qualified.total)],
+    ["Avaliações agendadas", cell(a.cohort.total.total)], ["Compareceram", cell(a.cohort.attended.total)], ["Faltaram", cell(a.cohort.no_show.total)],
+    ["Aguardando consulta", cell(a.cohort.upcoming.total)], ["Comparecimento não verificado", cell(a.cohort.unverified.total)],
+    ["Perguntas sem resposta", cell(d.unanswered)], ["Contatos que informaram a cidade", cell(d.leads.withCity)],
+  ];
+  return <section className="space-y-4">
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div><CardTitle as="h3" hint="Todos saem do motor: nenhum número é digitado ou recalculado na tela.">Validar os resultados</CardTitle>
+        <p className="text-sm text-neutral panel:text-white/60">{fresh ? "Recalculado agora com os dados da tela, ainda não salvos." : "Calculado com a revisão salva. Recalcule depois de mudar expediente, status ou premissas."}</p></div>
+      <Button type="button" size="sm" variant="outline" loading={pending} onClick={onRecalculate}><RefreshCw size={14} aria-hidden />Recalcular com os dados da tela</Button>
+    </div>
+    <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2 lg:grid-cols-3">{rows.map(([label, value]) => <div key={label} className="flex items-center justify-between gap-3 border-b border-ink/10 py-1.5 panel:border-white/10"><dt className="text-neutral panel:text-white/60">{label}</dt><dd className="flex items-center gap-2 font-medium">{value}</dd></div>)}</dl>
+    <div className="rounded-control border border-ink/10 p-4 panel:border-white/10">
+      <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm font-medium">Retorno estimado (bloco opcional)</p><Badge tone={er ? "success" : "neutral"}>{er ? "Aparece no relatório" : "Não aparece"}</Badge></div>
+      {er ? <p className="mt-2 text-sm text-neutral panel:text-white/60">{formatReais(er.revenueCents)} em tratamentos potenciais + {formatReais(er.savingsCents)} de tempo devolvido − {formatReais(er.investmentCents)} de investimento = {formatReais(er.netCents)} ({er.multiple.toLocaleString("pt-BR")}x). Receita só de quem chegou com a recepção fechada.</p>
+        : <><p className="mt-2 text-sm text-neutral panel:text-white/60">Sem estes dados o bloco some do painel e do PDF, sem “pendente” nem zero:</p><ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-neutral panel:text-white/60">{d.estimatedReturnMissing.map((m) => <li key={m}>{m}</li>)}</ul></>}
+    </div>
+  </section>;
+}
+
+/** Etapa 4 (relatório v2): as mudanças do mês, uma por linha, com tipo e data. */
+function AgentChangesFields({ value, onChange, disabled }: { value: ReportedAgentChange[]; onChange: (next: ReportedAgentChange[]) => void; disabled: boolean }) {
+  const set = (i: number, patch: Partial<ReportedAgentChange>) => onChange(value.map((c, n) => n === i ? { ...c, ...patch } : c));
+  return <section className="space-y-3">
+    <CardTitle as="h3" hint="O que foi incluído na base, virou regra ou foi corrigido neste mês. Só o que foi feito de fato.">Mudanças no agente</CardTitle>
+    {value.length === 0 && <p className="text-sm text-neutral panel:text-white/55">Nenhuma mudança registrada: o relatório mostra o texto acima.</p>}
+    {value.map((change, i) => <div key={i} className="grid items-end gap-3 rounded-control border border-ink/10 p-3 panel:border-white/10 md:grid-cols-[10rem_minmax(0,1fr)_10rem_auto]">
+      <SelectMenu label={`Tipo da mudança ${i + 1}`} options={AGENT_CHANGE_KINDS.map((kind) => ({ value: kind, label: AGENT_CHANGE_LABELS[kind] }))} value={change.kind} onChange={(kind) => set(i, { kind: kind as AgentChangeKind })} disabled={disabled} />
+      <Field label="O que mudou" htmlFor={`roi-change-${i}`}><Input {...fieldProps(`roi-change-${i}`)} maxLength={200} value={change.text} onChange={(e) => set(i, { text: e.target.value })} placeholder="Ex.: Onde estacionar e como chegar a pé do centro." /></Field>
+      <Field label="Data" htmlFor={`roi-change-date-${i}`} optional><Input {...fieldProps(`roi-change-date-${i}`)} type="date" value={change.date ?? ""} onChange={(e) => set(i, { date: e.target.value || null })} /></Field>
+      <Button type="button" size="icon" variant="ghost" aria-label={`Remover mudança ${i + 1}`} onClick={() => onChange(value.filter((_, n) => n !== i))}><Trash2 size={16} aria-hidden /></Button>
+    </div>)}
+    <Button type="button" size="sm" variant="outline" disabled={disabled || value.length >= AGENT_CHANGES_MAX} onClick={() => onChange([...value, { kind: "added", text: "", date: null }])}><Plus size={14} aria-hidden />Adicionar mudança</Button>
   </section>;
 }

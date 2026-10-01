@@ -29,6 +29,10 @@ export const monthlyAssumptionsSchema = z.object({
   // Type da API, explicitamente conferido pela Mavellium. CONFIRMED não é presença.
   completedStatusTypes: z.array(z.string().trim().min(1).max(80)).max(20)
     .refine((types) => !types.some((type) => type.toUpperCase() === "CONFIRMED"), "Confirmado não comprova avaliação realizada."),
+  // Type que comprova a FALTA. Sem ele, consulta passada com status não mapeado
+  // fica "não verificada", nunca falta. `default([])`: revisões salvas antes
+  // não têm a chave (mesma lição de `secondsPerMessage`).
+  noShowStatusTypes: z.array(z.string().trim().min(1).max(80)).max(20).default([]),
   procedures: z.array(z.object({
     name: z.string().trim().min(1).max(60),
     ticketCents: nullableNumber(1_000_000_000).refine((v) => v === null || Number.isInteger(v)),
@@ -39,7 +43,7 @@ export type MonthlyAssumptions = z.infer<typeof monthlyAssumptionsSchema>;
 export const EMPTY_ASSUMPTIONS: MonthlyAssumptions = {
   timezone: "America/Sao_Paulo", humanHours: null, attendantMonthlyCents: null,
   attendantMonthlyHours: null, minutesPerConversation: null, secondsPerMessage: null, investmentCents: null,
-  procedureVariable: "procedimento", evaluationTypes: ["Avaliação"], countUntypedAsEvaluations: false, completedStatusTypes: [], procedures: [],
+  procedureVariable: "procedimento", evaluationTypes: ["Avaliação"], countUntypedAsEvaluations: false, completedStatusTypes: [], noShowStatusTypes: [], procedures: [],
 };
 export function parseMonthlyAssumptions(raw: unknown): MonthlyAssumptions {
   const result = monthlyAssumptionsSchema.safeParse(raw);

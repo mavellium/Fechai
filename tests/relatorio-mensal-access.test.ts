@@ -3,6 +3,7 @@ const db = vi.hoisted(() => ({
   tenant: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn() },
   agent: { findMany: vi.fn() },
   monthlyRoiReport: { findUnique: vi.fn(), findFirst: vi.fn(), create: vi.fn(), updateMany: vi.fn() },
+  monthlyRoiReportVersion: { create: vi.fn() }, tenantServiceArea: { findUnique: vi.fn() },
   conversation: { findMany: vi.fn(), findFirst: vi.fn() },
   appointment: { findMany: vi.fn() },
   reportEvent: { findMany: vi.fn(), upsert: vi.fn() },
@@ -240,24 +241,37 @@ describe("caso do mês", () => {
 });
 
 describe("fechamento com cobertura parcial", () => {
-  const saved = () => ({ id: "r", month: "2026-09", status: "draft", assumptions: { ...roiConfig(), attendantMonthlyCents: null },
-    adjustments: "Ajustes", nextMonth: "Plano", decisionMaker: "Decisor", highlights: "", limitationsNote: "Falta o custo da recepção.", updatedAt: new Date("2026-10-01T12:00:00Z") });
+  const saved = () => ({ id: "r", month: "2026-09", status: "draft", version: 1, assumptions: { ...roiConfig(), attendantMonthlyCents: null, humanHours: null },
+    adjustments: "Ajustes", nextMonth: "Plano", decisionMaker: "Decisor", highlights: "", limitationsNote: "Falta o expediente da recepção.", updatedAt: new Date("2026-10-01T12:00:00Z") });
   beforeEach(() => {
     const row = saved();
     db.monthlyRoiReport.findUnique.mockImplementation(async ({ where }) => where.tenantId_month.month === "2026-09" ? row : null);
   });
   it("fecha com pendência depois de confirmar a lista, e congela o número sem evidência como não verificado", async () => {
     const seen = limitationFingerprint((await computeMonthlyReport("own", "2026-09", false)).limitations ?? []);
-    expect(seen.some((l) => l.startsWith("team|"))).toBe(true);
+    expect(seen.some((l) => l.startsWith("hours|"))).toBe(true);
+    // Relatório v2: custo da equipe só desliga o retorno estimado, não é limitação.
+    expect(seen.some((l) => l.startsWith("team|"))).toBe(false);
     const result = await finalizeMonthlyRoi("own", "2026-09", seen);
     expect(result.ok).toBe(true); expect(result.info).toContain("cobertura parcial");
     const snapshot = db.monthlyRoiReport.updateMany.mock.calls[0][0].data.snapshot;
     expect(snapshot.status).toBe("ready");
     expect(snapshot.current.savingsCents).toBeNull(); expect(snapshot.current.roiPercent).toBeNull();
-    expect(snapshot.quality.savings.status).toBe("pending"); expect(snapshot.limitations.map((l: { key: string }) => l.key)).toContain("team");
-    expect(snapshot.limitationsNote).toBe("Falta o custo da recepção.");
-    // Receita tem evidência: não é derrubada pela falta do custo da equipe.
-    expect(snapshot.current.revenueCents).not.toBeNull();
+    expect(snapshot.quality.savings.status).toBe("pending"); expect(snapshot.limitations.map((l: { key: string }) => l.key)).toContain("hours");
+    expect(snapshot.limitationsNote).toBe("Falta o expediente da recepção.");
+    expect(snapshot.data.estimatedReturn).toBeNull();
+    // Reabrir e fechar de novo não apaga o que foi entregue: a versão sobe e a anterior fica guardada.
+    expect(snapshot.snapshotVersion).toBe(2);
+    expect(db.monthlyRoiReport.updateMany.mock.calls[0][0].data.version).toBe(2);
+    expect(db.monthlyRoiReportVersion.create).toHaveBeenCalledWith({ data: expect.objectContaining({ reportId: "r", tenantId: "own", version: 2, contentHash: expect.stringMatching(/^[0-9a-f]{64}$/) }) });
+  });
+  it("recusa fechar quando o decisor é o contato operacional (D7)", async () => {
+    const row = { ...saved(), operationalContact: " decisor " };
+    db.monthlyRoiReport.findUnique.mockImplementation(async ({ where }) => where.tenantId_month.month === "2026-09" ? row : null);
+    const seen = limitationFingerprint((await computeMonthlyReport("own", "2026-09", false)).limitations ?? []);
+    const result = await finalizeMonthlyRoi("own", "2026-09", seen);
+    expect(result.ok).toBe(false); expect(result.error).toContain("contato operacional");
+    expect(db.monthlyRoiReport.updateMany).not.toHaveBeenCalled();
   });
   it("recusa sem confirmação e quando a lista mudou desde a conferência", async () => {
     expect((await finalizeMonthlyRoi("own", "2026-09", [])).error).toContain("Confirme as limitações");

@@ -306,8 +306,19 @@ model MonthlyRoiReport {
   /// Explicação das limitações do fechamento. A LISTA das limitações não mora
   /// aqui: é calculada (`monthly-limitations.ts`) e congelada no snapshot.
   limitationsNote String @default("")
+  /// Papel do decisor: `owner` (dono) | `partner` (sócio). O decisor nunca é a
+  /// recepção, que entra em `operationalContact` e recebe cópia.
+  decisionMakerRole  String @default("")
+  operationalContact String @default("")
+  /// Mudanças no agente no mês: até 8 `{ kind, text, date }`
+  /// (`monthly-agent-changes.ts`). `adjustments` fica para os relatórios antigos.
+  agentChanges Json   @default("[]")
   status       String @default("draft") // draft | ready
   snapshot     Json?
+  /// Quantas vezes foi fechado. Reabrir e fechar de novo não apaga o que foi
+  /// entregue: cada fechamento fica em `MonthlyRoiReportVersion`.
+  version      Int    @default(0)
+  versions     MonthlyRoiReportVersion[]
   preparedBy   String?
   finalizedAt  DateTime?
   sentAt       DateTime?
@@ -317,6 +328,23 @@ model MonthlyRoiReport {
 
   @@unique([tenantId, month])
   @@index([month, status])
+}
+
+/// Cada fechamento de uma competência, com o snapshot entregue e o hash do
+/// conteúdo. Só cresce: reabrir a revisão não apaga a versão anterior.
+model MonthlyRoiReportVersion {
+  id          String   @id @default(cuid())
+  reportId    String
+  report      MonthlyRoiReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  tenantId    String
+  version     Int
+  snapshot    Json
+  contentHash String
+  finalizedBy String?
+  finalizedAt DateTime @default(now())
+
+  @@unique([reportId, version])
+  @@index([tenantId])
 }
 
 /// Histórico da conversa "Fazer com I.A" de uma competência. Fica separado de
