@@ -764,9 +764,12 @@ export type FinancialSummary = {
   /**
    * Valor por lead em vigor no início do período. `null` = o dono nunca
    * definiu. Um valor definido no MEIO de uma janela só passa a valer para as
-   * janelas que começam depois — mudar o número não recalcula períodos passados.
+   * janelas que começam depois. Criar uma nova vigência não altera a anterior;
+   * corrigir explicitamente a linha recalcula os períodos que a usam.
    */
   valuePerLeadCents: number | null;
+  /** Vigência exibida, usada somente para a correção explícita deste valor. */
+  valueId: string | null;
   /** Quando o valor em uso passou a valer (exibido no hint da UI). */
   valueStartsAt: Date | null;
   /** `closedLeads × valuePerLeadCents`; `null` enquanto não há valor definido. */
@@ -817,7 +820,7 @@ export async function computeFinancialSummary(
     prisma.tenantLeadValue.findMany({
       where: { tenantId },
       orderBy: { startsAt: "asc" },
-      select: { valueCents: true, startsAt: true },
+      select: { id: true, valueCents: true, startsAt: true },
     }),
     // Triagem: contatos que o agente marcou como fora do perfil no período.
     // `isTest: false` como toda métrica de negócio — o sandbox não filtra
@@ -878,7 +881,7 @@ export async function computeFinancialSummary(
   );
   const investedCents = priceCents * months;
 
-  let effective: { valueCents: number; startsAt: Date } | null = null;
+  let effective: { id: string; valueCents: number; startsAt: Date } | null = null;
   if (values.length > 0) {
     if (!range.from) {
       // "tudo": o valor mais recente (o atual) aplicado a todo o histórico.
@@ -1020,6 +1023,7 @@ export async function computeFinancialSummary(
     planName: plan.name,
     planPriceCents: plan.priceCents,
     valuePerLeadCents,
+    valueId: effective?.id ?? null,
     valueStartsAt: effective?.startsAt ?? null,
     returnCents,
     roiPercent,
