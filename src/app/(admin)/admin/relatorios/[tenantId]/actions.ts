@@ -86,6 +86,7 @@ export async function saveMonthlyRoi(tenantId: string, month: string, _previous:
     const parsedChanges = agentChangesSchema.safeParse(raw);
     if (!parsedChanges.success) return { ok: false, error: parsedChanges.error.issues[0]?.message ?? "Revise as mudanças no agente." };
     agentChanges = parsedChanges.data;
+    if (agentChanges.some((change) => change.date && !change.date.startsWith(`${month}-`))) return { ok: false, error: "A data de cada mudança deve pertencer ao mês do relatório." };
   }
   // Ausente no formulário = mantém as salvas (mesma regra dos indicadores).
   let nextActions: MonthlyNextAction[] | undefined;
@@ -107,8 +108,8 @@ export async function saveMonthlyRoi(tenantId: string, month: string, _previous:
     const problem = decisionMakerProblem({ decisionMaker, operationalContact }, accountOwners ?? parseAccountOwners(tenant.ownerNames));
     if (problem) return { ok: false, error: problem };
   }
-  const actionsText = (nextActions ?? []).map((a) => `${a.action} ${a.owner} ${a.indicator}`).join(" ");
-  const changesText = (agentChanges ?? []).map((c) => c.text).join(" ");
+  const actionsText = (nextActions ?? []).map((a) => `${a.action} ${a.owner} ${a.indicator} ${a.reason ?? ""}`).join(" ");
+  const changesText = (agentChanges ?? []).map((c) => `${c.text} ${c.purpose ?? ""}`).join(" ");
   if (featuredCase || highlights || limitationsNote || actionsText || changesText) {
     // Os textos vão para o decisor e para o PDF: nenhum contato atendido no mês
     // pode ser reconhecido pelo nome, telefone ou e-mail.

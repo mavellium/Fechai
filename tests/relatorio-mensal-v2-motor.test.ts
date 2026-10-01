@@ -85,7 +85,9 @@ describe("relatório mensal v2 - fixture de aceite", () => {
     ]);
   });
   it("retorno estimado: receita só de quem chegou com a recepção fechada", () => {
-    const r = d.estimatedReturn!;
+    const complete = v2Input();
+    complete.appointments = complete.appointments.filter((a) => a.startsAt <= complete.now && a.attendance !== "unknown");
+    const r = data(complete).estimatedReturn!;
     expect(r.attendedOutside).toBe(8);
     expect(r.revenueCents).toBe(896_000);
     expect(Math.round(r.savingsCents / 100)).toBe(242);

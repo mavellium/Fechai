@@ -858,3 +858,39 @@ O toggle é `FilterTabs` (links, querystring) — preserva `periodo/de/ate` e se
 - Lint da seção: `npx eslint "src/app/(dashboard)/relatorios" "src/modules/reports" "src/components/charts"`.
 - Paleta: `node scripts/validate_palette.js "<hex,hex,...>" --mode light` e `--mode dark` (script do skill dataviz) → espera **ALL CHECKS PASS** nos dois modos antes de mudar qualquer cor categórica.
 - Smoke: `Invoke-WebRequest http://localhost:3001/relatorios -MaximumRedirection 0` → espera **307**.
+
+
+### Conferência antes de enviar (01/10/2026)
+
+Com o retorno financeiro ligado, `data.financialSummary` mostra parcelas
+independentes: receita potencial desconhecida é `null`, economia só usa custo,
+carga e **tempo por mensagem explicitamente informado**, investimento permanece
+informado. O padrão visual de 30 segundos não valida economia. ROI completo
+(`estimatedReturn`) exige todas as premissas e nenhuma avaliação fora do expediente
+futura, não verificada ou sem classificação. Saldo economia − mensalidade é
+**saldo operacional estimado**, nunca ROI total. Desligado, nenhum bloco aparece.
+Zero de receita continua válido quando as premissas e a base estão completas.
+Snapshots antigos são preservados: `monthlyFinancialPresentation` apenas suprime
+ROI inseguro e reapresenta parcelas congeladas que têm premissas; nova conferência
+requer reabrir e fechar uma nova versão. Não se consulta o banco na apresentação.
+
+As novas quebras e taxas nascem na mesma passada do motor: chegada por dia da
+semana/expediente (inclui pausas e datas fechadas), população única de contatos,
+cobertura da amostra de cidades, respostas humanas em até uma hora e no prazo
+`assumptions.receptionTargetMinutes` informado com a clínica. O denominador é
+**todas as transferidas**, incluindo as sem resposta; o corte exclusivo fica em
+`reception.countedUntil`. Sem meta cadastrada, uma hora é indicador, não SLA.
+Snapshots sem as novas medidas não as recalculam nem presumem valores.
+
+Painel/PDF têm a mesma ordem contínua: resultados, problemas/limitações, próximas
+ações e financeiro opcional. Não se força uma página inicial vazia. Cada ação
+pode registrar `reason`, o problema/resultado que a motivou. Alterações do agente
+são registros conferidos na revisão: só aparecem com `date` e `purpose`; o texto
+genérico de ajustes fica na revisão, não no documento v2. Data inválida ou fora
+da competência é recusada. Datas aqui identificam ajustes do agente, nunca pacientes.
+
+Exportar PDF fica no topo da revisão, em qualquer etapa; o rascunho exportado é
+**a revisão salva**. O servidor continua imprimindo o mesmo documento com Chromium.
+Se falhar, a página de impressão oferece **Salvar em PDF**, que abre o diálogo do
+navegador (escolher o destino Salvar como PDF), sem precisar de Ctrl+P. A barra
+fica fora do documento e não entra na impressão. Não há mudança de schema.

@@ -204,6 +204,7 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, owners, caseCandidates
     attendantMonthlyCents: readNumber(form.get("attendantMonthlyCents"), 100, true), attendantMonthlyHours: readNumber(form.get("attendantMonthlyHours")),
     minutesPerConversation: readNumber(form.get("minutesPerConversation")), secondsPerMessage: readNumber(form.get("secondsPerMessage")),
     investmentCents: readNumber(form.get("investmentCents"), 100, true),
+    receptionTargetMinutes: readNumber(form.get("receptionTargetMinutes")),
     procedureVariable: String(form.get("procedureVariable") ?? ""), evaluationTypes: String(form.get("evaluationTypes") ?? "").split("\n").map((v) => v.trim()).filter(Boolean),
     countUntypedAsEvaluations: untyped, completedStatusTypes: statuses, noShowStatusTypes: noShowStatuses.filter((type) => !statuses.includes(type)), financialEnabled: financial,
     procedures: procedures.map((p) => ({ name: String(form.get(`procedure-${p.id}`) ?? ""), ticketCents: readNumber(form.get(`ticket-${p.id}`), 100, true), conversionBps: readNumber(form.get(`conversion-${p.id}`), 100) })),
@@ -296,7 +297,7 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, owners, caseCandidates
 
     {!locked && <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-control border border-ink/10 p-4 panel:border-white/10">
       <div className="flex items-start gap-3"><Switch checked={financial} onCheckedChange={setFinancial} disabled={pending} label="Incluir retorno estimado no relatório" />
-        <div><p className="text-sm font-medium">Retorno estimado · {financial ? "ligado" : "desligado"}</p><p className="mt-1 text-xs text-neutral panel:text-white/60">{financial ? "Inclui receita, economia e ROI quando as premissas estiverem completas. Confira os valores na etapa 2." : "Receita, economia e ROI ficam fora do painel e do PDF."} Salve a revisão para aplicar.</p></div>
+        <div><p className="text-sm font-medium">Retorno estimado · {financial ? "ligado" : "desligado"}</p><p className="mt-1 text-xs text-neutral panel:text-white/60">{financial ? "Mostra parcelas financeiras disponíveis; ROI só com premissas e comparecimentos completos. Confira os valores na etapa 2." : "Receita, economia e ROI ficam fora do painel e do PDF."} Salve a revisão para aplicar.</p></div>
       </div>
       <input type="hidden" name="financialToggle" form="roi-edit-form" value={String(financial)} />
       {step === 4 && <Button type="submit" form="roi-edit-form" variant="outline" size="sm" loading={saving} disabled={pending}>Salvar revisão</Button>}
@@ -353,6 +354,7 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, owners, caseCandidates
           <section className="space-y-4">
             <CardTitle as="h3" hint="A receita considera somente contatos cuja primeira mensagem chegou fora deste expediente.">Horário de atendimento humano</CardTitle>
             <div className="flex flex-wrap items-center justify-between gap-4"><div className="flex items-center gap-3"><Switch checked={hoursConfirmed} onCheckedChange={setHoursConfirmed} disabled={pending} label="Horário humano conferido com a clínica" /><span className="text-sm">Horário conferido com a clínica</span></div><div className="w-full sm:w-64"><SelectMenu label="Fuso da clínica" options={TIMEZONES} value={timezone} onChange={setTimezone} disabled={pending} /></div></div>
+            {numberField("receptionTargetMinutes", "Meta de primeira resposta humana (min)", c.receptionTargetMinutes ?? null, "Defina com a clínica. Sem valor, o relatório acompanha 1 hora sem tratar esse prazo como meta acordada.")}
             <input type="hidden" name="humanHours" value={JSON.stringify({ hoursConfirmed, hours })} />
             <p className="text-sm text-neutral panel:text-white/55">Use o expediente da recepção. Adicione um período para cada turno; deixe as pausas fora dos intervalos.</p>
             {hoursOrigin && <p className="text-sm text-neutral panel:text-white/65">Grade importada de {hoursOrigin}. Confira se esses turnos correspondem ao atendimento da equipe humana.</p>}
@@ -560,7 +562,7 @@ function readNextActions(form: FormData, strict: boolean): MonthlyNextAction[] {
   const rows: MonthlyNextAction[] = [];
   for (let i = 0; i < NEXT_ACTIONS_MAX; i++) {
     const get = (k: string) => String(form.get(`nextAction-${i}-${k}`) ?? "").trim();
-    const row = { action: get("action"), owner: get("owner"), indicator: get("indicator") };
+    const row = { action: get("action"), owner: get("owner"), indicator: get("indicator"), reason: get("reason") };
     if (!row.action && !row.owner && !row.indicator) continue;
     if (!row.action || !row.owner || !row.indicator) { if (strict) throw new Error(`Complete a ação ${i + 1}: ação, responsável e indicador.`); continue; }
     rows.push(row);
@@ -570,7 +572,7 @@ function readNextActions(form: FormData, strict: boolean): MonthlyNextAction[] {
 
 function NextActionsFields({ defaults, legacy }: { defaults: MonthlyNextAction[]; legacy: string }) {
   return <section className="space-y-3">
-    <CardTitle as="h3" hint="Vão para a página 1: três prioridades, cada uma com quem faz e como o próximo relatório acompanha.">Próximas ações</CardTitle>
+    <CardTitle as="h3" hint="Vão depois dos resultados e problemas: três prioridades, cada uma com quem faz e como o próximo relatório acompanha.">Próximas ações</CardTitle>
     {/* O texto antigo segue salvo para os relatórios de antes; aqui ele vira referência. */}
     <input type="hidden" name="nextMonth" value={legacy} />
     {legacy && !defaults.length && <Alert title="Plano antigo, em texto livre">{legacy}</Alert>}
@@ -578,6 +580,7 @@ function NextActionsFields({ defaults, legacy }: { defaults: MonthlyNextAction[]
       <Field label={`Ação ${i + 1}`} htmlFor={`roi-action-${i}`}><Input {...fieldProps(`roi-action-${i}`)} name={`nextAction-${i}-action`} maxLength={120} defaultValue={defaults[i]?.action ?? ""} placeholder={i === 0 ? "Ex.: Confirmar os comparecimentos na agenda" : ""} /></Field>
       <Field label="Responsável" htmlFor={`roi-owner-${i}`}><Input {...fieldProps(`roi-owner-${i}`)} name={`nextAction-${i}-owner`} maxLength={60} defaultValue={defaults[i]?.owner ?? ""} placeholder={i === 0 ? "Ex.: Recepção" : ""} /></Field>
       <Field label="Indicador" htmlFor={`roi-indicator-${i}`}><Input {...fieldProps(`roi-indicator-${i}`)} name={`nextAction-${i}-indicator`} maxLength={100} defaultValue={defaults[i]?.indicator ?? ""} placeholder={i === 0 ? "Ex.: Comparecimentos confirmados" : ""} /></Field>
+      <Field className="md:col-span-3" label="Problema ou resultado que motiva a ação" htmlFor={`roi-reason-${i}`} optional><Input {...fieldProps(`roi-reason-${i}`)} name={`nextAction-${i}-reason`} maxLength={200} defaultValue={defaults[i]?.reason ?? ""} placeholder="Ex.: Comparecimentos ainda sem confirmação no Clinicorp" /></Field>
     </div>)}
   </section>;
 }
@@ -696,12 +699,13 @@ function DataCheck({ report, financial, fresh, onRecalculate, pending }: { repor
 function AgentChangesFields({ value, onChange, disabled }: { value: ReportedAgentChange[]; onChange: (next: ReportedAgentChange[]) => void; disabled: boolean }) {
   const set = (i: number, patch: Partial<ReportedAgentChange>) => onChange(value.map((c, n) => n === i ? { ...c, ...patch } : c));
   return <section className="space-y-3">
-    <CardTitle as="h3" hint="O que foi incluído na base, virou regra ou foi corrigido neste mês. Só o que foi feito de fato.">Mudanças no agente</CardTitle>
-    {value.length === 0 && <p className="text-sm text-neutral panel:text-white/55">Nenhuma mudança registrada: o relatório mostra o texto acima.</p>}
-    {value.map((change, i) => <div key={i} className="grid items-end gap-3 rounded-control border border-ink/10 p-3 panel:border-white/10 md:grid-cols-[10rem_minmax(0,1fr)_10rem_auto]">
+    <CardTitle as="h3" hint="O que foi incluído na base, virou regra ou foi corrigido neste mês. Só o que foi feito de fato e conferido: o documento inclui somente linhas com data e finalidade.">Mudanças no agente</CardTitle>
+    {value.length === 0 && <p className="text-sm text-neutral panel:text-white/55">Nenhuma mudança detalhada registrada. Texto genérico não vai para o documento do cliente.</p>}
+    {value.map((change, i) => <div key={i} className="grid items-end gap-3 rounded-control border border-ink/10 p-3 panel:border-white/10 md:grid-cols-[8rem_minmax(0,1fr)_minmax(0,1fr)_9rem_auto]">
       <SelectMenu label={`Tipo da mudança ${i + 1}`} options={AGENT_CHANGE_KINDS.map((kind) => ({ value: kind, label: AGENT_CHANGE_LABELS[kind] }))} value={change.kind} onChange={(kind) => set(i, { kind: kind as AgentChangeKind })} disabled={disabled} />
       <Field label="O que mudou" htmlFor={`roi-change-${i}`}><Input {...fieldProps(`roi-change-${i}`)} maxLength={200} value={change.text} onChange={(e) => set(i, { text: e.target.value })} placeholder="Ex.: Onde estacionar e como chegar a pé do centro." /></Field>
-      <Field label="Data" htmlFor={`roi-change-date-${i}`} optional><Input {...fieldProps(`roi-change-date-${i}`)} type="date" value={change.date ?? ""} onChange={(e) => set(i, { date: e.target.value || null })} /></Field>
+      <Field label="Finalidade" htmlFor={`roi-change-purpose-${i}`}><Input {...fieldProps(`roi-change-purpose-${i}`)} maxLength={200} value={change.purpose ?? ""} onChange={(e) => set(i, { purpose: e.target.value })} placeholder="Ex.: Esclarecer acesso à clínica" /></Field>
+      <Field label="Data" htmlFor={`roi-change-date-${i}`}><Input {...fieldProps(`roi-change-date-${i}`)} type="date" value={change.date ?? ""} onChange={(e) => set(i, { date: e.target.value || null })} /></Field>
       <Button type="button" size="icon" variant="ghost" aria-label={`Remover mudança ${i + 1}`} onClick={() => onChange(value.filter((_, n) => n !== i))}><Trash2 size={16} aria-hidden /></Button>
     </div>)}
     <Button type="button" size="sm" variant="outline" disabled={disabled || value.length >= AGENT_CHANGES_MAX} onClick={() => onChange([...value, { kind: "added", text: "", date: null }])}><Plus size={14} aria-hidden />Adicionar mudança</Button>
