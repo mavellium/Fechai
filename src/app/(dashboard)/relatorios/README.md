@@ -80,10 +80,17 @@ componente, prompt ou gerador de PDF.
 - **Guardas da IA** (`monthly-text-guard.ts`): todo número do resumo precisa
   existir em `data` ("9h40", "78%", "R$ 8.960"); senão o rascunho é descartado
   e o fechamento bloqueia.
-- **Ainda não feito**: cadastro de incidentes (a disponibilidade fica
-  `unavailable` até existir fonte; o motor já aceita `MonthlyInput.incidents`),
-  avaliação das ações do mês anterior, "Ver registros" dos números novos
-  (`evidence.contacts`/`evidence.cohort` já são gravados), feriados no
+- **Disponibilidade e quedas**: vêm de `availabilityMetrics`
+  (`monthly-operations.ts`, quedas do monitor em `WhatsappIncident`), na mesma
+  passada. Sem medição no mês a linha some (`unavailable`), nunca 100%
+  presumido; medição que começou no meio do mês sai com o selo de parcial. Cada
+  queda vira um item de "o que não saiu como planejado".
+- **Bloco 03** abre com as ações do mês anterior **já avaliadas**
+  (`previousActions`, status + o número que comprova; ação sem status é
+  pendência da revisão e não vai ao documento) e mostra os fatos medidos do
+  caso do mês (`caseFacts`), nunca o id da conversa.
+- **Ainda não feito**: "Ver registros" dos números novos
+  (`evidence.contacts`/`evidence.cohort` já são gravados) e feriados no
   expediente. Disparo conta como mensagem da equipe (`sentBy: "human"`): um
   disparo depois de o contato escrever no mês marca o contato como transferido.
 - Testes: `tests/relatorio-mensal-v2-*.test.ts`, com a fixture de aceite em

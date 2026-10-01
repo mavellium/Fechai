@@ -2,6 +2,8 @@ import type { ReactNode } from "react";
 import type { MonthlyReport } from "@/modules/reports/monthly";
 import type { Metric, MetricStatus, MonthlyReportData, Split } from "@/modules/reports/monthly-data";
 import { AGENT_CHANGE_LABELS } from "@/modules/reports/monthly-agent-changes";
+import { ACTION_STATUS_LABEL, type ActionStatus } from "@/modules/reports/monthly-previous-actions";
+import { caseFactItems } from "@/modules/reports/monthly-case";
 import { NO_PROBLEMS, STATUS_SEAL, deltaLabel, formatCount, formatPercent, formatReais, formatSpan, hoursLabel, openingSentence, periodLabel, problemText } from "@/modules/reports/monthly-format";
 import { SUGGESTION_DISCLAIMER } from "@/modules/lead-insights/summary";
 import { cn } from "@/lib/utils";
@@ -107,6 +109,9 @@ function Funnel({ data }: { data: MonthlyReportData }) {
   </div>;
 }
 
+// Seta e texto, nunca só a cor: o status tem que sobreviver à impressão em preto e branco.
+const ACTION_CHIP: Record<ActionStatus, string> = { worked: "bg-success/15 text-emerald-800", partial: "bg-warn/15 text-amber-800", failed: "bg-danger/10 text-red-800" };
+
 const CHIP: Record<string, string> = { added: "bg-success/15 text-emerald-800", rule: "bg-iris/10 text-iris", fixed: "bg-success/15 text-emerald-800" };
 
 /**
@@ -126,6 +131,8 @@ export function MonthlyReportDocument({ report: r, print = false }: { report: Mo
   const upcoming = a.cohort.upcoming.total.value ?? 0, unverified = a.cohort.unverified.total.value ?? 0;
   const earlier = (a.fromEarlierMonths.attended.value ?? 0) + (a.fromEarlierMonths.noShow.value ?? 0);
   const changes = r.agentChanges ?? [];
+  // Só as já avaliadas: ação sem status é pendência da revisão, não conteúdo do relatório.
+  const reviewed = (r.previousActions ?? []).filter((item) => item.status);
   const actions = r.nextActions ?? [];
   const leads = d.leads, er = d.estimatedReturn;
   const hasLeads = leads.firstDoubts.length > 0 || leads.reasons.length > 0 || shown(leads.outOfArea);
@@ -212,6 +219,13 @@ export function MonthlyReportDocument({ report: r, print = false }: { report: Mo
     </Block>
 
     <Block number="03" title="O que ajustamos no agente">
+      {reviewed.length > 0 && <div className="space-y-2 break-inside-avoid">
+        <p className="text-sm font-semibold">Como foram as ações combinadas em {previousName}</p>
+        <ul className="space-y-2.5">{reviewed.map((item, i) => <li key={i} className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-3">
+          <span className={cn("whitespace-nowrap rounded-full px-2 py-0.5 font-mono text-micro font-medium uppercase tracking-wide", ACTION_CHIP[item.status!])}>{ACTION_STATUS_LABEL[item.status!]}</span>
+          <span>{item.action}{item.result ? <>: <span className="text-ink/80">{item.result}</span></> : null}</span>
+        </li>)}</ul>
+      </div>}
       <p>O agente travou em <strong className="tabular-nums">{valued(d.unanswered)}</strong> {d.unanswered.value === 1 ? "pergunta" : "perguntas"} este mês{c ? <> ({c.unanswered === 1 ? "era" : "eram"} <span className="tabular-nums">{c.unanswered}</span> em {previousName})</> : null}.</p>
       {changes.length > 0 ? <ul className="space-y-2.5">{changes.map((change, i) => <li key={i} className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-3">
         <span className={cn("whitespace-nowrap rounded-full px-2 py-0.5 font-mono text-micro font-medium uppercase tracking-wide", CHIP[change.kind])}>{AGENT_CHANGE_LABELS[change.kind]}</span>
@@ -220,6 +234,7 @@ export function MonthlyReportDocument({ report: r, print = false }: { report: Mo
       {r.featuredCase && <figure className="space-y-1.5 rounded-control border border-ink/10 bg-paper p-4 break-inside-avoid">
         <figcaption className="font-mono text-micro font-medium uppercase tracking-[0.15em] text-neutral">Caso do mês</figcaption>
         <blockquote className="whitespace-pre-wrap">{r.featuredCase}</blockquote>
+        {r.caseFacts && <p className="text-sm text-neutral">{caseFactItems(r.caseFacts).join(" · ")}</p>}
       </figure>}
     </Block>
 

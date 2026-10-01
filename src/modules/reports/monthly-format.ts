@@ -75,9 +75,10 @@ export function problemText(problem: MonthlyProblem, timezone: string): { title:
     const clock = new Intl.DateTimeFormat("pt-BR", { timeZone: timezone, hour: "numeric", minute: "2-digit", hourCycle: "h23" });
     // "19h" e "19h30", como a clínica fala.
     const time = { format: (at: Date) => clock.format(at).replace(":", "h").replace(/h00$/, "h") };
-    const from = new Date(problem.startsAt), to = new Date(problem.endsAt);
-    return { title: `O agente ficou ${formatSpan(problem.minutes * 60)} fora do ar em ${day.format(from)}, das ${time.format(from)} às ${time.format(to)}.`,
-      detail: problem.contactsAffected ? `${plural(problem.contactsAffected, "contato esperou", "contatos esperaram")} até o agente voltar.` : problem.description };
+    const from = new Date(problem.startsAt);
+    const span = problem.endsAt ? `das ${time.format(from)} às ${time.format(new Date(problem.endsAt))}` : `a partir das ${time.format(from)}, e seguia fora no fim do período`;
+    return { title: `O agente ficou ${formatSpan(problem.minutes * 60)} fora do ar em ${day.format(from)}, ${span}.`,
+      detail: problem.contactsAffected ? `${plural(problem.contactsAffected, "contato escreveu", "contatos escreveram")} nesse período e ${problem.contactsAffected === 1 ? "esperou" : "esperaram"} o agente voltar.` : "Nenhum contato escreveu nesse período." };
   }
   const waited = problem.waitedOverHour ? `${plural(problem.waitedOverHour, "conversa passada para a recepção esperou", "conversas passadas para a recepção esperaram")} mais de 1 hora` : "";
   const open = problem.unanswered ? `${plural(problem.unanswered, "seguia", "seguiam")} sem resposta no fim do mês` : "";

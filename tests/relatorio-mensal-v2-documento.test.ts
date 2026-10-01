@@ -34,6 +34,19 @@ describe("documento do relatório mensal v2", () => {
     expect(out.indexOf("Próximo mês")).toBeLessThan(out.indexOf("Atendimento"));
     expect(text({ ...report() }).length).toBeGreaterThan(0);
   });
+  it("abre o bloco 03 com as ações do mês anterior já avaliadas e mostra os fatos do caso", () => {
+    const out = text(report(v2Input(), {
+      previousActions: [{ action: "Lembrete na véspera da consulta", owner: "Mavellium", indicator: "faltas", status: "worked", result: "faltas caíram de 31% para 22%" },
+        { action: "Recepção responder em até 30 minutos", owner: "Clínica", indicator: "espera", status: null, result: "" }],
+      featuredCase: "Uma paciente mandou dois áudios longos e o agente respondeu no ritmo dela.",
+      caseFacts: { conversationId: "c1", age: 76, audioSeconds: [302, 280], weekday: 6, period: "night", scheduled: false },
+    }));
+    expect(out).toContain("Como foram as ações combinadas em agosto");
+    expect(out).toContain("Funcionou Lembrete na véspera da consulta: faltas caíram de 31% para 22%");
+    // Ação ainda sem avaliação não vai ao documento, nem o id da conversa do caso.
+    expect(out).not.toContain("Recepção responder em até 30 minutos"); expect(out).not.toContain("c1");
+    expect(out).toContain("76 anos · sábado à noite"); expect(out).toContain("não agendou");
+  });
   it("na tela, as próximas ações ficam no fim e o retorno estimado por último", () => {
     const out = html(report(), false).replace(/<[^>]+>/g, " ");
     expect(out.indexOf("Próximo mês")).toBeGreaterThan(out.indexOf("O que não saiu como planejado"));
@@ -52,7 +65,7 @@ describe("documento do relatório mensal v2", () => {
   });
   it("sem incidente comprovado, diz que não houve (D9)", () => {
     const input = v2Input();
-    input.incidents = []; input.appointments = []; input.events = [];
+    input.uptime = { trackedSince: input.start, incidents: [] }; input.appointments = []; input.events = [];
     for (const c of input.conversations) c.messages = c.messages.filter((m) => m.sentBy !== "human");
     expect(text(report(input))).toContain("Nenhum incidente relevante identificado neste mês.");
   });
@@ -76,6 +89,8 @@ describe("formatação do relatório mensal v2", () => {
     const titles = data.problems.map((p) => problemText(p, "America/Sao_Paulo").title);
     expect(titles[0]).toBe("6 faltas (22% das consultas já realizadas).");
     expect(titles[1]).toBe("O agente ficou 3h fora do ar em 17/09, das 19h às 22h.");
+    expect(problemText({ kind: "outage", startsAt: "2026-09-30T22:00:00.000Z", endsAt: null, minutes: 300, contactsAffected: 0 }, "America/Sao_Paulo"))
+      .toEqual({ title: "O agente ficou 5h fora do ar em 30/09, a partir das 19h, e seguia fora no fim do período.", detail: "Nenhum contato escreveu nesse período." });
     expect(titles[2]).toBe("11 conversas passadas para a recepção esperaram mais de 1 hora, e 3 seguiam sem resposta no fim do mês.");
     expect(openingSentence("setembro", data)).toContain("214 contatos");
   });

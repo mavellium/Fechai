@@ -19,7 +19,7 @@ function evaluation(id: string, conversationId: string, over: Partial<MonthlyApp
     createdAt: local(10, 10), startsAt: local(20, 10), clinicorpAppointmentId: null, attendance: "unknown", attendanceAt: null, ...over };
 }
 function small(conversations: MonthlyConversation[], appointments: MonthlyAppointment[] = []): MonthlyInput {
-  return { ...v2Input(), conversations, appointments, events: [], incidents: undefined };
+  return { ...v2Input(), conversations, appointments, events: [], uptime: undefined };
 }
 
 describe("relatório mensal v2 - fixture de aceite", () => {
@@ -39,9 +39,10 @@ describe("relatório mensal v2 - fixture de aceite", () => {
     expect(d.service.reception.waitedOverHour.value).toBe(11);
     expect(d.service.reception.unanswered.value).toBe(3);
   });
-  it("disponibilidade vem dos incidentes", () => {
-    expect(d.service.availabilityPercent.value).toBe(99.6);
-    expect(d.incidents).toHaveLength(1);
+  it("disponibilidade vem das quedas medidas pelo monitor do WhatsApp", () => {
+    // 3h fora em 720h: arredonda para baixo, queda nunca vira 100%.
+    expect(d.service.availabilityPercent).toMatchObject({ value: 99.5, status: "measured" });
+    expect(d.incidents).toEqual([expect.objectContaining({ seconds: 10_800, contacts: 4 })]);
   });
   it("tempo devolvido: áudio medido, texto estimado", () => {
     const t = d.service.time;
@@ -79,7 +80,7 @@ describe("relatório mensal v2 - fixture de aceite", () => {
   it("problemas: só o que os dados comprovam", () => {
     expect(d.problems).toEqual([
       { kind: "no_show", count: 6, ratePercent: 22 },
-      expect.objectContaining({ kind: "outage", minutes: 180, contactsAffected: 6 }),
+      expect.objectContaining({ kind: "outage", minutes: 180, contactsAffected: 4 }),
       { kind: "reception_wait", waitedOverHour: 11, unanswered: 3 },
     ]);
   });
@@ -136,8 +137,11 @@ describe("relatório mensal v2 - fuso e expediente", () => {
     // A resposta da equipe não entra na mediana do agente.
     expect(d.service.agentFirstResponseSeconds.value).toBe(40);
   });
-  it("sem fonte de incidentes, a disponibilidade fica indisponível (não 100%)", () => {
+  it("sem medição da conexão, a disponibilidade fica indisponível (não 100%)", () => {
     expect(data(small([contact("a", local(21, 9))])).service.availabilityPercent).toMatchObject({ value: null, status: "unavailable" });
+    // Monitorada só a partir do meio do mês: o número vale, com o selo de parcial.
+    const half = { ...small([contact("a", local(21, 9))]), uptime: { trackedSince: local(15, 0), incidents: [] } };
+    expect(data(half).service.availabilityPercent).toMatchObject({ value: 100, status: "partial" });
   });
 });
 
