@@ -5,6 +5,13 @@
 
 ## O que faz
 
+**Revisão de contexto (01/10/2026):** a leitura atual inclui atendimento de
+pacientes antigos e contatos abordados pela clínica. Sem origem de aquisição
+registrada, não presume tráfego pago: `acquisition: "not_recorded"`, sem
+sugestões de segmentação a partir dessa base misturada. O classificador de
+iniciativa/conversão é `reports/contact-context.ts`; os registros históricos
+continuam congelados. Cidade conhecida não comprova aquisição por anúncio.
+
 Mede a qualidade dos leads do tráfego pago: de que cidade são, se estão dentro
 do raio de atendimento, o que perguntam primeiro, por que não fecham e o que
 aconteceu com eles. O caso que originou: o Instituto do Sorriso fica em Garça e
@@ -52,11 +59,36 @@ classifyCity(area, cityKey) -> "in" | "out" | "unknown"
 ## Regras que não podem quebrar
 
 **Só o que o contato disse, nunca deduzido.** Cidade, procedimento, dúvida e
-motivo entram por `record_lead_insight`, chamada pelo agente; nada é inferido do
-texto depois (mesma regra de `report_unanswered` e `disqualify_lead`). A tool
+motivo entram por `record_lead_insight`, chamada pelo agente. Para recuperar
+conversas anteriores ao registro estruturado, a cidade também pode vir de uma
+declaração literal reconhecida por `historical-city.ts`; não se infere localização.
+A tool
 proíbe deduzir cidade por DDD, nome ou sotaque, e o servidor descarta o que não
 parece cidade (frase, número, link). O agente **não pergunta** a cidade só para
 preencher o registro — quem quiser cobertura maior pede isso na persona.
+
+**Histórico de cidades (01/10/2026).** A pedido da revisão do Instituto do
+Sorriso, `historical-city-store.ts` lê o histórico dos contatos atendidos, até
+o fim exclusivo da janela, em lotes paginados. Aceita declaração como “sou de
+Marília” ou resposta contendo só a cidade depois de pergunta dirigida ao
+contato. Exige nome exato normalizado da lista pública de municípios do IBGE
+(`municipalities.json`, obtida de
+`https://servicodados.ibge.gov.br/api/v1/localidades/municipios?orderBy=nome`
+em 01/10/2026). Nunca aceita DDD, endereço, localização da clínica, fala de
+terceiros ou correspondência aproximada. Conservador: grafia não reconhecida,
+frase ambígua e cidades estrangeiras não viram registro. A última declaração
+reconhecida antes do corte é usada apenas quando não há cidade estruturada.
+Nenhum GET grava. Texto é usado somente no servidor; a evidência guarda id da
+mensagem e data, sem seu conteúdo. Snapshots aprovados não são recalculados.
+
+**População alinhada ao mensal v2.** `loadLeadQualityDetail` conta contatos
+que escreveram e receberam resposta atribuída à IA ou à equipe na janela,
+inclusive leads criados antes dela. Usa `contactActivity`, a mesma regra de
+`MonthlyReportData.service.contacts`. Não confundir com **leads novos**, que
+continuam sendo criação no período. Sem cidade reconhecida significa ausência
+de evidência reconhecida, não prova de que ninguém disse a cidade. Resultados
+do bloco legado de qualidade usam qualquer agendamento do contato; a coorte
+de avaliações do mensal usa tipo, origem, agentes e criação no mês.
 
 **Dentro/fora do raio e resultado são calculados na leitura, nunca gravados.**
 Gravá-los congelaria um palpite velho quando a clínica muda a área ou o lead

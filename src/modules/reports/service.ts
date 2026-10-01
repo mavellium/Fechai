@@ -1,3 +1,9 @@
+import { periodContactActivity } from "./contact-activity";
+import { summarizeContactContexts, type ContactContextSummary } from "./contact-context";
+import { loadConversationStarts } from "./contact-context-store";
+import { contextEventMessageId } from "./contact-context-events";
+import { EMPTY_ASSUMPTIONS, parseMonthlyAssumptions, monthlyWindow, type MonthlyAssumptions } from "./monthly-config";
+import { evaluationOf } from "./monthly-data";
 import { prisma } from "@/lib/prisma";
 import { dateLabel } from "@/lib/format";
 import { planOf } from "@/modules/billing/plans";
@@ -172,6 +178,8 @@ export type ResultPoint = { key: string; label: string; leads: number; appts: nu
 export type AiHumanPoint = { key: string; label: string; ai: number; human: number };
 
 export type PeriodKpis = {
+  attendedContacts: number;
+  evaluations: number;
   conversations: number;
   leads: number;
   scheduled: number;
@@ -182,6 +190,8 @@ export type PeriodKpis = {
   hotLeads: number;
   needsHuman: number;
   prev: {
+    attendedContacts: number;
+    evaluations: number;
     conversations: number;
     leads: number;
     scheduled: number;
@@ -208,6 +218,7 @@ export type ResponseTimeBucket = { label: string; ai: number; human: number };
 export type AttendanceOutcomePoint = { key: string; label: string; attended: number; noShow: number; unknown: number };
 
 export type PeriodReport = {
+  contexts: ContactContextSummary;
   kpis: PeriodKpis;
   flow: FlowPoint[];
   results: ResultPoint[];
@@ -314,7 +325,8 @@ export function resolveRange(period: PeriodKey, de?: string, ate?: string): Repo
 
   const length = from ? to.getTime() - from.getTime() : 0;
   const prevTo = from ? new Date(from.getTime() - 1) : null;
-  const prevFrom = prevTo ? new Date(prevTo.getTime() - length) : null;
+  const fullMonth = from && +from === +startOfMonth(from) && +to + 1 === +addMonths(from, 1);
+  const prevFrom = fullMonth && from ? addMonths(from, -1) : prevTo ? new Date(prevTo.getTime() - length) : null;
 
   const bucket = from ? bucketUnitFor(from, to) : "mes";
 
@@ -373,122 +385,81 @@ function listBuckets(from: Date, to: Date, unit: BucketUnit) {
  * configurável e agregação por bucket em memória (mesmo custo da sparkline,
  * ainda barato na escala de uma conta).
  */
-export async function computePeriodReport(tenantId: string, range: ReportRange): Promise<PeriodReport> {
+export async function computePeriodReport(tenantId: string, range: ReportRange, options: { assumptions?: MonthlyAssumptions; agentIds?: string[] } = {}): Promise<PeriodReport> {
   const { from, to, bucket, prevFrom, prevTo } = range;
   const toExcl = new Date(to.getTime() + 1);
   const prevLt = prevTo ? new Date(prevTo.getTime() + 1) : undefined;
+  const agentScope = options.agentIds?.length ? { agentId: { in: options.agentIds } } : {};
+  const leadScope = { tenantId, isTest: false, ...(options.agentIds?.length ? { conversation: { ...agentScope, isTest: false } } : {}) };
+  const conversationScope = { tenantId, isTest: false, lead: { isTest: false }, ...agentScope };
+  let config = options.assumptions ?? EMPTY_ASSUMPTIONS;
+  if (!options.assumptions && from) {
+    const p = partsInZone(from, PANEL_TIME_ZONE);
+    const month = `${p.year}-${String(p.month).padStart(2, "0")}`;
+    const window = monthlyWindow(month, PANEL_TIME_ZONE);
+    if (+from === +window.start && +toExcl === +window.end) {
+      const revision = await prisma.monthlyRoiReport.findUnique({ where: { tenantId_month: { tenantId, month } }, select: { assumptions: true } });
+      config = parseMonthlyAssumptions(revision?.assumptions ?? EMPTY_ASSUMPTIONS);
+    }
+  }
+  const isEvaluation = (a: { source: string; agentId: string | null; kind: string | null; serviceType: string | null }) =>
+    a.source === "agent" && (!config.agentIds?.length || Boolean(a.agentId && config.agentIds.includes(a.agentId))) && evaluationOf(a, config).evaluation;
 
   const [
-    conversations,
-    leads,
-    scheduled,
-    messages,
     leadRows,
     apptRows,
-    engagedGroups,
     agentGroups,
     statusGroups,
     hotLeads,
     needsHuman,
-    assistantMsgs,
-    closedAppts,
     pastAppts,
     hotLeadsInPeriod,
     orderedMsgs,
     followUpConvos,
+    handoffEvents,
   ] = await Promise.all([
-    prisma.conversation.count({
-      where: { tenantId, isTest: false, updatedAt: { gte: from ?? undefined, lt: toExcl } },
-    }),
-    prisma.lead.count({
-      where: { tenantId, isTest: false, createdAt: { gte: from ?? undefined, lt: toExcl } },
-    }),
-    prisma.appointment.count({
-      where: {
-        tenantId,
-        startsAt: { gte: from ?? undefined, lt: toExcl },
-        status: { in: ["scheduled", "done"] },
-      },
-    }),
-    prisma.message.findMany({
-      where: {
-        role: { in: ["user", "assistant"] },
-        createdAt: { gte: from ?? undefined, lt: toExcl },
-        conversation: { tenantId, isTest: false },
-      },
-      select: { role: true, createdAt: true },
-    }),
     prisma.lead.findMany({
-      where: { tenantId, isTest: false, createdAt: { gte: from ?? undefined, lt: toExcl } },
+      where: { ...leadScope, createdAt: { gte: from ?? undefined, lt: toExcl } },
       select: { createdAt: true },
     }),
     prisma.appointment.findMany({
       where: {
         tenantId,
-        startsAt: { gte: from ?? undefined, lt: toExcl },
+        ...agentScope,
+        lead: { isTest: false }, conversation: { isTest: false },
+        createdAt: { gte: from ?? undefined, lt: toExcl },
         status: { in: ["scheduled", "done"] },
       },
-      select: { startsAt: true },
-    }),
-    prisma.message.groupBy({
-      by: ["conversationId"],
-      where: {
-        role: "user",
-        createdAt: { gte: from ?? undefined, lt: toExcl },
-        conversation: { tenantId, isTest: false },
-      },
-      _count: { _all: true },
+      select: { id: true, conversationId: true, createdAt: true, source: true, agentId: true, kind: true, serviceType: true },
     }),
     prisma.conversation.groupBy({
       by: ["agentId"],
-      where: { tenantId, isTest: false, updatedAt: { gte: from ?? undefined, lt: toExcl } },
+      where: { ...conversationScope, messages: { some: { role: "user", createdAt: { gte: from ?? undefined, lt: toExcl } } } },
       _count: { _all: true },
     }),
     prisma.lead.groupBy({
       by: ["status"],
-      where: { tenantId, isTest: false, createdAt: { gte: from ?? undefined, lt: toExcl } },
+      where: { ...leadScope, createdAt: { gte: from ?? undefined, lt: toExcl } },
       _count: { _all: true },
     }),
-    prisma.lead.count({ where: { tenantId, isTest: false, status: "hot" } }),
-    prisma.conversation.count({ where: { tenantId, isTest: false, needsHuman: true } }),
-    // Respostas assistant com quem gerou — base dos gráficos "IA × humano".
-    prisma.message.findMany({
-      where: {
-        role: "assistant",
-        sentBy: { in: ["agent", "human"] },
-        createdAt: { gte: from ?? undefined, lt: toExcl },
-        conversation: { tenantId, isTest: false },
-      },
-      select: { sentBy: true, createdAt: true, conversationId: true },
-    }),
-    // Agendamentos EFETIVADOS criados no período, com origem (IA vs manual).
-    // Alinhado ao KPI "Agendamentos" (só scheduled/done) — antes contava
-    // cancelado como "lead fechado", divergindo do número que a mesma tela
-    // mostra ao lado. Mudança de definição registrada no CHANGELOG.
-    prisma.appointment.findMany({
-      where: {
-        tenantId,
-        createdAt: { gte: from ?? undefined, lt: toExcl },
-        status: { in: ["scheduled", "done"] },
-      },
-      select: { source: true, createdAt: true },
-    }),
+    prisma.lead.count({ where: { ...leadScope, status: "hot" } }),
+    prisma.conversation.count({ where: { ...conversationScope, needsHuman: true } }),
     // Comparecimento: consultas de pé cujo HORÁRIO já passou dentro do
     // período, pelo que alguém marcou. Antes era concluído × cancelado pela
     // data de criação — cancelar não é faltar, e "concluído" não dizia se veio.
     prisma.appointment.findMany({
       where: {
         tenantId,
+        ...agentScope,
+        lead: { isTest: false }, conversation: { isTest: false },
         startsAt: { gte: from ?? undefined, lt: new Date(Math.min(toExcl.getTime(), Date.now())) },
         status: { not: "canceled" },
       },
       select: { startsAt: true, status: true, attendance: true },
     }),
-    // Funil: leads com 2+ mensagens do lead (engajados) já vem de engagedGroups;
-    // aqui só o total de leads quentes/agendados CRIADOS no período (o funil é
-    // sobre o que entrou nesta janela, não o estado atual da conta inteira).
+    // Status atual dos leads novos; sem histórico de transição, não é uma etapa de conversão.
     prisma.lead.count({
-      where: { tenantId, isTest: false, createdAt: { gte: from ?? undefined, lt: toExcl }, status: "hot" },
+      where: { ...leadScope, createdAt: { gte: from ?? undefined, lt: toExcl }, status: "hot" },
     }),
     // Primeira mensagem do lead e primeira resposta de cada conversa tocada no
     // período — base do "tempo até a primeira resposta". Ordenado para achar o
@@ -497,81 +468,69 @@ export async function computePeriodReport(tenantId: string, range: ReportRange):
       where: {
         role: { in: ["user", "assistant"] },
         createdAt: { gte: from ?? undefined, lt: toExcl },
-        conversation: { tenantId, isTest: false },
+        conversation: conversationScope,
       },
-      select: { conversationId: true, role: true, sentBy: true, createdAt: true },
+      select: { id: true, conversationId: true, role: true, sentBy: true, createdAt: true },
       orderBy: { createdAt: "asc" },
     }),
     // Conversas com follow-up enviado no período — base da "recuperação por follow-up".
     prisma.conversation.findMany({
-      where: { tenantId, isTest: false, followUpSentAt: { gte: from ?? undefined, lt: toExcl } },
+      where: { ...conversationScope, followUpSentAt: { gte: from ?? undefined, lt: toExcl } },
       select: { id: true, followUpSentAt: true },
     }),
+    prisma.reportEvent.findMany({ where: { tenantId, createdAt: { gte: from ?? undefined, lt: toExcl }, conversation: conversationScope }, select: { conversationId: true, kind: true, createdAt: true, dedupKey: true } }),
   ]);
+
+  const messages = orderedMsgs;
+  const activity = periodContactActivity(messages, handoffEvents.filter((e) => e.kind === "handoff").map((e) => e.conversationId));
+  const contextMessages = new Map<string, typeof messages>();
+  for (const message of messages) {
+    const rows = contextMessages.get(message.conversationId) ?? [];
+    rows.push(message); contextMessages.set(message.conversationId, rows);
+  }
+  const starts = await loadConversationStarts(tenantId, [...contextMessages.keys()], toExcl, from);
+  const contexts = summarizeContactContexts({ start: from, end: toExcl,
+    conversations: [...contextMessages].map(([id, messages]) => ({ id, messages, firstMessage: starts.get(id) })),
+    bookings: apptRows.filter(isEvaluation), events: handoffEvents.map((e) => ({ ...e, messageId: contextEventMessageId(e.kind, e.dedupKey ?? "") })) }).summary;
+  const conversations = activity.active.size;
+  const leads = leadRows.length;
+  const scheduled = apptRows.length;
+  const closedAppts = apptRows;
+  const inboundCounts = new Map<string, number>();
+  for (const message of messages) if (message.role === "user") inboundCounts.set(message.conversationId, (inboundCounts.get(message.conversationId) ?? 0) + 1);
+  const engagedInPeriod = [...inboundCounts.values()].filter((count) => count >= 2).length;
 
   // ── período anterior (mesma janela de tempo imediatamente antes) ───────────
   let prev: PeriodKpis["prev"] = null;
-  if (prevFrom && prevLt) {
-    const [prevConversations, prevLeads, prevScheduled, prevCounts, prevEngaged] = await Promise.all([
-      prisma.conversation.count({
-        where: { tenantId, isTest: false, updatedAt: { gte: prevFrom, lt: prevLt } },
-      }),
-      prisma.lead.count({
-        where: { tenantId, isTest: false, createdAt: { gte: prevFrom, lt: prevLt } },
-      }),
-      prisma.appointment.count({
-        where: { tenantId, startsAt: { gte: prevFrom, lt: prevLt }, status: { in: ["scheduled", "done"] } },
-      }),
-      prisma.message.groupBy({
-        by: ["role"],
-        where: {
-          role: { in: ["user", "assistant"] },
-          createdAt: { gte: prevFrom, lt: prevLt },
-          conversation: { tenantId, isTest: false },
-        },
-        _count: { _all: true },
-      }),
-      prisma.message.groupBy({
-        by: ["conversationId"],
-        where: {
-          role: "user",
-          createdAt: { gte: prevFrom, lt: prevLt },
-          conversation: { tenantId, isTest: false },
-        },
-        _count: { _all: true },
-      }),
-    ]);
-    const counts = Object.fromEntries(prevCounts.map((c) => [c.role, c._count._all]));
-    prev = {
-      conversations: prevConversations,
-      leads: prevLeads,
-      scheduled: prevScheduled,
-      inbound: counts.user ?? 0,
-      outbound: counts.assistant ?? 0,
-      responseRate: prevConversations > 0 ? prevEngaged.filter((g) => g._count._all >= 2).length / prevConversations : 0,
-    };
-  }
-
-  // Resolução autônoma do período anterior — só o delta do meter, não precisa
-  // do bucket por bucket que `attendance` calcula (o mesmo set exclusivo por
-  // conversa, mas somado na janela inteira de uma vez).
   let previousAutonomy: number | null = null;
   if (prevFrom && prevLt) {
-    const prevAssistantMsgs = await prisma.message.findMany({
-      where: {
-        role: "assistant",
-        sentBy: { in: ["agent", "human"] },
-        createdAt: { gte: prevFrom, lt: prevLt },
-        conversation: { tenantId, isTest: false },
-      },
-      select: { sentBy: true, conversationId: true },
-    });
-    const aiSet = new Set<string>();
-    const humanSet = new Set<string>();
-    for (const m of prevAssistantMsgs) (m.sentBy === "agent" ? aiSet : humanSet).add(m.conversationId);
-    const aiOnly = Math.max(0, aiSet.size - humanSet.size);
-    const totalPrev = aiOnly + humanSet.size;
-    previousAutonomy = totalPrev > 0 ? aiOnly / totalPrev : null;
+    const [prevLeads, prevAppointments, prevMessages, prevHandoffs] = await Promise.all([
+      prisma.lead.count({
+        where: { ...leadScope, createdAt: { gte: prevFrom, lt: prevLt } },
+      }),
+      prisma.appointment.findMany({
+        where: { tenantId, ...agentScope, lead: { isTest: false }, conversation: { isTest: false }, createdAt: { gte: prevFrom, lt: prevLt }, status: { in: ["scheduled", "done"] } },
+        select: { id: true, source: true, agentId: true, kind: true, serviceType: true },
+      }),
+      prisma.message.findMany({
+        where: { role: { in: ["user", "assistant"] }, createdAt: { gte: prevFrom, lt: prevLt },
+          conversation: conversationScope },
+        select: { conversationId: true, role: true, sentBy: true, createdAt: true },
+      }),
+      prisma.reportEvent.findMany({ where: { tenantId, kind: "handoff", createdAt: { gte: prevFrom, lt: prevLt }, conversation: conversationScope }, select: { conversationId: true } }),
+    ]);
+    const activity = periodContactActivity(prevMessages, prevHandoffs.map((e) => e.conversationId));
+    previousAutonomy = activity.attended.size ? activity.aiOnly.size / activity.attended.size : null;
+    prev = {
+      attendedContacts: activity.attended.size,
+      evaluations: prevAppointments.filter(isEvaluation).length,
+      conversations: activity.active.size,
+      leads: prevLeads,
+      scheduled: prevAppointments.length,
+      inbound: prevMessages.filter((m) => m.role === "user").length,
+      outbound: prevMessages.filter((m) => m.role === "assistant").length,
+      responseRate: activity.responseRate,
+    };
   }
 
   // ── agregação por bucket ───────────────────────────────────────────────────
@@ -593,7 +552,7 @@ export async function computePeriodReport(tenantId: string, range: ReportRange):
     if (slot) slot.leads++;
   }
   for (const a of apptRows) {
-    const slot = resultsMap.get(bucketStart(a.startsAt, bucket).toISOString());
+    const slot = resultsMap.get(bucketStart(a.createdAt, bucket).toISOString());
     if (slot) slot.appts++;
   }
 
@@ -601,24 +560,14 @@ export async function computePeriodReport(tenantId: string, range: ReportRange):
   const results: ResultPoint[] = buckets.map((b) => ({ ...b, ...resultsMap.get(b.key)! }));
 
   // ── comparações IA × humano ────────────────────────────────────────────────
-  // "Só IA" é exclusivo por bucket: um contato com resposta automática E manual
-  // no mesmo bucket entra só em "humano" — a relação mostra quantos a IA
-  // atendeu sozinha contra quantos precisaram de uma pessoa.
+  // Um contato por período, na data da primeira entrada. Resposta humana ou
+  // transferência registrada em qualquer dia retira o contato de só IA.
   const attendanceMap = new Map(buckets.map((b) => [b.key, { ai: 0, human: 0 }]));
-  const byBucket = new Map<string, { ai: Set<string>; human: Set<string> }>();
-  for (const m of assistantMsgs) {
-    const key = bucketStart(m.createdAt, bucket).toISOString();
-    if (!attendanceMap.has(key)) continue;
-    let sets = byBucket.get(key);
-    if (!sets) {
-      sets = { ai: new Set<string>(), human: new Set<string>() };
-      byBucket.set(key, sets);
-    }
-    (m.sentBy === "agent" ? sets.ai : sets.human).add(m.conversationId);
-  }
-  for (const [key, sets] of byBucket) {
-    const human = sets.human.size;
-    attendanceMap.set(key, { ai: Math.max(0, sets.ai.size - sets.human.size), human });
+  for (const [id, contact] of activity.contacts) {
+    const slot = attendanceMap.get(bucketStart(contact.first!.createdAt, bucket).toISOString());
+    if (!slot) continue;
+    if (activity.transferred.has(id)) slot.human++;
+    else slot.ai++;
   }
   const attendance: AiHumanPoint[] = buckets.map((b) => ({ ...b, ...attendanceMap.get(b.key)! }));
 
@@ -646,12 +595,10 @@ export async function computePeriodReport(tenantId: string, range: ReportRange):
   // ── funil de conversão (estado ATUAL de quem entrou no período — não há
   // histórico de transição de status, então "quente"/"agendado" são o status
   // de hoje dos leads criados na janela, não uma velocidade de funil) ────────
-  const leadsCreated = leadRows.length;
-  const engagedInPeriod = engagedGroups.filter((g) => g._count._all >= 2).length;
   const scheduledInPeriod = results.reduce((s, p) => s + p.appts, 0);
   const funnel: FunnelStep[] = [
     { name: "Conversas", count: conversations },
-    { name: "Leads engajados", count: Math.min(engagedInPeriod, leadsCreated) },
+    { name: "Leads engajados", count: engagedInPeriod },
     { name: "Leads quentes", count: hotLeadsInPeriod },
     { name: "Agendados", count: scheduledInPeriod },
   ];
@@ -691,7 +638,7 @@ export async function computePeriodReport(tenantId: string, range: ReportRange):
       continue;
     }
     const askedAt = pendingQuestion.get(m.conversationId);
-    if (!askedAt || answeredConversations.has(m.conversationId)) continue;
+    if (!askedAt || answeredConversations.has(m.conversationId) || (m.sentBy !== "agent" && m.sentBy !== "human")) continue;
     const elapsedMs = m.createdAt.getTime() - askedAt.getTime();
     const idx = RESPONSE_BUCKETS.findIndex((b) => elapsedMs <= b.maxMs);
     const slot = firstResponseCounts[idx === -1 ? RESPONSE_BUCKETS.length - 1 : idx];
@@ -704,9 +651,7 @@ export async function computePeriodReport(tenantId: string, range: ReportRange):
 
   // ── resolução autônoma: fração dos contatos atendidos que a IA resolveu
   // sozinha no período (mesma base de `attendance`, resumida num número) ────
-  const totalAi = attendance.reduce((s, p) => s + p.ai, 0);
-  const totalHuman = attendance.reduce((s, p) => s + p.human, 0);
-  const currentAutonomy = totalAi + totalHuman > 0 ? totalAi / (totalAi + totalHuman) : 0;
+  const currentAutonomy = activity.attended.size ? activity.aiOnly.size / activity.attended.size : 0;
 
   // ── recuperação por follow-up: dos enviados no período, quantos tiveram
   // resposta do lead depois do envio (mesma janela — consistente com o resto
@@ -723,7 +668,7 @@ export async function computePeriodReport(tenantId: string, range: ReportRange):
   // ── distribuições ──────────────────────────────────────────────────────────
   const agentIds = agentGroups.map((g) => g.agentId).filter(Boolean) as string[];
   const agents = agentIds.length
-    ? await prisma.agent.findMany({ where: { id: { in: agentIds } }, select: { id: true, name: true } })
+    ? await prisma.agent.findMany({ where: { tenantId, id: { in: agentIds } }, select: { id: true, name: true } })
     : [];
   const nameById = new Map(agents.map((a) => [a.id, a.name]));
   const byAgent = agentGroups
@@ -738,16 +683,18 @@ export async function computePeriodReport(tenantId: string, range: ReportRange):
 
   const inbound = flow.reduce((s, p) => s + p.inbound, 0);
   const outbound = flow.reduce((s, p) => s + p.outbound, 0);
-  const engaged = engagedGroups.filter((g) => g._count._all >= 2).length;
 
   return {
+    contexts,
     kpis: {
+      attendedContacts: activity.attended.size,
+      evaluations: apptRows.filter(isEvaluation).length,
       conversations,
       leads,
       scheduled,
       inbound,
       outbound,
-      responseRate: conversations > 0 ? engaged / conversations : 0,
+      responseRate: activity.responseRate,
       hotLeads,
       needsHuman,
       prev,

@@ -14,6 +14,12 @@ export const monthlyAssumptionsSchema = z.object({
     const sorted = [...day].sort((a, b) => a.start - b.start);
     return sorted.every((p, i) => i === 0 || p.start >= sorted[i - 1].end);
   }), "Há intervalos de atendimento sobrepostos."),
+  // Datas locais em que a recepção fica fechada o dia inteiro. Não são os
+  // bloqueios da agenda do agente. Ausente em revisões antigas = nenhuma exceção.
+  humanClosedDates: z.array(z.iso.date({ error: "Informe os dias sem recepção como AAAA-MM-DD, com uma data válida por linha." })
+    .regex(/^20\d{2}-/, "Informe uma data entre 2000 e 2099."))
+    .max(366, "Informe até 366 dias sem recepção.")
+    .refine((dates) => new Set(dates).size === dates.length, "Há dias sem recepção repetidos.").default([]),
   attendantMonthlyCents: nullableNumber(1_000_000_000).refine((v) => v === null || Number.isInteger(v)),
   attendantMonthlyHours: nullableNumber(744).refine((v) => v === null || v > 0, "Informe a carga mensal do atendente."),
   minutesPerConversation: nullableNumber(120).refine((v) => v === null || v > 0),
@@ -45,7 +51,7 @@ export const monthlyAssumptionsSchema = z.object({
 });
 export type MonthlyAssumptions = z.infer<typeof monthlyAssumptionsSchema>;
 export const EMPTY_ASSUMPTIONS: MonthlyAssumptions = {
-  timezone: "America/Sao_Paulo", humanHours: null, attendantMonthlyCents: null,
+  timezone: "America/Sao_Paulo", humanHours: null, humanClosedDates: [], attendantMonthlyCents: null,
   attendantMonthlyHours: null, minutesPerConversation: null, secondsPerMessage: null, investmentCents: null,
   procedureVariable: "procedimento", evaluationTypes: ["Avaliação"], countUntypedAsEvaluations: false, completedStatusTypes: [], noShowStatusTypes: [], procedures: [],
 };
@@ -88,7 +94,19 @@ export function monthlyWindow(month: string, timezone: string) {
 }
 export function outsideHumanHours(at: Date, config: MonthlyAssumptions): boolean | null {
   if (!config.humanHours) return null;
+  if (isHumanClosedDay(at, config)) return true;
   const p = partsInZone(at, config.timezone);
   const minute = p.hour * 60 + p.minute;
   return !config.humanHours[p.weekday].some((h) => minute >= h.start && minute < h.end);
 }
+
+/** Data civil no fuso da clínica, nunca o dia UTC nem uma recorrência anual presumida. */
+export function isHumanClosedDay(at: Date, config: Pick<MonthlyAssumptions, "timezone"> & Partial<Pick<MonthlyAssumptions, "humanClosedDates">>): boolean {
+  if (!config.humanClosedDates?.length) return false;
+  const p = partsInZone(at, config.timezone);
+  const day = `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")}`;
+  return config.humanClosedDates.includes(day);
+}
+
+/** Mantém entrada inválida para a validação apontar o erro, sem descartar datas em silêncio. */
+export const humanClosedDatesFromText = (text: string): string[] => text.split(/\r?\n/).map((day) => day.trim()).filter(Boolean);

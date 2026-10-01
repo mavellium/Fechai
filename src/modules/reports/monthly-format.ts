@@ -29,6 +29,11 @@ export const formatReais = (cents: number) => `R$ ${Math.round(cents / 100).toLo
 /** Só o que o decisor precisa saber sobre a confiança do número; medido e confirmado não levam selo. */
 export const STATUS_SEAL: Partial<Record<MetricStatus, string>> = { estimated: "estimativa", partial: "parcial", unverified: "não verificado" };
 
+/** Premissa de data civil: não interpretar meia-noite UTC no fuso do servidor. */
+export function humanClosedDatesLabel(dates?: string[]): string | null {
+  return dates?.length ? [...dates].sort().map((day) => day.split("-").reverse().join("/")).join(" · ") : null;
+}
+
 const DAY = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
 const hour = (minute: number) => minute % 60 ? `${Math.floor(minute / 60)}h${String(minute % 60).padStart(2, "0")}` : `${minute / 60}h`;
 
@@ -57,6 +62,10 @@ const plural = (n: number, one: string, many: string) => `${formatCount(n)} ${n 
 export function openingSentence(monthName: string, data: MonthlyReportData): string {
   const contacts = data.service.contacts, cohort = data.schedule.cohort;
   const parts = [`Em ${monthName}, o Fechai atendeu ${plural(contacts.total.value ?? 0, "contato", "contatos")} e marcou ${plural(cohort.total.total.value ?? 0, "avaliação", "avaliações")}.`];
+  const incoming = data.service.contexts?.groups.find((g) => g.key === "inbound_new");
+  if (incoming?.contacts) {
+    parts[0] = `Em ${monthName}, ${plural(incoming.contacts, "novo contato iniciou", "novos contatos iniciaram")} a conversa. ${plural(incoming.scheduledContacts, "desses contatos agendou", "desses contatos agendaram")} uma avaliação (${formatPercent(incoming.conversionPercent)}). No total, o Fechai atendeu ${plural(contacts.total.value ?? 0, "contato", "contatos")} e marcou ${plural(cohort.total.total.value ?? 0, "avaliação", "avaliações")}.`;
+  }
   const attended = cohort.attended.total.value ?? 0;
   if (attended > 0) parts.push(`${plural(attended, "paciente já compareceu", "pacientes já compareceram")}.`);
   const outside = contacts.outside.value;

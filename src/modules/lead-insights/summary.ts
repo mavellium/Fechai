@@ -100,7 +100,8 @@ export type CityItem = { city: string; count: number; scheduled: number; verdict
 
 export type LeadQuality = {
   version: 1;
-  /** Leads reais criados no período. */
+  acquisition?: "not_recorded";
+  /** População definida pela leitura (contatos atendidos nas leituras novas). */
   leads: number;
   /** Quantos deles disseram a cidade. */
   withCity: number;
@@ -234,7 +235,7 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 export function leadQualityHeadline(q: LeadQuality): string {
   if (q.leads === 0) return "Sem leads no período.";
   const of = q.leads === 1 ? "De 1 lead" : `Dos ${q.leads} leads`;
-  if (q.withCity === 0) return `${of}, ${q.leads === 1 ? "ele não informou" : "nenhum informou"} a cidade ao agente neste período.`;
+  if (q.withCity === 0) return `${of}, nenhuma cidade foi registrada ou reconhecida no histórico.`;
   const base = `${of}, ${plural(q.withCity, "informou", "informaram")} a cidade`;
   if (!q.areaConfigured) return `${base}. A área de atendimento ainda não foi configurada, então não dá para separar quem é de dentro e de fora do raio.`;
   const top = q.cities.find((c) => c.verdict === "out");

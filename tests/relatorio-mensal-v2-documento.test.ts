@@ -56,7 +56,7 @@ describe("documento do relatório mensal v2", () => {
     const input = v2Input();
     input.config.procedures = []; input.config.attendantMonthlyCents = null;
     const out = text(report(input));
-    for (const word of ["ROI", "Retorno", "retorno", "Pendente", "pendente"]) expect(out).not.toContain(word);
+    for (const word of ["ROI", "Retorno estimado", "retorno estimado", "retorno financeiro", "Pendente", "pendente"]) expect(out).not.toContain(word);
     expect(out).toContain("214");
   });
   it("não leva nota interna nem texto de componente de admin", () => {

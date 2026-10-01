@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 const leadFindMany = vi.fn();
+vi.mock("@/modules/lead-insights/historical-city-store", () => ({ loadHistoricalCities: vi.fn(async () => new Map()) }));
 vi.mock("@/lib/prisma", () => ({ prisma: { lead: { findMany: (...args: unknown[]) => leadFindMany(...args) } } }));
 vi.mock("@/modules/scheduling/clinicorp", () => ({ readClinicorpReport: vi.fn() }));
 vi.mock("@/modules/lead-insights/service-area-store", () => ({ getServiceArea: vi.fn(async () => ({ baseCity: "Marília", cities: [] })) }));
@@ -131,12 +132,14 @@ describe("painel e PDF", () => {
 describe("leads do mês, um a um", () => {
   it("devolve o registro de cada lead com o mesmo resultado do agregado, sem dado pessoal", async () => {
     const now = new Date("2026-09-30T12:00:00Z");
+    const messages = [{ role: "user", sentBy: null, createdAt: new Date("2026-09-10T12:00:00Z") },
+      { role: "assistant", sentBy: "agent", createdAt: new Date("2026-09-10T12:00:30Z") }];
     const lead = (id: string, extra: object) => ({ id, createdAt: new Date("2026-09-10T12:00:00Z"), status: "new", disqualifiedAt: null, disqualifiedReason: null,
       appointments: [], conversation: { id: `c-${id}`, needsHuman: false, lastInboundAt: new Date("2026-09-29T12:00:00Z"), followUpReason: null, reportEvents: [],
-        insight: null }, ...extra });
+        insight: null, messages }, ...extra });
     leadFindMany.mockResolvedValueOnce([
       lead("a", { appointments: [{ status: "scheduled" }] }),
-      lead("b", { conversation: { id: "c-b", needsHuman: false, lastInboundAt: null, followUpReason: null, reportEvents: [], insight: { city: "Garça", cityKey: "garca", firstQuestionKey: "preco", lossReasonKey: null } } }),
+      lead("b", { conversation: { id: "c-b", messages, needsHuman: false, lastInboundAt: null, followUpReason: null, reportEvents: [], insight: { city: "Garça", cityKey: "garca", firstQuestionKey: "preco", lossReasonKey: null } } }),
     ]);
     const { quality, leads } = await loadLeadQualityDetail("t1", { from: null, to: now }, { now });
     expect(leads).toHaveLength(quality.leads);

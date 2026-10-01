@@ -1,3 +1,7 @@
+import { loadHistoricalCities } from "@/modules/lead-insights/historical-city-store";
+import { loadConversationStarts } from "./contact-context-store";
+import type { ContextMessage } from "./contact-context";
+import { contextEventMessageId } from "./contact-context-events";
 import { prisma } from "@/lib/prisma";
 import { readClinicorpReport, type ClinicorpReportData } from "@/modules/scheduling/clinicorp";
 import { dayKeyInZone, partsInZone } from "@/modules/scheduling/time";
@@ -132,7 +136,7 @@ export type MonthlyReport = {
 type Msg = { id: string; role: string; sentBy: string | null; createdAt: Date; audio?: TimeMessage["audio"] };
 export type MonthlyConversation = { id: string; agentId?: string | null; leadId: string;
   lead: { createdAt: Date; status?: string; disqualifiedAt?: Date | null; disqualifiedReason?: string | null };
-  variables: unknown; messages: Msg[]; firstInbound: Date | null;
+  variables: unknown; messages: Msg[]; firstInbound: Date | null; firstMessage?: ContextMessage | null;
   /** Só o relatório v2 usa (motivo de não agendar, cidade, dúvida); ausentes em fixtures antigas. */
   needsHuman?: boolean; lastInboundAt?: Date | null; followUpReason?: string | null;
   insight?: { city: string | null; cityKey: string | null; firstQuestionKey: string | null; lossReasonKey: string | null } | null };
@@ -142,7 +146,7 @@ export type MonthlyAppointment = { id: string; agentId?: string | null; conversa
   kind?: string | null; procedure?: string | null;
   attendance?: string | null; attendanceAt?: Date | null;
   clinicorpAppointmentId: string | null };
-export type MonthlyEvent = { id?: string; conversationId: string; kind: string; procedure: string | null; createdAt: Date };
+export type MonthlyEvent = { id?: string; conversationId: string; kind: string; procedure: string | null; createdAt: Date; messageId?: string };
 export type MonthlyGap = { id?: string; agentId: string | null; firstAskedAt: Date; answeredAt: Date };
 
 function addSplit(split: SplitCount, at: Date | null, config: MonthlyAssumptions) {
@@ -441,7 +445,8 @@ export async function computeMonthlyReport(tenantId: string, month: string, useS
         startsAt: true, createdAt: true, clinicorpAppointmentId: true,
         kind: true, procedure: true, attendance: true, attendanceAt: true } }),
     prisma.reportEvent.findMany({ where: { tenantId, createdAt: { gte: start, lt: end }, conversation: { isTest: false, lead: { isTest: false } } },
-      select: { id: true, conversationId: true, kind: true, procedure: true, createdAt: true } }),
+      select: { id: true, conversationId: true, kind: true, procedure: true, createdAt: true, dedupKey: true } })
+      .then((rows) => rows.map(({ dedupKey, ...event }) => ({ ...event, messageId: contextEventMessageId(event.kind, dedupKey ?? "") }))),
     readClinicorpReport(tenantId, dayKeyInZone(start, assumptions.timezone), dayKeyInZone(new Date(end.getTime() - 1), assumptions.timezone)),
     prisma.knowledgeGap.findMany({ where: { tenantId, answeredAt: { gte: start, lt: end } },
       select: { id: true, agentId: true, firstAskedAt: true, answeredAt: true } })
@@ -469,16 +474,32 @@ export async function computeMonthlyReport(tenantId: string, month: string, useS
   ]) : [[], []];
   const firstById = new Map(firstInbound.map((r) => [r.conversationId, r._min.createdAt]));
   const unheardIds = new Set(unheard.map((m) => m.id));
-  const conversations = rawConversations.map((c) => ({ ...c, firstInbound: firstById.get(c.id) ?? null,
+  const missingCities = rawConversations.filter((c) => !c.insight?.cityKey).map((c) => c.id);
+  const missingCityIds = new Set(missingCities);
+  const [historicalCities, previousCities, conversationStarts, previousStarts] = await Promise.all([
+    loadHistoricalCities(tenantId, missingCities, window.end),
+    loadHistoricalCities(tenantId, missingCities, previousWindow.end),
+    loadConversationStarts(tenantId, conversationIds, window.end, window.start),
+    loadConversationStarts(tenantId, conversationIds, previousWindow.end, previousWindow.start),
+  ]);
+  const conversations = rawConversations.map((c) => ({ ...c,
+    firstMessage: conversationStarts.get(c.id) ?? null,
+    insight: historicalCities.has(c.id) ? { ...c.insight, city: historicalCities.get(c.id)!.city, cityKey: historicalCities.get(c.id)!.cityKey,
+      firstQuestionKey: c.insight?.firstQuestionKey ?? null, lossReasonKey: c.insight?.lossReasonKey ?? null } : c.insight, firstInbound: firstById.get(c.id) ?? null,
     messages: c.messages.map(({ audioUrl, audioSeconds, ...m }) => ({ ...m,
       audio: audioUrl || audioSeconds != null || unheardIds.has(m.id) ? { seconds: audioSeconds, heard: !unheardIds.has(m.id) } : null })) }));
   const now = new Date();
   const trackingSince = new Date(Math.max(tenant.createdAt.getTime(), tenant.reportTrackingStartedAt.getTime()));
   const { metrics: automaticCurrent, evidence, data } = evaluateMonthlyMetrics({ start: window.start, end: window.end, now, trackingSince, accountCreatedAt: tenant.createdAt, config: assumptions, conversations, appointments, events, gaps, uptime, clinicorp, area });
-  if (lead) evidence.leads = lead.leads;
+  if (lead) { evidence.leads = lead.leads; evidence.leadPopulation = "attended"; }
   capEvidence(evidence);
   const previousSnapshot = previousSaved?.status === "ready" && previousSaved.snapshot ? previousSaved.snapshot as unknown as MonthlyReport : null;
-  const { metrics: previousAuto, data: previousData } = evaluateMonthlyMetrics({ start: previousWindow.start, end: previousWindow.end, now, trackingSince, accountCreatedAt: tenant.createdAt, config: previousAssumptions, conversations, appointments, events, gaps, uptime, clinicorp, area });
+  const { metrics: previousAuto, data: previousData } = evaluateMonthlyMetrics({ start: previousWindow.start, end: previousWindow.end, now, trackingSince, accountCreatedAt: tenant.createdAt, config: previousAssumptions, conversations: conversations.map((c) => {
+    const previousContact = { ...c, firstMessage: previousStarts.get(c.id) ?? null };
+    if (!missingCityIds.has(c.id)) return previousContact;
+    const old = previousCities.get(c.id);
+    return { ...previousContact, insight: { city: old?.city ?? null, cityKey: old?.cityKey ?? null, firstQuestionKey: c.insight?.firstQuestionKey ?? null, lossReasonKey: c.insight?.lossReasonKey ?? null } };
+  }), appointments, events, gaps, uptime, clinicorp, area });
   // Comparativo só com o mês anterior inteiro medido: conta ativa e eventos
   // registrados desde o dia 1. Senão a coluna some, em vez de sair zerada.
   if (trackingSince <= previousWindow.start) data.comparison = monthlyComparison(previousData);

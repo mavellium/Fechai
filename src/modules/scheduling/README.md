@@ -1,5 +1,12 @@
 # Agenda (scheduling)
 
+Para os relatórios, lembretes novos do fechai e Clinicorp registram a operação
+`contact_reminder` após salvar a mensagem enviada (`recordMessageContext`),
+apenas id/data e com exclusão de testes. O registro é best-effort e nunca altera
+o resultado do envio. Uma resposta a lembrete não deve aparecer como aquisição
+nova. Mensagens históricas sem esse registro conservam finalidade desconhecida;
+não se deduz confirmação pelo conteúdo nem por `sentBy`.
+
 A agenda do fechai é a **fonte da verdade**. Google Agenda e Clinicorp são
 espelhos opcionais, ligados por conta (tenant). Nenhum dos dois pode derrubar um
 atendimento: as funções de integração **nunca lançam** — a falha é registrada e

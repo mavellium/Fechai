@@ -4,7 +4,7 @@ import type { Metric, MetricStatus, MonthlyReportData, Split } from "@/modules/r
 import { AGENT_CHANGE_LABELS } from "@/modules/reports/monthly-agent-changes";
 import { ACTION_STATUS_LABEL, type ActionStatus } from "@/modules/reports/monthly-previous-actions";
 import { caseFactItems } from "@/modules/reports/monthly-case";
-import { NO_PROBLEMS, STATUS_SEAL, deltaLabel, formatCount, formatPercent, formatReais, formatSpan, hoursLabel, openingSentence, periodLabel, problemText } from "@/modules/reports/monthly-format";
+import { NO_PROBLEMS, STATUS_SEAL, deltaLabel, formatCount, formatPercent, formatReais, formatSpan, hoursLabel, humanClosedDatesLabel, openingSentence, periodLabel, problemText } from "@/modules/reports/monthly-format";
 import { SUGGESTION_DISCLAIMER } from "@/modules/lead-insights/summary";
 import { cn } from "@/lib/utils";
 
@@ -126,6 +126,7 @@ export function MonthlyReportDocument({ report: r, print = false }: { report: Mo
   const monthName = r.label.split(" de ")[0];
   const previousName = new Intl.DateTimeFormat("pt-BR", { month: "long", timeZone: "UTC" }).format(new Date(`${r.previousMonth}-01T12:00:00Z`));
   const hours = hoursLabel(r.assumptions.humanHours);
+  const closedDates = humanClosedDatesLabel(r.assumptions.humanClosedDates);
   const split = d.meta.hoursConfigured;
   const cohortRow = (label: ReactNode, x: Split) => split ? [label, valued(x.inside), valued(x.outside), valued(x.total)] : [label, valued(x.total)];
   const upcoming = a.cohort.upcoming.total.value ?? 0, unverified = a.cohort.unverified.total.value ?? 0;
@@ -158,6 +159,7 @@ export function MonthlyReportDocument({ report: r, print = false }: { report: Mo
         <div className="flex gap-1"><dt>Período:</dt><dd><strong className="font-semibold tabular-nums text-ink">{periodLabel(r.month)}</strong></dd></div>
         {hours && <div className="flex gap-1"><dt>Expediente humano:</dt><dd>{hours}</dd></div>}
       </dl>
+      {hours && closedDates && <p className="text-sm text-neutral">Dias sem recepção cadastrados: {closedDates}. Contados como fora do expediente humano.</p>}
       <p className="max-w-[62ch] text-lg leading-normal">{openingSentence(monthName, d)}</p>
       {r.highlights && <p className="max-w-[70ch] whitespace-pre-wrap text-sm text-neutral">{r.highlights}</p>}
     </header>
@@ -202,7 +204,14 @@ export function MonthlyReportDocument({ report: r, print = false }: { report: Mo
     </Block>
 
     <Block number="02" title="Agenda" tag="O número principal">
-      <Funnel data={d} />
+      {s.contexts ? <div className="space-y-3">
+        <p className="text-sm font-semibold">Conversão por contexto de entrada</p>
+        <Table head={["Contexto", "Contatos", "Agendaram", "Conversão"]} rows={s.contexts.groups.filter((g) => g.contacts > 0)
+          .map((g) => [g.label, formatCount(g.contacts), formatCount(g.scheduledContacts), formatPercent(g.conversionPercent)])} />
+        <p className="text-xs text-neutral">Contatos incluem quem não respondeu. Cada pessoa que agendou entra uma vez; a taxa usa somente sua própria base, com avaliação criada pelo agente depois da entrada. Total atendido inclui novos contatos, retornos da base e respostas a abordagens.</p>
+        <p className="text-xs text-neutral">Origem de aquisição não registrada: uma entrada não comprova tráfego pago, e contato antigo não comprova base qualificada. A finalidade de abordagem sem registro permanece desconhecida.</p>
+        {s.contexts.unattributedEvaluations > 0 && <p className="text-xs text-neutral">{formatCount(s.contexts.unattributedEvaluations)} avaliações sem vínculo com entrada anterior nesta janela estão no total de avaliações, fora das taxas por contexto.</p>}
+      </div> : <Funnel data={d} />}
       <div className="grid items-start gap-6 sm:grid-cols-2">
         <div>
           <Table head={split ? [`Avaliações marcadas em ${monthName}`, "Exped.", "Fora", "Total"] : [`Avaliações marcadas em ${monthName}`, "Total"]} strongLast rows={[

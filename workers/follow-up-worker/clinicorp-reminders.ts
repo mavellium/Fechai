@@ -1,3 +1,4 @@
+import { recordMessageContext } from "../../src/modules/reports/contact-context-events";
 import { prisma } from "../../src/lib/prisma";
 import {
   CLINICORP_UNNAMED_PATIENT,
@@ -271,9 +272,10 @@ async function remindTenant(tenantId: string, cfg: ScheduleConfig, channels: Cha
         console.error("[lembrete clinicorp] falha ao enviar", tenantId, item.id, err);
         continue;
       }
-      await prisma.message.create({
+      const savedMessage = await prisma.message.create({
         data: { conversationId: conversation.id, role: "assistant", content: text, whatsappMessageId: keyId ?? undefined },
       });
+      await recordMessageContext(tenantId, savedMessage?.id, "contact_reminder");
       await close(now);
       counts.sent++;
       continue;
@@ -303,7 +305,7 @@ async function remindTenant(tenantId: string, cfg: ScheduleConfig, channels: Cha
       // Paciente que só recebeu o template: se a equipe responder antes de ele
       // escrever, tem que sair pela Meta — pelo QR seria primeiro contato.
       await setConversationChannel(conversation, "meta", { onlyIfUnset: true });
-      await prisma.message.create({
+      const savedMessage = await prisma.message.create({
         data: {
           conversationId: conversation.id,
           role: "assistant",
@@ -311,6 +313,7 @@ async function remindTenant(tenantId: string, cfg: ScheduleConfig, channels: Cha
           whatsappMessageId: messageId,
         },
       });
+      await recordMessageContext(tenantId, savedMessage?.id, "contact_reminder");
     } catch (err) {
       console.error("[lembrete clinicorp] enviado, mas não gravado na conversa", tenantId, item.id, err);
     }

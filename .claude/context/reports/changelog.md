@@ -2,6 +2,100 @@
 
 **Instrução:** Atualize aqui cada vez que mexer neste módulo.
 
+### [2026-10-01] — Iniciativa da conversa e conversão por contexto
+
+**Motivo:** a Thalita aborda pacientes e contatos antigos; atendimento total
+misturado à entrada nova fazia 15 agendados parecerem 15/300 em vez de 15/130.
+Usuário confirmou que ainda não há marcação de origem de aquisição.
+
+**Entrega:** classificador compartilhado por operacional/mensal, metadados do
+primeiro autor no histórico e da borda do mês, grupos mutuamente exclusivos
+(nova entrada, base que voltou, abordagem humana/agente, campanha, lembrete,
+follow-up, continuidade, desconhecido). Cada taxa é contato convertido uma vez
+÷ contatos do mesmo grupo, incluindo não respondidos. Avaliação sem vínculo
+anterior na janela fica à parte. Motor congela totais e origem dos registros;
+painel/PDF/CSV apresentam a separação e a abertura destaca novas entradas.
+Validação recusa soma/taxa de contexto divergente ou atribuição de origem não
+comprovada no resumo. Origem não registrada não vira tráfego pago/base qualificada;
+leituras novas suspendem sugestão de anúncios sobre a população misturada.
+
+**Instrumentação:** lembretes, campanhas e follow-ups novos registram finalidade
+por id da mensagem em ReportEvent, sem schema novo, sem texto/paciente, sem
+alterar envio/cota/atribuição e sem lançar. Histórico sem propósito não é
+classificado por palpite. Sem publicação e sem acesso ao banco de produção.
+Snapshots já aprovados exigem nova revisão para apresentar esta separação.
+
+**Validação:** 98 arquivos / 1.454 testes passaram, incluindo o caso 300/130/15,
+contagem única de pessoas, proativos sem resposta, continuidade na virada,
+finalidade com id da operação, privacidade e registro que nunca lança.
+TypeScript, lint e `git diff --check` passaram.
+
+### [2026-10-01] — PDF: redirecionamento indevido para localhost
+
+**Causa identificada:** o catch nas rotas de PDF admin/cliente montava o
+redirecionamento absoluto com `request.url`, que atrás do proxy pode conter
+`https://localhost:3000`. O navegador do usuário tentava abrir a própria máquina.
+
+**Correção:** `monthlyPrintRedirect` retorna 303 com `Location` relativo,
+`private, no-store` e `no-referrer`. Ambas as rotas usam o mesmo helper.
+Preserva assinatura, competência, tenant, privilégio de rascunho e guardas de
+snapshot. `PDF_BASE_URL` continua exclusivo do Chromium no servidor.
+
+**Validação:** regressão das duas rotas com URL interna localhost e host
+encaminhado diferente; o navegador resolve no domínio público atual. Token
+validado para admin/cliente, sucesso continua PDF attachment e relatório sem
+aprovação continua 404. Sem acesso ao servidor para identificar a falha original
+do Chromium; o fallback errado foi corrigido no código, sem publicação.
+
+### [2026-10-01] — Auditoria das métricas e cidades históricas
+
+**Motivo:** o operacional do Instituto do Sorriso (setembro/2026) não refletia
+as conversas observadas; cidade só tinha o registro novo da tool.
+
+**Mudanças:** atividade por mensagens, atendimento e transbordo compartilhados
+com o mensal v2, taxa de resposta real, contato único nos gráficos e autonomia,
+agendamentos por criação, avaliação do agente pela mesma regra do mensal,
+comparativo de mês inteiro por mês civil, exclusão de testes. Qualidade usa
+contatos atendidos, incluindo antigos. Recuperação conservadora de declaração
+literal de cidade no histórico, com lista IBGE e corte do período; leitura
+paginada, nenhum GET grava, origem só por id/data no snapshot e na conferência.
+CSV acompanha os rótulos e novos KPIs. Sem schema novo.
+
+**Validação local:** 95 arquivos / 1.436 testes passaram; TypeScript, lint e
+`git diff --check` passaram.
+
+**Verificação de produção:** não executada: este workspace não tem acesso ao
+banco. `scripts/audit-report-metrics.ts` faz a reconciliação só de leitura com
+janela/fuso/agentes iguais e separa números ao vivo da versão aprovada. Não
+houve alteração nem publicação no servidor. Snapshots já entregues continuam
+congelados; atualização exige revisão e aprovação de nova versão.
+
+### [2026-10-01] — Continuação do SDD: feriados do expediente humano
+
+**Arquivos:** `monthly-config.ts` (`humanClosedDates`, `isHumanClosedDay`),
+`monthly-operations.ts`, `MonthlyRoiEditor.tsx`, `MonthlyReportDocument.tsx`,
+`MonthlyView.tsx`, `monthly-format.ts`, `monthly-pdf.ts`, `monthly-ai-tools.ts`,
+`relatorio-mensal-feriados.test.ts`, testes de acesso, README e SDD.
+
+**Razão:** dias sem recepção precisam classificar a chegada como fora do
+expediente mesmo quando a grade semanal tem turno naquele dia.
+
+**Impacto:** premissa em JSON, sem schema novo. Datas locais informadas pela
+clínica, sem importação dos bloqueios do agente nem recorrência anual.
+Snapshot aprovado continua preservado; chave ausente vira `[]`.
+
+### [2026-10-01] — Continuação do SDD: registros dos indicadores v2
+
+**Arquivos:** `monthly-v2-evidence.ts`, `monthly-v2/MonthlyReportEvidence.tsx`,
+pages do cliente e do admin, `relatorio-mensal-v2-registros.test.ts`, README.
+
+**Razão:** depois das fases 1–6, o Claude deixou a conferência dos registros
+v2 pendente. Agora contatos, recepção e coorte abrem listas do snapshot com
+a mesma população do motor v2, sem confundir com os indicadores antigos.
+
+**Impacto:** sem schema novo. PDF continua sem registros individuais. Listas
+limitadas avisam sobre cobertura; snapshots antigos preservam seu comportamento.
+
 ### [2026-10-01] — Relatório v2 usa a medição de quedas, as ações do mês anterior e os fatos do caso
 
 **Arquivos:** `monthly-data.ts` (`buildMonthlyReportData(..., uptime)`, `MonthlyIncident` removido, `incidents` = `AvailabilityIncident[]`, `outage.endsAt` anulável); `monthly.ts` (`MonthlyInput.incidents` removido); `monthly-format.ts` (`problemText` de queda); `monthly-v2/MonthlyReportDocument.tsx` (bloco 03); fixture e testes `relatorio-mensal-v2-*`

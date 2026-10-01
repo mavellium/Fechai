@@ -18,7 +18,7 @@ import { formatBRL } from "@/lib/format";
 import { TIMEZONES } from "@/modules/scheduling/time";
 import { minuteLabel } from "@/modules/scheduling/weekly-availability";
 import type { MonthlyCaseCandidate, MonthlyMetrics, MonthlyReport } from "@/modules/reports/monthly";
-import { financialEnabled, normalizeLabel, type MonthlyAssumptions } from "@/modules/reports/monthly-config";
+import { financialEnabled, humanClosedDatesFromText, monthlyAssumptionsSchema, normalizeLabel, type MonthlyAssumptions } from "@/modules/reports/monthly-config";
 import { NO_INCIDENT, executiveSummary, monthlyIncidents } from "@/modules/reports/monthly-executive";
 import { ACTION_RESULT_MAX, ACTION_STATUSES, ACTION_STATUS_LABEL, previousActionsProblem, type ActionStatus, type PreviousAction } from "@/modules/reports/monthly-previous-actions";
 import { PERIOD_LABEL, WEEKDAY_LABEL, caseFactItems } from "@/modules/reports/monthly-case";
@@ -142,6 +142,10 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, owners, caseCandidates
   const [metricOverrides, setMetricOverrides] = useState(r.metricOverrides ?? { current: {}, previous: {} });
   const [timezone, setTimezone] = useState(c.humanHours ? c.timezone : suggested.timezone ?? c.timezone);
   const [hoursConfirmed, setHoursConfirmed] = useState(c.humanHours !== null);
+  const [closedDatesText, setClosedDatesText] = useState((c.humanClosedDates ?? []).join("\n"));
+  const closedDates = humanClosedDatesFromText(closedDatesText);
+  const closedDatesCheck = monthlyAssumptionsSchema.shape.humanClosedDates.safeParse(closedDates);
+  const closedDatesError = closedDatesCheck.success ? null : closedDatesCheck.error.issues[0]?.message ?? "Revise os dias sem recepção.";
   const [hours, setHours] = useState<HourRange[][]>(() => Array.from({ length: 7 }, (_, day) => (c.humanHours ?? suggested.hours)?.[day].map((h) => ({ start: minuteLabel(h.start), end: minuteLabel(h.end) })) ?? []));
   const [procedures, setProcedures] = useState(() => c.procedures.map((p, id) => ({ ...p, id })));
   const nextId = useRef(procedures.length);
@@ -194,6 +198,7 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, owners, caseCandidates
   const numberField = (name: string, label: string, value: number | null, hint?: string) => <Field label={label} htmlFor={`roi-${name}`} hint={hint}><Input {...fieldProps(`roi-${name}`, { hint: Boolean(hint) })} name={name} inputMode="decimal" defaultValue={decimal(value)} placeholder="Não informado" /></Field>;
   const readAssumptions = (form: FormData) => ({
     agentIds, timezone, humanHours: hoursConfirmed ? hours.map((day) => day.map((h) => ({ start: readTime(h.start), end: readTime(h.end) }))) : null,
+    humanClosedDates: closedDates,
     attendantMonthlyCents: readNumber(form.get("attendantMonthlyCents"), 100, true), attendantMonthlyHours: readNumber(form.get("attendantMonthlyHours")),
     minutesPerConversation: readNumber(form.get("minutesPerConversation")), secondsPerMessage: readNumber(form.get("secondsPerMessage")),
     investmentCents: readNumber(form.get("investmentCents"), 100, true),
@@ -347,6 +352,12 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, owners, caseCandidates
                 {j === hours[index].length - 1 && hours[index].length < 4 && <Button type="button" size="sm" variant="ghost" onClick={() => setHours(hours.map((h, i) => i === index ? [...h, { start: "13:00", end: "18:00" }] : h))}><Plus size={14} aria-hidden />Período</Button>}
               </div>)}</div>
             </div>)}</div>
+            <Field label="Feriados e dias sem recepção" htmlFor="roi-humanClosedDates" optional error={closedDatesError}
+              hint="Uma data por linha, no formato AAAA-MM-DD. Informe só os dias em que a recepção ficou fechada o dia inteiro, no fuso da clínica.">
+              <Textarea {...fieldProps("roi-humanClosedDates", { hint: true, error: closedDatesError })} name="humanClosedDates"
+                value={closedDatesText} onChange={(e) => setClosedDatesText(e.target.value)} rows={3} placeholder="2026-09-07" />
+            </Field>
+            <p className="text-sm text-neutral panel:text-white/55">Essas datas contam como fora do expediente humano neste relatório. Confira com a clínica; as datas bloqueadas da agenda do agente não são importadas como feriados.</p>
           </section>
           <section className="space-y-5 border-t border-ink/10 pt-6 panel:border-white/10">
             <CardTitle as="h3" hint="Agendado ou confirmado nunca é presença.">Agendamentos e comparecimentos</CardTitle>

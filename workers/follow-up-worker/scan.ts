@@ -1,3 +1,4 @@
+import { recordMessageContext } from "../../src/modules/reports/contact-context-events";
 import { prisma } from "../../src/lib/prisma";
 import { getWhatsAppProviderForInstance } from "../../src/modules/whatsapp/meta-config";
 import { findWhatsappChannel } from "../../src/modules/whatsapp/instances";
@@ -275,7 +276,7 @@ export async function scanAndSendFollowUps(now: Date = new Date()) {
       continue;
     }
 
-    await prisma.message.create({
+    const savedMessage = await prisma.message.create({
       data: {
         conversationId: c.id,
         role: "assistant",
@@ -286,6 +287,7 @@ export async function scanAndSendFollowUps(now: Date = new Date()) {
         ...(composed.byAi ? { sentBy: "agent" } : {}),
       },
     });
+    await recordMessageContext(c.tenantId, savedMessage?.id, "contact_followup");
     await markStep(c.id, next.index, now);
     sent++;
   }

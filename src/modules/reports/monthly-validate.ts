@@ -32,6 +32,18 @@ export function validateMonthlyReport(data: MonthlyReportData, texts: Texts): Mo
   const add = (severity: IssueSeverity, key: string, metric: string, message: string, action: string) => issues.push({ key, severity, metric, message, action });
   const s = data.service, a = data.schedule;
   const contacts = s.contacts.total.value ?? 0, scheduled = a.cohort.total.total.value ?? 0;
+  if (s.contexts) {
+    const ctx = s.contexts;
+    if (ctx.groups.reduce((n, g) => n + g.contacts, 0) !== ctx.active
+      || ctx.groups.reduce((n, g) => n + g.attended, 0) !== contacts
+      || ctx.attended !== contacts
+      || ctx.groups.reduce((n, g) => n + g.evaluations, 0) !== ctx.attributedEvaluations
+      || ctx.attributedEvaluations + ctx.unattributedEvaluations !== scheduled
+      || ctx.groups.some((g) => g.scheduledContacts > g.contacts
+        || g.conversionPercent !== (g.contacts && g.key !== "unknown" ? Math.round(g.scheduledContacts / g.contacts * 1000) / 10 : null))) {
+      add("blocking", "contexts_sum", "Conversão por contexto", "As bases, avaliações ou taxas por contexto não fecham com os registros do mês.", "Reimporte os dados; não combine bases diferentes na conversão.");
+    }
+  }
 
   /* ------------------------------ Bloqueantes ------------------------------ */
   if ((s.aiOnly.value ?? 0) + (s.transferred.value ?? 0) !== contacts) {
@@ -62,6 +74,18 @@ export function validateMonthlyReport(data: MonthlyReportData, texts: Texts): Mo
   if (texts.highlights && texts.month) {
     const unknown = unknownNumbers(texts.highlights, allowedNumbers(data, { month: texts.month, previousMonth: texts.previousMonth }));
     if (unknown.length) add("blocking", "text_numbers", "Resumo do período", `O resumo cita ${unknown.length === 1 ? "um número" : "números"} que não está${unknown.length === 1 ? "" : "ão"} nos dados do mês: ${unknown.join(", ")}.`, "Corrija o texto na etapa 4 ou gere a análise de novo.");
+  }
+  if (texts.highlights && s.contexts) {
+    const text = texts.highlights;
+    const paidClaim = /(?:leads|contatos|pacientes)\s+(?:de|do|dos|vindos\s+d[eo]|oriundos\s+d[eo])\s+(?:tr[aá]fego\s+pago|an[uú]ncios|base\s+qualificada)/iu.test(text);
+    if (paidClaim && s.contexts.acquisition === "not_recorded") {
+      add("blocking", "acquisition_claim", "Origem de aquisição", "O resumo atribui contatos a tráfego pago ou base qualificada sem origem registrada.", "Use o contexto comprovado: nova entrada, contato antigo ou abordagem. Não atribua um canal não registrado.");
+    }
+    const rates = new Set(s.contexts.groups.flatMap((g) => g.conversionPercent === null ? [] : [g.conversionPercent]));
+    const claimed = [...text.matchAll(/convers[aã]o[^.!?%\n]{0,60}?(\d+(?:[.,]\d+)?)\s*%/giu)].map((m) => Number(m[1].replace(",", ".")));
+    if (claimed.some((rate) => !rates.has(rate))) {
+      add("blocking", "conversion_claim", "Conversão por contexto", "O resumo cita uma taxa de conversão que não pertence às bases calculadas.", "Use a taxa do grupo correspondente, sem dividir agendamentos pelo total de atendimentos.");
+    }
   }
   for (const [label, text] of [["Caso do mês", texts.featuredCase], ["Resumo do período", texts.highlights]] as const) {
     if (text && hasFullDate(text)) add("blocking", "text_date", label, `${label} cita uma data completa.`, "Diga só o dia da semana e o período (manhã, tarde, noite).");

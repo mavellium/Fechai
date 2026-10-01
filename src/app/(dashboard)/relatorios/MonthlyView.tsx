@@ -14,6 +14,7 @@ import { unverifiedMetrics } from "@/modules/reports/monthly-limitations";
 import { NO_INCIDENT, executiveSummary, monthlyFinancial, type ExecTable } from "@/modules/reports/monthly-executive";
 import { ACTION_STATUS_LABEL, type ActionStatus } from "@/modules/reports/monthly-previous-actions";
 import { cn } from "@/lib/utils";
+import { humanClosedDatesLabel } from "@/modules/reports/monthly-format";
 import { MetricEvidence, QualityBadge } from "./MonthlyEvidence";
 
 export const total = (s: SplitCount) => s.inside + s.outside + s.unclassified;
@@ -270,6 +271,7 @@ export function MonthlyView({ report: r, showSummary = true }: { report: Monthly
       {financial && <div className="my-5"><DataTable caption="Premissas por procedimento" head={["Procedimento", "Ticket médio", "Conversão"]} rows={c.procedures.map((p) => ({ id: p.name, cells: [p.name, money(p.ticketCents), number(p.conversionBps === null ? null : p.conversionBps / 100, "%")] }))} /></div>}
       <details open={!financial || undefined} className="mt-4 border-t border-ink/10 pt-4 panel:border-white/10"><summary className="cursor-pointer text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-iris">Expediente humano e critérios de contagem</summary>
         <div className="my-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">{c.humanHours ? c.humanHours.map((hours, i) => <div key={i}><p className="font-medium">{days[i]}</p><p className="mt-1 text-neutral panel:text-white/60">{hours.length ? hours.map((h) => `${time(h.start)}–${time(h.end)}`).join(", ") : "Fechado"}</p></div>) : "Expediente ainda não conferido com a clínica."}</div>
+        {c.humanHours && c.humanClosedDates?.length > 0 && <p className="mb-4 text-sm text-neutral panel:text-white/60">Dias sem recepção cadastrados: {humanClosedDatesLabel(c.humanClosedDates)}. Contados como fora do expediente humano.</p>}
         <p className="mt-3 text-sm leading-relaxed text-neutral panel:text-white/60">Avaliações consideradas: {c.evaluationTypes.join(", ")}. Marcações antigas sem tipo: {c.countUntypedAsEvaluations ? "conferidas como avaliações" : "aguardam classificação"}.</p>
         <p className="mt-2 text-sm leading-relaxed text-neutral panel:text-white/60">Todos os contatos entram, de dentro e de fora do expediente; a divisão é um detalhe de cada número, classificada pelo expediente cadastrado pela clínica e nunca por faixa fixa de horário. As conversas são contadas pela primeira interação respondida no mês. Nas avaliações, o horário é classificado pela primeira mensagem do contato, antes da marcação. Agendadas entram pelo mês da marcação; realizadas, pelo mês da consulta. Cancelamentos, testes e marcações manuais ficam fora. A primeira resposta também considera respostas humanas. A qualificação depende do registro do agente.</p>
       </details>

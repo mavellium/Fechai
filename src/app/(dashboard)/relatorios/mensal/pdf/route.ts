@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { monthKey } from "@/modules/reports/monthly-config";
 import { loadApprovedReport } from "@/modules/reports/monthly";
 import { generateMonthlyPdf } from "@/modules/reports/monthly-pdf";
-import { monthlyPdfFilename, monthlyPrintPath, printMonthlyPdf } from "@/modules/reports/monthly-print";
+import { monthlyPdfFilename, monthlyPrintRedirect, printMonthlyPdf } from "@/modules/reports/monthly-print";
 
 export const runtime = "nodejs";
 export async function GET(request: Request) {
@@ -26,7 +26,7 @@ export async function GET(request: Request) {
     } catch (error) {
       // Sem navegador no servidor, a pessoa ainda salva o PDF pela própria página.
       console.error("[monthly] impressão do PDF falhou", error);
-      return Response.redirect(new URL(monthlyPrintPath(grant), request.url), 303);
+      return monthlyPrintRedirect(grant);
     }
   }
   const pdf = await generateMonthlyPdf(report);

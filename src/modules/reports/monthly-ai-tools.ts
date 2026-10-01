@@ -178,7 +178,7 @@ export function createMonthlyAiToolbox(ctx: { tenantId: string; report: MonthlyR
           note(tool, "configuração da revisão e dos agentes", 1);
           const time = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
           return JSON.stringify({
-            premissas: { fuso: tz, expediente: c.humanHours ? c.humanHours.map((day, i) => `${["dom", "seg", "ter", "qua", "qui", "sex", "sáb"][i]} ${day.map((p) => `${time(p.start)}-${time(p.end)}`).join(",") || "fechado"}`) : "não conferido",
+            premissas: { fuso: tz, diasSemRecepcao: c.humanClosedDates ?? [], expediente: c.humanHours ? c.humanHours.map((day, i) => `${["dom", "seg", "ter", "qua", "qui", "sex", "sáb"][i]} ${day.map((p) => `${time(p.start)}-${time(p.end)}`).join(",") || "fechado"}`) : "não conferido",
               tiposAvaliacao: c.evaluationTypes, semTipoContaComoAvaliacao: c.countUntypedAsEvaluations, statusQueComprovamComparecimento: c.completedStatusTypes,
               variavelDoProcedimento: c.procedureVariable, procedimentos: c.procedures.map((p) => ({ nome: p.name, ticket: p.ticketCents === null ? null : formatBRL(p.ticketCents), conversao: p.conversionBps === null ? null : `${p.conversionBps / 100}%` })),
               custoAtendente: c.attendantMonthlyCents === null ? null : formatBRL(c.attendantMonthlyCents), cargaMensal: c.attendantMonthlyHours, segundosPorMensagem: c.secondsPerMessage, minutosPorConversa: c.minutesPerConversation,

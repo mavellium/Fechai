@@ -107,6 +107,14 @@ formato aceito ou o envio muda também esses lembretes — ver
 
 ## Fila, pausa e proteção contra duplicação
 
+Após o commit do envio e da mensagem, `recordMessageContext` registra a operação
+como `contact_campaign` para o relatório mensal, por id da mensagem. É observação
+best-effort: nunca lança nem muda cota/fila ou transforma campanha em tráfego
+pago/base qualificada. A conversão por contexto do relatório mede a população
+da primeira atividade no período; **não é a atribuição de resultado de uma
+campanha**. Esta continua a última campanha antes da resposta, em sete dias,
+pelas regras de `outcomes.ts` abaixo.
+
 `BroadcastCampaign`: `draft → queued → completed`, com `queued ↔ paused` e
 cancelamento de rascunho/fila/pausa. Guarda agenda, fuso, faixa, próxima tentativa,
 erro, datas e confirmação (`confirmedAt`, `confirmedBy`, `confirmedByLabel`,
