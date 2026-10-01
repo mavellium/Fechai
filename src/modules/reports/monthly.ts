@@ -19,7 +19,7 @@ import { arrivalSlot, availabilityMetrics, emptyArrivals, median, RECEPTION_LONG
 import { CASE_AUDIOS_MAX, casePeriod, parseCaseFacts, type CaseFacts, type CasePeriod } from "./monthly-case";
 import { parsePreviousActions, reviewPreviousActions, type PreviousAction } from "./monthly-previous-actions";
 import { parseAgentChanges, type ReportedAgentChange } from "./monthly-agent-changes";
-import { buildMonthlyReportData, monthlyComparison, type MonthlyIncident, type MonthlyReportData } from "./monthly-data";
+import { buildMonthlyReportData, monthlyComparison, type MonthlyReportData } from "./monthly-data";
 import { getServiceArea } from "@/modules/lead-insights/service-area-store";
 import type { ServiceArea } from "@/modules/lead-insights/service-area";
 
@@ -166,9 +166,8 @@ export type MonthlyInput = {
   /** Quedas registradas do WhatsApp e desde quando são medidas. Ausente = sem leitura (testes, fixtures antigas). */
   uptime?: { trackedSince: Date | null; incidents: UptimeIncident[] };
   clinicorp: ClinicorpReportData;
-  /** Área de atendimento (dentro/fora da área) e incidentes: só o relatório v2. `undefined` = sem fonte. */
+  /** Área de atendimento (dentro/fora da área): só o relatório v2. */
   area?: ServiceArea | null;
-  incidents?: MonthlyIncident[];
 };
 
 /** Função pura compartilhada pelo painel, fechamento e PDF. Valores em centavos. */
@@ -394,7 +393,7 @@ export function evaluateMonthlyMetrics(input: MonthlyInput): { metrics: MonthlyM
   }).sort((a, b) => b.qualified - a.qualified || b.attendedOutside - a.attendedOutside);
   current.time = calculateTimeMetrics({ start, end, conversations: conversations.filter((c) => includesAgent(c.agentId)), appointments, events }, evidence);
   // Antes do corte das listas: o v2 anota os próprios registros (`contacts`, `cohort`).
-  const data = buildMonthlyReportData(input, current.time, evidence);
+  const data = buildMonthlyReportData(input, current.time, evidence, current.availability);
   return { metrics: applyMonthlyOverrides(current, {}, config), evidence: capEvidence(evidence), data };
 }
 

@@ -2,6 +2,14 @@
 
 **Instrução:** Atualize aqui cada vez que mexer neste módulo.
 
+### [2026-10-01] — Relatório v2 usa a medição de quedas, as ações do mês anterior e os fatos do caso
+
+**Arquivos:** `monthly-data.ts` (`buildMonthlyReportData(..., uptime)`, `MonthlyIncident` removido, `incidents` = `AvailabilityIncident[]`, `outage.endsAt` anulável); `monthly.ts` (`MonthlyInput.incidents` removido); `monthly-format.ts` (`problemText` de queda); `monthly-v2/MonthlyReportDocument.tsx` (bloco 03); fixture e testes `relatorio-mensal-v2-*`
+
+**Razão:** a folha v2 não mostrava a disponibilidade (dependia de uma lista manual que ninguém preenchia) nem as ações do mês anterior e os fatos do caso, que já existiam no relatório.
+
+**Impacto:** sem schema novo; a disponibilidade do v2 passa a ser a de `availabilityMetrics` (arredondada para baixo, parcial quando a medição começou no meio do mês); ação do mês anterior sem status não aparece no documento.
+
 ### [2026-10-01] — Modelo revisado: todos os leads, tudo que é mensurável
 
 **Arquivos:** novos `monthly-operations.ts`, `monthly-previous-actions.ts`, `monthly-case.ts`, `monthly-document.ts`, `whatsapp/incidents.ts`; `monthly.ts` (recepção, chegadas, disponibilidade, agenda, `loadApprovedReport`, `loadMonthlyCaseFacts`), `monthly-executive.ts` e `monthly-pdf.ts` (reescritos), `monthly-quality.ts` (`showsSeal`, selos novos), `monthly-analysis.ts` (`monthlyAnalysisFacts`, `unbackedNumbers`), `monthly-time.ts` (`timeBreakdown`, `exactDateIn`), `lead-insights/summary.ts` (`notScheduled`); `actions.ts`, `MonthlyRoiEditor.tsx`, `MonthlyView.tsx`, `MonthlyEvidence.tsx`, rotas de PDF; `tests/relatorio-mensal-modelo-revisado.test.ts`

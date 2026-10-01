@@ -120,6 +120,7 @@ export function v2Input(): MonthlyInput {
     config: v2Config(), conversations: v2Conversations(), appointments: v2Appointments(), events: v2Events(),
     clinicorp: { available: false, error: null, appointments: [], statusTypes: [] },
     area: { baseCity: "Campinas", cities: [] },
-    incidents: [{ startsAt: local(17, 19), endsAt: local(17, 22), kind: "agent", description: "Agente fora do ar", contactsAffected: 6 }],
+    // Uma queda de 3h em 17/09, das 19h às 22h, com a conexão medida desde antes do mês.
+    uptime: { trackedSince: window.previous.start, incidents: [{ provider: "evolution", startedAt: local(17, 19), endedAt: local(17, 22) }] },
   };
 }

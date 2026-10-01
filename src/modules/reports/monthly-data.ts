@@ -7,6 +7,7 @@ import { normalizeLabel, outsideHumanHours, type MonthlyAssumptions } from "./mo
 import type { MonthlyAppointment, MonthlyConversation, MonthlyInput } from "./monthly";
 import type { Bucket, CohortStatus, MonthlyEvidence } from "./monthly-evidence";
 import type { MonthlyTimeMetrics } from "./monthly-time";
+import type { AvailabilityIncident, AvailabilityMetrics } from "./monthly-operations";
 
 /*
  * Relatório mensal v2: o contrato único de números.
@@ -44,13 +45,10 @@ export const DEFAULT_SECONDS_PER_MESSAGE = 30;
 export const HOUR_BANDS: readonly (readonly [number, number])[] = [[0, 8], [8, 12], [12, 14], [14, 18], [18, 22], [22, 24]];
 const HOUR = 3600;
 
-export type MonthlyIncident = {
-  id?: string; startsAt: Date; endsAt: Date; kind: "agent" | "integration" | "human";
-  description: string; contactsAffected: number | null;
-};
 export type MonthlyProblem =
   | { kind: "no_show"; count: number; ratePercent: number | null }
-  | { kind: "outage"; startsAt: string; endsAt: string; minutes: number; contactsAffected: number | null; description: string }
+  /** `endsAt` nulo = ainda fora do ar no fim do período medido. */
+  | { kind: "outage"; startsAt: string; endsAt: string | null; minutes: number; contactsAffected: number }
   | { kind: "reception_wait"; waitedOverHour: number; unanswered: number };
 
 export type EstimatedReturn = {
@@ -105,7 +103,8 @@ export type MonthlyReportData = {
     reasons: { key: string; label: string; contacts: number }[];
     suggestions: string[];
   };
-  incidents: { startsAt: string; endsAt: string; kind: MonthlyIncident["kind"]; description: string; contactsAffected: number | null }[];
+  /** Quedas da conexão no mês, como o monitor registrou (`whatsapp/incidents.ts`). */
+  incidents: AvailabilityIncident[];
   /** Só o que os dados comprovam. Vazio = "nenhum incidente relevante". */
   problems: MonthlyProblem[];
   /** Null quando falta premissa: o bloco não aparece, sem "pendente" nem zero. */
@@ -178,7 +177,7 @@ export function cohortStatusOf(a: MonthlyAppointment, remoteStatusType: string |
   return local === "unknown" ? "unverified" : local;
 }
 
-export function buildMonthlyReportData(input: MonthlyInput, time: MonthlyTimeMetrics, evidence: MonthlyEvidence): MonthlyReportData {
+export function buildMonthlyReportData(input: MonthlyInput, time: MonthlyTimeMetrics, evidence: MonthlyEvidence, uptime?: AvailabilityMetrics | null): MonthlyReportData {
   const { start, end, now, config } = input;
   const hoursConfigured = Boolean(config.humanHours);
   const inMonth = (at: Date) => at >= start && at < end;
@@ -329,18 +328,15 @@ export function buildMonthlyReportData(input: MonthlyInput, time: MonthlyTimeMet
   for (const row of rows) if (row.appointments.length && classifyCity(area, row.insight?.cityKey) === "out") outScheduled++;
 
   /* --------------------- Disponibilidade e incidentes --------------------- */
-  const monthSeconds = (end.getTime() - start.getTime()) / 1000;
-  const incidents = (input.incidents ?? []).filter((i) => i.endsAt > start && i.startsAt < end).sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime());
-  const overlap = (i: MonthlyIncident) => (Math.min(i.endsAt.getTime(), end.getTime()) - Math.max(i.startsAt.getTime(), start.getTime())) / 1000;
-  const down = incidents.filter((i) => i.kind !== "human").reduce((n, i) => n + overlap(i), 0);
-  // Sem fonte de incidentes não se afirma 100%: a linha some.
-  const availability = input.incidents === undefined ? metric(null, "unavailable", "incidents")
-    : metric(Math.round((monthSeconds - down) / monthSeconds * 1000) / 10, "measured", "incidents");
+  // A medição é a do monitor do WhatsApp (`availabilityMetrics`, na mesma
+  // passada). Sem medição no mês não se afirma 100%: a linha some.
+  const availability = uptime ? metric(uptime.percent, uptime.partial ? "partial" : "measured", "whatsappIncidents",
+    uptime.partial ? "A medição da conexão começou depois do início do mês." : undefined) : metric(null, "unavailable", "whatsappIncidents");
+  const incidents = uptime?.incidents ?? [];
 
   const problems: MonthlyProblem[] = [];
   if (noShow > 0) problems.push({ kind: "no_show", count: noShow, ratePercent: attendanceRate === null ? null : 100 - attendanceRate });
-  for (const i of incidents) if (i.kind !== "human") problems.push({ kind: "outage", startsAt: i.startsAt.toISOString(), endsAt: i.endsAt.toISOString(),
-    minutes: Math.round(overlap(i) / 60), contactsAffected: i.contactsAffected, description: i.description });
+  for (const i of incidents) problems.push({ kind: "outage", startsAt: i.startedAt, endsAt: i.endedAt, minutes: Math.round(i.seconds / 60), contactsAffected: i.contacts });
   if (waitedOverHour > 0 || receptionUnanswered > 0) problems.push({ kind: "reception_wait", waitedOverHour, unanswered: receptionUnanswered });
 
   /* --------------------------- Tempo devolvido --------------------------- */
@@ -424,7 +420,7 @@ export function buildMonthlyReportData(input: MonthlyInput, time: MonthlyTimeMet
       outOfAreaScheduled: area ? metric(outScheduled, cityCoverage, "insights+serviceArea") : metric(null, "unavailable", "serviceArea"),
       firstDoubts, reasons: reasonList, suggestions: quality.suggestions,
     },
-    incidents: incidents.map((i) => ({ startsAt: i.startsAt.toISOString(), endsAt: i.endsAt.toISOString(), kind: i.kind, description: i.description, contactsAffected: i.contactsAffected })),
+    incidents,
     problems,
     estimatedReturn, estimatedReturnMissing: missing,
     comparison: null,
