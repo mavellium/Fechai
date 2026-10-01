@@ -59,6 +59,8 @@ const nextConfig: NextConfig = {
       bodySizeLimit: "50mb",
     },
   },
+  // O Chromium do PDF do relatório mensal roda fora do bundle.
+  serverExternalPackages: ["playwright-core"],
   poweredByHeader: false, // não anunciar "X-Powered-By: Next.js"
   async headers() {
     return [

@@ -5,6 +5,7 @@ import { requireProductAccess } from "@/lib/require-product";
 import { publishedMonthlyMonths, selectPublishedMonth } from "@/modules/reports/monthly-publication";
 import { computeMonthlyReport } from "@/modules/reports/monthly";
 import { MonthlyView } from "./MonthlyView";
+import { MonthlyReportDocument } from "./monthly-v2/MonthlyReportDocument";
 import { MonthPicker } from "@/components/ui/month-picker";
 import { prisma } from "@/lib/prisma";
 import {
@@ -143,7 +144,7 @@ export default async function RelatoriosPage({
           view === "afiliados"
             ? "Seus ganhos como afiliado, mês a mês."
             : view === "mensal"
-              ? "Relatório mensal de ROI estimado, revisado pela Mavellium e apresentado ao decisor."
+              ? "O que o Fechai fez no mês: atendimento, avaliações agendadas e comparecimento. Revisado pela Mavellium."
             : view === "financeiro"
               ? `Retorno estimado do investimento no projeto — ${range.label}.`
             : view === "leads"
@@ -162,7 +163,7 @@ export default async function RelatoriosPage({
                 { key: "operacional", label: "Operacional" },
                 { key: "financeiro", label: "Financeiro" },
                 { key: "leads", label: "Qualidade dos leads" },
-                ...(publishedMonths.length ? [{ key: "mensal", label: "ROI mensal" }] : []),
+                ...(publishedMonths.length ? [{ key: "mensal", label: "Relatório mensal" }] : []),
                 ...(affiliate ? [{ key: "afiliados", label: "Afiliados" }] : []),
               ]}
               active={view}
@@ -187,7 +188,8 @@ export default async function RelatoriosPage({
 
       {view === "mensal" && month && <MonthPicker value={month} href={viewHref("mensal")} availableMonths={publishedMonths} />}
 
-      {view === "mensal" && monthlyReport ? <MonthlyView report={monthlyReport} /> : view === "operacional" && report ? (
+      {/* Meses fechados antes do relatório v2 não têm `data` e seguem na visão antiga. */}
+      {view === "mensal" && monthlyReport ? (monthlyReport.data ? <MonthlyReportDocument report={monthlyReport} /> : <MonthlyView report={monthlyReport} />) : view === "operacional" && report ? (
         <>
           <FadeIn>
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">

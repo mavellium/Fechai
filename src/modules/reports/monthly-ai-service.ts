@@ -64,7 +64,7 @@ export async function answerMonthlyAi(messages: LlmMessage[], draft: MonthlyAiRe
 }
 
 /** Rascunho da análise do mês (etapa 4 do fechamento), com as travas aplicadas. */
-export async function draftMonthlyAnalysis(messages: LlmMessage[], guard: { limitations: number; hasFacts: boolean }): Promise<MonthlyAnalysis & { providerLabel: string }> {
+export async function draftMonthlyAnalysis(messages: LlmMessage[], guard: { limitations: number; hasFacts: boolean; unknownNumbers?: (text: string) => string[] }): Promise<MonthlyAnalysis & { providerLabel: string }> {
   return completeMonthlyAi(messages, (content) => guardMonthlyAnalysis(parseMonthlyAnalysis(content), guard));
 }
 
