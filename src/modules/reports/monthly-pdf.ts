@@ -11,6 +11,7 @@ import { unverifiedMetrics } from "./monthly-limitations";
 import { NO_INCIDENT, executiveSummary, type ExecTable } from "./monthly-executive";
 import { ACTION_STATUS_LABEL } from "./monthly-previous-actions";
 import { approvedDocument, isApproved } from "./monthly-document";
+import { humanClosedDatesLabel } from "./monthly-format";
 
 /**
  * PDF A4 do relatório mensal, sem dados pessoais de pacientes.
@@ -190,6 +191,8 @@ export async function generateMonthlyPdf(report: MonthlyReport): Promise<Uint8Ar
     `Para: ${r.decisionMaker || "a definir"}`, r.operationalContact ? `Cópia: ${r.operationalContact}` : "",
     expedient ? `Expediente da recepção: ${expedient}` : "",
   ].filter(Boolean).join("   ·   "), 7.6, muted);
+  const closedDates = humanClosedDatesLabel(c.humanClosedDates);
+  if (c.humanHours && closedDates) flow(`Dias sem recepção cadastrados: ${closedDates}. Contados como fora do expediente humano.`, 7.6, muted);
   gap(4);
   flow(exec.lede, 10.5, ink);
   gap(6);

@@ -16,6 +16,51 @@ resumo entra no relatório mensal (bloco + 2ª página do PDF).
 
 ### Relatório mensal v2 (`?visao=mensal`, rótulo "Relatório mensal")
 
+**Contexto de entrada e conversão (01/10/2026).** Atendimento total não é
+aquisição. `contact-context.ts` monta `service.contexts` dentro do motor e
+`evidence.contexts` na mesma passada. O operacional usa o mesmo classificador.
+Uma linha por contato com atividade, inclusive abordagem sem resposta:
+
+- nova entrada: primeira mensagem do mês é do contato, primeira mensagem
+  registrada também é dele e é do mês; contato criado anteriormente não é novo;
+- contato antigo que voltou a escrever; abordagem iniciada pela equipe ou pelo
+  agente; campanha, lembrete ou follow-up somente com finalidade registrada;
+- continuidade: houve mensagem antes da borda do mês e a primeira deste mês
+  ocorre até 24h depois, sem operação explícita de campanha/lembrete/follow-up;
+- histórico insuficiente ou envio sem autoria/finalidade: não identificado.
+
+`loadConversationStarts` busca início e borda pelo histórico, só id/data/papel,
+com exclusão de teste e tenant. “Iniciou no período” é distinto do primeiro
+autor no histórico, também preservado na evidência. Contexto é o da **primeira
+atividade do contato no período**, não uma contagem de cada sessão ou intenção
+que mudou depois. Não se interpreta texto privado para presumir origem.
+
+Conversão por grupo = **contatos que agendaram / contatos do próprio grupo**,
+incluindo quem não respondeu. Duas avaliações da mesma pessoa continuam um
+convertido. Avaliações são do agente, criadas no período, sem canceladas, e
+precisam estar ligadas à entrada anterior do contato na janela; sem vínculo
+ficam no total de agenda, à parte das taxas. É vínculo de população observada,
+não uma prova de causalidade de anúncio ou campanha. Os grupos atendidos somam
+o atendimento; todos os grupos de atividade incluem também proativos não
+respondidos, por isso podem superar o total atendido. Validar somas e taxas
+antes de fechar (`contexts_sum`); resumo com taxa fora das bases calculadas ou
+origem presumida é recusado. Não há taxa geral 15/300 apresentada como conversão
+de 130 novas entradas. Exemplo testado: 15/130 = 11,5%, com 300 atendidos totais.
+
+Origem de aquisição **não registrada**: sem marcação, nenhum contato é chamado
+de tráfego pago e contato antigo não é chamado de base qualificada. Leituras
+novas não produzem recomendações de anúncios a partir dessa população misturada.
+Regra pura de sugestões continua disponível para fontes antigas; snapshots
+aprovados permanecem congelados. Painel/PDF apresentam a tabela por contexto;
+snapshot anterior sem `service.contexts` mantém o documento antigo até revisão.
+
+Operações novas registram `ReportEvent.kind = contact_reminder | contact_campaign
+| contact_followup`, ligados ao id da mensagem enviada, idempotentes e best-effort
+(`contact-context-events.ts`). Nenhuma mudança de schema: `kind` já é string.
+Isso não altera envio, cota, lembretes nem atribuição de resultado em Disparos.
+Finalidades de abordagem manual, tráfego pago e base qualificada ainda dependem
+de marcação explícita; não são recuperadas por palpite no histórico.
+
 Mede o que o Fechai controla: atendimento, agendamento e comparecimento. A
 âncora é **avaliações agendadas e realizadas**; todos os contatos entram, dentro
 e fora do expediente, e o financeiro é um bloco opcional. Três camadas, nesta
@@ -71,7 +116,15 @@ componente, prompt ou gerador de PDF.
   (`lib/print-token.ts`) é assinado pela rota de PDF depois de conferir a
   sessão e vale 5 minutos. Precisa de `chromium` na imagem (`CHROMIUM_PATH`,
   `PDF_BASE_URL`); sem navegador, a rota redireciona para a página de
-  impressão. Arquivo: `fechai-relatorio-{clínica}-{YYYY-MM}-v{versão}.pdf`.
+  impressão. Esse fallback usa `Location` **relativo** (`monthlyPrintRedirect`):
+  permanece no domínio aberto pelo usuário, mesmo quando `request.url` chega
+  como `https://localhost:3000` atrás do proxy. `PDF_BASE_URL` é exclusivamente
+  o endereço que o Chromium alcança dentro do servidor, nunca um link para o
+  cliente. Redirecionamento é privado, sem cache e sem referer. O fallback
+  significa que a geração no servidor falhou; confira o log `[monthly] impressão
+  do PDF falhou` e a instalação/configuração do Chromium. Corrigir o endereço
+  do fallback não confirma a causa dessa falha. Arquivo:
+  `fechai-relatorio-{clínica}-{YYYY-MM}-v{versão}.pdf`.
 - **Decisor** é o dono ou sócio (`decisionMakerRole`); a recepção é
   `operationalContact`, em cópia. **Mudanças no agente** são lista estruturada
   (`agentChanges`, `monthly-agent-changes.ts`).
@@ -89,9 +142,24 @@ componente, prompt ou gerador de PDF.
   (`previousActions`, status + o número que comprova; ação sem status é
   pendência da revisão e não vai ao documento) e mostra os fatos medidos do
   caso do mês (`caseFacts`), nunca o id da conversa.
-- **Ainda não feito**: "Ver registros" dos números novos
-  (`evidence.contacts`/`evidence.cohort` já são gravados) e feriados no
-  expediente. Disparo conta como mensagem da equipe (`sentBy: "human"`): um
+- **Ver registros v2**: `MonthlyReportEvidence` aparece abaixo da folha no
+  painel da clínica e no admin. `monthly-v2-evidence.ts` projeta os contatos,
+  recepção, coorte, bases da taxa de comparecimento, mensagens e eventos do
+  snapshot, com filtros próprios da v2. Não usa os totais da visão antiga,
+  não consulta o banco e não recalcula indicadores. Lista limitada avisa que
+  os registros exibidos podem não somar o valor publicado. Não existe na
+  árvore do documento nem na rota de impressão. Snapshot sem as listas novas
+  não ganha registros inventados. Testes: `relatorio-mensal-v2-registros.test.ts`.
+- **Feriados e dias sem recepção**: `assumptions.humanClosedDates` guarda
+  datas locais `AAAA-MM-DD` informadas pela clínica na etapa 2. Cada data
+  fecha a recepção o dia inteiro e prevalece sobre a grade semanal, no fuso
+  cadastrado (`outsideHumanHours` e `arrivalSlot`). Sem expediente conferido
+  continua não classificado. Não há calendário automático nem recorrência
+  anual: datas bloqueadas da agenda do agente não são importadas. Premissa
+  congelada no snapshot e apresentada no painel/PDF; chave ausente em
+  revisão antiga vira `[]` sem apagar os demais valores. Guardada no JSON
+  existente, sem schema novo. Testes: `relatorio-mensal-feriados.test.ts`.
+- Disparo conta como mensagem da equipe (`sentBy: "human"`): um
   disparo depois de o contato escrever no mês marca o contato como transferido.
 - Testes: `tests/relatorio-mensal-v2-*.test.ts`, com a fixture de aceite em
   `tests/fixtures/monthly-report-v2.ts`.
@@ -553,6 +621,49 @@ trabalho da recepção assumido pelo agente. Regras que não se quebram:
 - **ROI mensal** (`mensal`): competência mensal fechada pela Mavellium, com receita somente de avaliações realizadas de contatos que chegaram fora do horário humano, economia estimada, premissas por procedimento e PDF com resumo executivo (página 1) e análise detalhada. Contrato em `docs/P-79-relatorio-mensal-roi.md`.
 
 Tudo começa na `page.tsx`, que resolve a janela (`?periodo=`/`?de=&ate=`), computa os dados no servidor e entrega a props serializáveis aos componentes client.
+
+## Auditoria operacional × mensal (01/10/2026)
+
+- Contatos que escreveram vêm das mensagens recebidas na janela, nunca de
+  `Conversation.updatedAt`. Conversa de agosto ativa em setembro conta em setembro.
+- Contatos atendidos exigem entrada + resposta atribuída à IA/equipe posterior
+  dentro da janela. `contact-activity.ts` é compartilhado com o motor mensal v2.
+  Taxa de resposta = atendidos / contatos que escreveram; duas mensagens do
+  contato não provam resposta. Envio proativo não é atendimento.
+- Atendimento IA × humano conta cada contato uma vez no período, na primeira
+  entrada. Humano em outro dia retira esse contato de “só IA”. A soma do gráfico
+  fecha no KPI; autonomia usa a mesma população, não somas duplicadas por dia.
+  Evento de transferência também retira de só IA, mesmo sem resposta da equipe.
+- Competência completa compara com o mês civil anterior inteiro (setembro ×
+  agosto), como o mensal; intervalos parciais mantêm janela de mesma duração.
+- Total de agendamentos e os dois gráficos usam **createdAt**, não startsAt;
+  cancelados e testes ficam fora. Comparecimento por data da consulta continua
+  separado. “Avaliações agendadas pelo agente” usa `evaluationOf`, origem e
+  agentes da revisão mensal, quando o filtro é uma competência completa.
+  Agendamentos gerais incluem outros tipos/origens e podem ser diferentes.
+- Qualidade dos leads usa a população atendida e recupera declarações literais
+  de cidade no histórico até o corte (ver README de lead-insights). A leitura
+  mensal e o painel usam o mesmo reconhecimento; id/data da declaração ficam
+  na evidência, sem texto. Não há escrita durante a leitura.
+- Leads quentes e precisam de você são **estado atual**, não setembro histórico;
+  sem histórico de status, não se atribui retroativamente o valor atual ao mês.
+- O painel operacional cobre a conta toda; revisão mensal pode selecionar
+  agentes. Comparações exigem janela, fuso e agentes iguais. Relatório aprovado
+  é snapshot: corrigir/recalcular requer nova revisão e aprovação, nunca alterar
+  silenciosamente o PDF entregue.
+
+Conferência **só de leitura**, no ambiente já configurado com acesso ao banco:
+
+```sh
+npx tsx scripts/audit-report-metrics.ts --tenant ID --month 2026-09
+```
+
+Compara atendimento, avaliações e cidades ao motor mensal com o mesmo escopo,
+confere somas dos gráficos e mostra os agregados da versão aprovada à parte.
+Saída sem dados pessoais. Código 2 indica divergência; 1 indica configuração
+ou leitura indisponível. A conferência real do Instituto do Sorriso ainda exige
+execução no ambiente conectado; os números fornecidos pelo usuário não foram
+recontados localmente.
 
 ## Regras de ouro (não quebrar)
 

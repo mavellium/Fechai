@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { monthKey } from "@/modules/reports/monthly-config";
 import { computeMonthlyReport } from "@/modules/reports/monthly";
 import { generateMonthlyPdf } from "@/modules/reports/monthly-pdf";
-import { monthlyPdfFilename, monthlyPrintPath, printMonthlyPdf } from "@/modules/reports/monthly-print";
+import { monthlyPdfFilename, monthlyPrintRedirect, printMonthlyPdf } from "@/modules/reports/monthly-print";
 
 export const runtime = "nodejs";
 export async function GET(request: Request, { params }: { params: Promise<{ tenantId: string }> }) {
@@ -23,7 +23,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ tena
       return new Response(Buffer.from(pdf), { headers: { "Content-Type": "application/pdf", "Content-Disposition": `${disposition}; filename="${monthlyPdfFilename(report.tenantName, month, report.snapshotVersion, report.status !== "ready")}"`, "Cache-Control": "private, no-store" } });
     } catch (error) {
       console.error("[monthly] impressão do PDF falhou", error);
-      return Response.redirect(new URL(monthlyPrintPath(grant), request.url), 303);
+      return monthlyPrintRedirect(grant);
     }
   }
   try {

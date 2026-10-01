@@ -1,5 +1,5 @@
 import { partsInZone } from "@/modules/scheduling/time";
-import type { MonthlyAssumptions } from "./monthly-config";
+import { isHumanClosedDay, type MonthlyAssumptions } from "./monthly-config";
 
 /*
  * O que dá para medir da operação e ainda não estava no relatório mensal:
@@ -50,8 +50,9 @@ export const ARRIVAL_LABEL: Record<ArrivalSlot, string> = {
   closedDay: "Dia sem expediente", unclassified: "Sem horário de chegada",
 };
 
-export function arrivalSlot(at: Date | null, config: Pick<MonthlyAssumptions, "humanHours" | "timezone">): ArrivalSlot {
+export function arrivalSlot(at: Date | null, config: Pick<MonthlyAssumptions, "humanHours" | "timezone"> & Partial<Pick<MonthlyAssumptions, "humanClosedDates">>): ArrivalSlot {
   if (!at || !config.humanHours) return "unclassified";
+  if (isHumanClosedDay(at, config)) return "closedDay";
   const p = partsInZone(at, config.timezone), minute = p.hour * 60 + p.minute;
   const day = [...config.humanHours[p.weekday]].sort((a, b) => a.start - b.start);
   if (!day.length) return "closedDay";

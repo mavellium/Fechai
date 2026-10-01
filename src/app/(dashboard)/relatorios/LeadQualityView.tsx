@@ -46,9 +46,9 @@ export function LeadQualityView({ quality: q, period }: { quality: LeadQuality; 
       )}
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <Stat label="Leads no período" value={String(q.leads)} hint={period} />
+        <Stat label="Contatos atendidos" value={String(q.leads)} hint={period} />
         <Stat label="Informaram a cidade" value={String(q.withCity)} hint={`${pct(q.withCity, q.leads)} dos leads`}
-          about="O agente registra a cidade quando o contato diz de onde é. Quem não disse fica de fora das contas de raio." />
+          about="Cidade registrada pelo agente ou declarada literalmente no histórico até o fim do período. Sem declaração reconhecida, não entra nas contas de área." />
         <Stat label="Fora do raio" value={q.areaConfigured ? pct(q.outOfRadius, q.withCity) : "—"}
           hint={q.areaConfigured ? `${q.outOfRadius} de ${q.withCity} que informaram` : "área não configurada"} />
         <Stat label="Agendaram" value={q.areaConfigured ? `${q.inScheduled} / ${q.outScheduled}` : String(q.outcomes.scheduled)}
@@ -64,7 +64,7 @@ export function LeadQualityView({ quality: q, period }: { quality: LeadQuality; 
         <Card>
           <CardTitle hint="As cidades que mais apareceram entre quem informou.">Cidades dos leads</CardTitle>
           <HorizontalBars
-            empty="Nenhum lead informou a cidade neste período."
+            empty="Nenhuma cidade registrada ou declaração reconhecida no histórico destes contatos."
             points={q.cities.map((c) => ({
               key: c.city, label: c.city, value: c.count,
               secondaryLabel: c.verdict === "out" ? "fora do raio" : c.verdict === "in" ? "dentro" : undefined,
@@ -89,6 +89,10 @@ export function LeadQualityView({ quality: q, period }: { quality: LeadQuality; 
         </Card>
       </div>
 
+      {q.acquisition === "not_recorded" && <Card>
+        <CardTitle>Origem de aquisição não registrada</CardTitle>
+        <p className="text-sm text-neutral panel:text-white/60">Esta base inclui contatos novos e antigos. Sem origem comprovada, estes números não medem o tráfego pago e não sustentam recomendações de segmentação de anúncios.</p>
+      </Card>}
       {q.suggestions.length > 0 && (
         <Card>
           <CardTitle>Melhorias sugeridas para o tráfego</CardTitle>
@@ -100,7 +104,7 @@ export function LeadQualityView({ quality: q, period }: { quality: LeadQuality; 
       )}
 
       <p className="text-xs leading-relaxed text-neutral panel:text-white/55">
-        Conta os leads reais criados no período. A cidade, a dúvida e o motivo são o que o agente registrou do que o contato disse — nunca deduzidos. Dentro ou fora do raio usa a área de atendimento de hoje. Perdeu = motivo registrado, triagem, follow-up de quem recusou ou 72 horas sem resposta; antes disso o lead conta como em andamento.
+        Conta os contatos reais que escreveram e foram respondidos no período, inclusive conversas antigas. A cidade inclui declarações explícitas reconhecidas no histórico anterior ao fim do período; dúvida e motivo são registros do agente. Nada é deduzido por DDD ou endereço. Dentro ou fora do raio usa a área de atendimento de hoje. Perdeu = motivo registrado, triagem, follow-up de quem recusou ou 72 horas sem resposta; antes disso o lead conta como em andamento.
       </p>
     </div>
   );

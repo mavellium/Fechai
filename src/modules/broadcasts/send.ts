@@ -1,3 +1,4 @@
+import { recordMessageContext } from "@/modules/reports/contact-context-events";
 import type { BroadcastCampaign, BroadcastRecipient } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { canonicalPhone } from "@/modules/whatsapp/blocklist";
@@ -102,7 +103,7 @@ export async function sendBroadcastRecipient(
       campaign.template as BroadcastTemplate,
       recipient.parameters as string[],
     );
-    await prisma.$transaction([
+    const saved = await prisma.$transaction([
       prisma.broadcastRecipient.update({
         where: { id: recipient.id },
         data: {
@@ -121,6 +122,7 @@ export async function sendBroadcastRecipient(
         },
       }),
     ]);
+    await recordMessageContext(campaign.tenantId, saved?.[1]?.id, "contact_campaign");
     await reconcileBroadcastReceipts(campaign.tenantId, messageId).catch(
       () => {},
     );

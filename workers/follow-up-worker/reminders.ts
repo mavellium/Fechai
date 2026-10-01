@@ -1,3 +1,4 @@
+import { recordMessageContext } from "../../src/modules/reports/contact-context-events";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../../src/lib/prisma";
 import { getWhatsAppProviderForInstance } from "../../src/modules/whatsapp/meta-config";
@@ -276,7 +277,7 @@ export async function scanAndSendReminders(now: Date = new Date()) {
     // com o contexto da consulta vindo de `recognizeExisting` — cancelar e
     // reagendar já existem, o lembrete só precisa abrir a porta.
     if (appt.conversationId) {
-      await prisma.message.create({
+      const savedMessage = await prisma.message.create({
         data: {
           conversationId: appt.conversationId,
           role: "assistant",
@@ -284,6 +285,7 @@ export async function scanAndSendReminders(now: Date = new Date()) {
           whatsappMessageId: keyId ?? undefined,
         },
       });
+      await recordMessageContext(appt.tenantId, savedMessage?.id, "contact_reminder");
     }
     await markSent(appt.id, appt.remindersSent, closing, now);
     sent++;

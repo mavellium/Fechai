@@ -49,6 +49,27 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("carregamento e importação por agente", () => {
+  it("grava dias sem recepção só nas premissas mensais e recusa data inválida sem escrever", async () => {
+    db.monthlyRoiReport.findUnique.mockResolvedValue(null);
+    const form = new FormData();
+    form.set("assumptions", JSON.stringify({ ...roiConfig(), humanClosedDates: ["2026-09-31"] }));
+    expect(await saveMonthlyRoi("own", "2026-09", null, form)).toMatchObject({ ok: false });
+    expect(db.$transaction).not.toHaveBeenCalled();
+    form.set("assumptions", JSON.stringify({ ...roiConfig(), humanClosedDates: ["2026-09-07"] }));
+    expect(await saveMonthlyRoi("own", "2026-09", null, form)).toMatchObject({ ok: true });
+    expect(db.monthlyRoiReport.create.mock.calls[0][0].data.assumptions.humanClosedDates).toEqual(["2026-09-07"]);
+    expect(db.agent.findMany).not.toHaveBeenCalled();
+    expect(db.appointment.findMany).not.toHaveBeenCalled();
+    expect(integration).not.toHaveBeenCalled();
+  });
+  it("preserva os dias sem recepção do snapshot aprovado sem recalcular o histórico", async () => {
+    const snapshot = { ...roiFixture(), status: "ready", assumptions: { ...roiConfig(), humanClosedDates: ["2026-09-07"] } };
+    db.monthlyRoiReport.findUnique.mockResolvedValue({ status: "ready", snapshot, assumptions: { ...roiConfig(), humanClosedDates: ["2026-09-08"] } });
+    const r = await computeMonthlyReport("own", "2026-09");
+    expect(r.assumptions.humanClosedDates).toEqual(["2026-09-07"]);
+    expect(db.conversation.findMany).not.toHaveBeenCalled();
+    expect(integration).not.toHaveBeenCalled();
+  });
   it("preenche mensalidade ausente com preço do tenant sem inventar expediente", async () => {
     db.tenant.findUniqueOrThrow.mockResolvedValue({ name: "Clinic", planKey: "STARTER", priceCentsOverride: 12345, createdAt: new Date("2026-09-01T03:00:00Z"), reportTrackingStartedAt: new Date("2026-09-01T03:00:00Z") });
     db.monthlyRoiReport.findUnique.mockResolvedValue(null);

@@ -5,6 +5,7 @@ import { monthlyInitialMonth, monthlyAccountPrice, monthlyAgentSource } from "@/
 import { computeMonthlyReport, loadMonthlyCaseCandidates } from "@/modules/reports/monthly";
 import { MonthlyView, MonthlyRoiSummary } from "@/app/(dashboard)/relatorios/MonthlyView";
 import { MonthlyReportDocument } from "@/app/(dashboard)/relatorios/monthly-v2/MonthlyReportDocument";
+import { MonthlyReportEvidence } from "@/app/(dashboard)/relatorios/monthly-v2/MonthlyReportEvidence";
 import { validateMonthlyReport } from "@/modules/reports/monthly-validate";
 import { PageHeader } from "@/components/ui/page-header";
 import { ButtonLink } from "@/components/ui/button";
@@ -55,6 +56,7 @@ export default async function MonthlyRoiPage({ params, searchParams }: {
     {report.data ? <>
       <div><h2 className="font-display text-lg font-semibold text-ink panel:text-white">Como o decisor recebe</h2><p className="mt-1 text-sm text-neutral panel:text-white/60">A revisão salva, na mesma folha do painel da clínica e do PDF.</p></div>
       <MonthlyReportDocument report={report} />
+      <MonthlyReportEvidence report={report} />
       <details className="rounded-surface border border-ink/10 p-4 panel:border-white/10">
         <summary className="cursor-pointer rounded-sm text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-iris panel:text-white/85">Registros e metodologia (indicadores da versão anterior)</summary>
         <div className="mt-4"><MonthlyView report={report} showSummary={false} /></div>

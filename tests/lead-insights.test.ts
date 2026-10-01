@@ -211,6 +211,6 @@ describe("frase-resumo e sugestões de tráfego", () => {
     expect(leadQualityHeadline(one)).toBe("De 1 lead, 1 informou a cidade: 1 era de fora do raio (1 de Marília), e 0 deles agendaram.");
     const none = summarizeLeadQuality([lead({ city: "Garça" }), lead({ city: "Garça" })], area, NOW);
     expect(leadQualityHeadline(none)).toBe("Dos 2 leads, 2 informaram a cidade: nenhum era de fora do raio. Dentro do raio, 0 de 2 agendaram.");
-    expect(leadQualityHeadline(summarizeLeadQuality([lead({})], area, NOW))).toBe("De 1 lead, ele não informou a cidade ao agente neste período.");
+    expect(leadQualityHeadline(summarizeLeadQuality([lead({})], area, NOW))).toBe("De 1 lead, nenhuma cidade foi registrada ou reconhecida no histórico.");
   });
 });

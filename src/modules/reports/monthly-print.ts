@@ -27,6 +27,15 @@ export function monthlyPrintPath(grant: { tenantId: string; month: string; draft
   return `/imprimir/relatorio-mensal?token=${encodeURIComponent(signPrintToken(grant))}`;
 }
 
+/** Browser fallback stays on the current public origin, regardless of the proxy's internal URL. */
+export function monthlyPrintRedirect(grant: { tenantId: string; month: string; draft: boolean }): Response {
+  return new Response(null, { status: 303, headers: {
+    Location: monthlyPrintPath(grant),
+    "Cache-Control": "private, no-store",
+    "Referrer-Policy": "no-referrer",
+  } });
+}
+
 /**
  * `origin` é de onde o Chromium alcança o próprio app: `PDF_BASE_URL` (ex.:
  * http://127.0.0.1:3000 dentro do container) ou a origem da requisição.

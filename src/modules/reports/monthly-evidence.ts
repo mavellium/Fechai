@@ -1,4 +1,5 @@
 import type { LeadOutcome } from "@/modules/lead-insights/summary";
+import type { ContactContextEvidence } from "./contact-context";
 
 /**
  * Os registros por trás de cada número do ROI mensal. Saem da MESMA passada de
@@ -56,6 +57,8 @@ export type GapEvidence = { gapId: string; firstAskedAt: string; answeredAt: str
 export type LeadEvidence = {
   leadId: string; conversationId: string | null; createdAt: string;
   city: string | null; verdict: "in" | "out" | "unknown" | null;
+  /** Historical literal declaration: identifiers only, never the message text. */
+  cityMessageId?: string; cityDeclaredAt?: string;
   outcome: LeadOutcome; lossKey: string | null; doubtKey: string | null;
 };
 
@@ -94,11 +97,14 @@ export type MonthlyEvidence = {
   hours: number[];
   gaps: GapEvidence[];
   leads?: LeadEvidence[];
+  /** Older evidence used creation cohort; only this population supports v2 city counts. */
+  leadPopulation?: "attended";
   /** Relatório v2; ausentes em snapshots anteriores a ele. */
   contacts?: ContactEvidence[];
+  contexts?: ContactContextEvidence[];
   cohort?: CohortEvidence[];
   /** Listas cortadas em `EVIDENCE_LIMIT`, com o total real. */
-  truncated: Partial<Record<"conversations" | "responses" | "appointments" | "events" | "messages" | "leads" | "contacts" | "cohort", number>>;
+  truncated: Partial<Record<"conversations" | "responses" | "appointments" | "events" | "messages" | "leads" | "contacts" | "contexts" | "cohort", number>>;
 };
 
 /**
@@ -115,7 +121,7 @@ export const emptyEvidence = (): MonthlyEvidence => ({
 
 /** Corta as listas longas no teto e anota o total. Muta e devolve o mesmo objeto. */
 export function capEvidence(evidence: MonthlyEvidence): MonthlyEvidence {
-  for (const key of ["conversations", "responses", "appointments", "events", "messages", "leads", "contacts", "cohort"] as const) {
+  for (const key of ["conversations", "responses", "appointments", "events", "messages", "leads", "contacts", "contexts", "cohort"] as const) {
     const list = evidence[key];
     if (list && list.length > EVIDENCE_LIMIT) {
       evidence.truncated[key] = list.length;

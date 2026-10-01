@@ -1,3 +1,5 @@
+import { contactActivity, contactWasTransferred } from "./contact-activity";
+import { summarizeContactContexts, type ContactContextSummary } from "./contact-context";
 import { partsInZone } from "@/modules/scheduling/time";
 import { attendanceOf, parseKind } from "@/modules/scheduling/dimensions";
 import { doubtLabel, lossLabel } from "@/modules/lead-insights/categories";
@@ -70,6 +72,7 @@ export type MonthlyReportData = {
   version: 2;
   meta: { timezone: string; hoursConfigured: boolean; secondsPerMessage: number; secondsPerMessageDefault: boolean };
   service: {
+    contexts?: ContactContextSummary;
     contacts: Split;
     aiOnly: Metric; transferred: Metric;
     /** Transbordos que o agente registrou. Zero com transferidas > 0 = a equipe assume sem o agente passar. */
@@ -206,15 +209,13 @@ export function buildMonthlyReportData(input: MonthlyInput, time: MonthlyTimeMet
   const contacts = new Map<string, Contact>();
   const bands = HOUR_BANDS.map(() => 0);
   for (const conversation of conversations) {
-    const messages = conversation.messages.filter((m) => inMonth(m.createdAt)).sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
-    const first = messages.find((m) => m.role === "user");
+    const { messages, first, replies } = contactActivity(conversation.messages.filter((m) => inMonth(m.createdAt)));
     if (!first) continue;
     // Mensagem nossa antes de o contato escrever (lembrete, disparo) não é resposta.
-    const replies = messages.filter((m) => m.role === "assistant" && (m.sentBy === "agent" || m.sentBy === "human") && m.createdAt >= first.createdAt);
     if (!replies.length) continue;
     const firstHuman = replies.find((m) => m.sentBy === "human");
     const events = (handoffs.get(conversation.id) ?? []).sort((a, b) => a.getTime() - b.getTime());
-    const transferred = Boolean(firstHuman) || events.length > 0;
+    const transferred = contactWasTransferred(replies, events.length);
     // Se a equipe respondeu antes, o intervalo até a IA mediria o trabalho dela.
     const agentSeconds = replies[0].sentBy === "agent" ? (replies[0].createdAt.getTime() - first.createdAt.getTime()) / 1000 : null;
     let receptionSeconds: number | null = null;
@@ -372,10 +373,14 @@ export function buildMonthlyReportData(input: MonthlyInput, time: MonthlyTimeMet
       returnedSeconds, hourCents, savingsCents, investmentCents, netCents, multiple: Math.round(netCents / investmentCents * 10) / 10 };
   }
 
+  const contexts = summarizeContactContexts({ start, end, conversations, events: input.events,
+    bookings: evidence.cohort.filter((a) => !a.earlier).map((a) => ({ id: a.appointmentId, conversationId: a.conversationId, createdAt: new Date(a.createdAt) })) });
+  evidence.contexts = contexts.records;
   return {
     version: 2,
     meta: { timezone: config.timezone, hoursConfigured, secondsPerMessage, secondsPerMessageDefault: config.secondsPerMessage == null },
     service: {
+      contexts: contexts.summary,
       contacts: splitOf(contactCounts, hoursConfigured, "measured", "messages"),
       aiOnly: metric(total - transferred.length, "measured", "messages"),
       transferred: metric(transferred.length, "measured", "messages+events"),
@@ -418,7 +423,7 @@ export function buildMonthlyReportData(input: MonthlyInput, time: MonthlyTimeMet
       withCity: metric(quality.withCity, cityCoverage, "insights"),
       outOfArea: area ? metric(quality.outOfRadius, cityCoverage, "insights+serviceArea") : metric(null, "unavailable", "serviceArea"),
       outOfAreaScheduled: area ? metric(outScheduled, cityCoverage, "insights+serviceArea") : metric(null, "unavailable", "serviceArea"),
-      firstDoubts, reasons: reasonList, suggestions: quality.suggestions,
+      firstDoubts, reasons: reasonList, suggestions: [],
     },
     incidents,
     problems,

@@ -17,6 +17,7 @@ export function monthlyAiMessages(report: MonthlyReport, request: MonthlyAiReque
   const previous = applyMonthlyOverrides(report.automatic?.previous ?? report.previous, request.draft.metricOverrides.previous, report.previousAssumptions);
   const context = {
     client: report.tenantName, month: report.month, previousMonth: report.previousMonth,
+    contactContexts: report.data?.service.contexts ?? null,
     partialMonth: report.partial, partialTracking: !current.trackingComplete,
     draft: request.draft,
     current: editableMonthlyMetrics(current), previous: editableMonthlyMetrics(previous),
@@ -28,6 +29,7 @@ export function monthlyAiMessages(report: MonthlyReport, request: MonthlyAiReque
     agents: agents.map((a) => ({ name: a.name, schedule: a.schedule })),
   };
   return [{ role: "system", content: `Você ajuda a Mavellium a preparar o relatório mensal de ROI do Fechai. Responda em português, com clareza e exemplos curtos.
+Não atribua entradas a tráfego pago ou contatos antigos a base qualificada sem origem registrada. contactContexts separa iniciativas; cada taxa vem do grupo correspondente, nunca de bases misturadas.
 O relatório mede o que o Fechai controla: atendimento, agendamento e comparecimento; a métrica âncora é avaliações agendadas e realizadas. Receita, economia e ROI são um bloco OPCIONAL (context.financialEnabled): desligado, não é pendência, não trate ticket, conversão ou custo do atendente como algo que falta, e não proponha preenchê-los sem o administrador pedir para ativar o retorno estimado.
 Explique os campos, a origem dos indicadores, as pendências e quais informações pedir à clínica. Pode propor preenchimentos com dados cadastrados ou fornecidos pelo administrador na conversa.
 REGRA: receita = avaliações REALIZADAS de contatos cuja PRIMEIRA chegada foi FORA do expediente humano × conversão avaliação→tratamento × ticket, por procedimento. Economia = horas devolvidas × custo/hora do atendente. Horas devolvidas = (minutos de áudio ouvidos × 60 + (mensagens de texto + áudios respondidos pelo agente) × segundos por mensagem) ÷ 3600 quando assumptions.secondsPerMessage está preenchido; vazio, usa conversas sem resposta humana × minutos por conversa ÷ 60; assumedHours corrigido manualmente substitui os dois. ROI = (receita + economia − investimento) ÷ investimento. Os valores são estimados. Receita/economia/ROI são calculados pelo sistema e não são campos editáveis.

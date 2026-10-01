@@ -3,12 +3,11 @@ import { getServiceArea } from "./service-area-store";
 import { classifyCity } from "./service-area";
 import { leadOutcome, summarizeLeadQuality, type LeadQuality, type LeadRow } from "./summary";
 import type { LeadEvidence } from "@/modules/reports/monthly-evidence";
-
-/** Teto de leads lidos por consulta: janela "tudo" de conta grande não pode varrer a tabela inteira. */
-const MAX_LEADS = 20_000;
+import { contactActivity } from "@/modules/reports/contact-activity";
+import { loadHistoricalCities } from "./historical-city-store";
 
 /**
- * Lê os leads reais criados na janela [from, to) e agrega. `from: null` é desde
+ * Lê os contatos reais que escreveram e foram atendidos na janela [from, to) e agrega. `from: null` é desde
  * o início da conta. `agentIds` restringe às conversas desses agentes (o escopo
  * do relatório mensal). Só metadados: nenhum nome, telefone ou texto de
  * conversa sai daqui — o painel e o relatório mostram agregados.
@@ -37,8 +36,10 @@ export async function loadLeadQualityDetail(
       where: {
         tenantId,
         isTest: false,
-        createdAt: { ...(range.from ? { gte: range.from } : {}), lt: range.to },
-        ...(options.agentIds?.length ? { conversation: { agentId: { in: options.agentIds } } } : {}),
+        conversation: { isTest: false,
+          ...(options.agentIds?.length ? { agentId: { in: options.agentIds } } : {}),
+          messages: { some: { role: "user", createdAt: { ...(range.from ? { gte: range.from } : {}), lt: range.to } } },
+        },
       },
       select: {
         id: true, createdAt: true, status: true, disqualifiedAt: true, disqualifiedReason: true,
@@ -48,15 +49,20 @@ export async function loadLeadQualityDetail(
             id: true, needsHuman: true, lastInboundAt: true, followUpReason: true,
             reportEvents: { where: { kind: "handoff" }, select: { id: true }, take: 1 },
             insight: { select: { city: true, cityKey: true, firstQuestionKey: true, lossReasonKey: true } },
+            messages: { where: { role: { in: ["user", "assistant"] }, createdAt: { ...(range.from ? { gte: range.from } : {}), lt: range.to } },
+              select: { role: true, sentBy: true, createdAt: true } },
           },
         },
       },
       orderBy: { createdAt: "desc" },
-      take: MAX_LEADS,
     }),
   ]);
 
-  const rows: LeadRow[] = leads.map((lead) => ({
+  const attended = leads.filter((lead) => contactActivity(lead.conversation?.messages ?? []).replies.length > 0);
+  const historical = await loadHistoricalCities(tenantId,
+    attended.flatMap((lead) => lead.conversation && !lead.conversation.insight?.cityKey ? [lead.conversation.id] : []), range.to);
+
+  const rows: LeadRow[] = attended.map((lead) => ({
     createdAt: lead.createdAt,
     status: lead.status,
     disqualified: lead.disqualifiedAt !== null,
@@ -68,15 +74,20 @@ export async function loadLeadQualityDetail(
       followUpReason: lead.conversation.followUpReason,
       handoffEvents: lead.conversation.reportEvents.length,
     },
-    insight: lead.conversation?.insight ?? null,
+    insight: lead.conversation && historical.has(lead.conversation.id)
+      ? { ...lead.conversation.insight, city: historical.get(lead.conversation.id)!.city, cityKey: historical.get(lead.conversation.id)!.cityKey,
+          firstQuestionKey: lead.conversation.insight?.firstQuestionKey ?? null, lossReasonKey: lead.conversation.insight?.lossReasonKey ?? null }
+      : lead.conversation?.insight ?? null,
   }));
   const now = options.now ?? new Date();
   const detail: LeadEvidence[] = rows.map((row, i) => {
     const { outcome, lossKey } = leadOutcome(row, now);
     const cityKey = row.insight?.cityKey ?? null;
-    return { leadId: leads[i].id, conversationId: leads[i].conversation?.id ?? null, createdAt: row.createdAt.toISOString(),
+    const declaration = historical.get(attended[i].conversation?.id ?? "");
+    return { leadId: attended[i].id, conversationId: attended[i].conversation?.id ?? null, createdAt: row.createdAt.toISOString(),
       city: row.insight?.city ?? null, verdict: cityKey ? classifyCity(area, cityKey) : null,
+      ...(declaration ? { cityMessageId: declaration.messageId, cityDeclaredAt: declaration.declaredAt.toISOString() } : {}),
       outcome, lossKey, doubtKey: row.insight?.firstQuestionKey ?? null };
   });
-  return { quality: summarizeLeadQuality(rows, area, now), leads: detail };
+  return { quality: { ...summarizeLeadQuality(rows, area, now), acquisition: "not_recorded", suggestions: [] }, leads: detail };
 }

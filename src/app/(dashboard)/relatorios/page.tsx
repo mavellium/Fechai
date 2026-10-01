@@ -6,6 +6,7 @@ import { publishedMonthlyMonths, selectPublishedMonth } from "@/modules/reports/
 import { computeMonthlyReport } from "@/modules/reports/monthly";
 import { MonthlyView } from "./MonthlyView";
 import { MonthlyReportDocument } from "./monthly-v2/MonthlyReportDocument";
+import { MonthlyReportEvidence } from "./monthly-v2/MonthlyReportEvidence";
 import { MonthPicker } from "@/components/ui/month-picker";
 import { prisma } from "@/lib/prisma";
 import {
@@ -32,6 +33,7 @@ import { LeadQualityView } from "./LeadQualityView";
 import { loadLeadQuality } from "@/modules/lead-insights/queries";
 import { RangePicker } from "./RangePicker";
 import { StatusBreakdown } from "./StatusBreakdown";
+import { ContactContextSummary } from "./ContactContextSummary";
 
 const PERIODS: PeriodKey[] = ["hoje", "7", "30", "mes", "ano", "tudo"];
 // A aba "Afiliados" só existe para quem está no programa — o filtro abaixo
@@ -88,7 +90,7 @@ export default async function RelatoriosPage({
     affiliateOnly ? 1 : prisma.lead.count({ where: { tenantId, isTest: false } }),
     view === "operacional" ? computePeriodReport(tenantId, range) : null,
     view === "financeiro" ? computeFinancialSummary(tenantId, range) : null,
-    view === "leads" ? loadLeadQuality(tenantId, { from: range.from, to: range.to }) : null,
+    view === "leads" ? loadLeadQuality(tenantId, { from: range.from, to: new Date(range.to.getTime() + 1) }) : null,
     view === "afiliados" && affiliate ? getAffiliateOverview(affiliate.id) : null,
   ]);
 
@@ -189,24 +191,39 @@ export default async function RelatoriosPage({
       {view === "mensal" && month && <MonthPicker value={month} href={viewHref("mensal")} availableMonths={publishedMonths} />}
 
       {/* Meses fechados antes do relatório v2 não têm `data` e seguem na visão antiga. */}
-      {view === "mensal" && monthlyReport ? (monthlyReport.data ? <MonthlyReportDocument report={monthlyReport} /> : <MonthlyView report={monthlyReport} />) : view === "operacional" && report ? (
+      {view === "mensal" && monthlyReport ? (monthlyReport.data ? <><MonthlyReportDocument report={monthlyReport} /><MonthlyReportEvidence report={monthlyReport} /></> : <MonthlyView report={monthlyReport} />) : view === "operacional" && report ? (
         <>
           <FadeIn>
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-5">
               <Stat
-                label="Conversas ativas"
+                label="Contatos que escreveram"
+                about="Contatos com ao menos uma mensagem recebida no período, mesmo que a conversa tenha começado antes."
                 value={String(report.kpis.conversations)}
                 delta={prev ? report.kpis.conversations - prev.conversations : undefined}
               />
               <Stat
+                label="Contatos atendidos"
+                value={String(report.kpis.attendedContacts)}
+                delta={prev ? report.kpis.attendedContacts - prev.attendedContacts : undefined}
+                about="Contatos que escreveram e receberam resposta do agente ou da equipe no período. Mesma regra do relatório mensal, respeitando os agentes selecionados nele."
+              />
+              <Stat
                 label="Leads novos"
+                about="Registros de contato criados no período, inclusive os criados por uma abordagem da clínica. Não representa aquisição por tráfego."
                 value={String(report.kpis.leads)}
                 delta={prev ? report.kpis.leads - prev.leads : undefined}
               />
               <Stat
-                label="Agendamentos"
+                label="Agendamentos criados"
+                about="Agendamentos não cancelados criados no período, de todos os tipos e origens. O mensal destaca avaliações criadas pelo agente."
                 value={String(report.kpis.scheduled)}
                 delta={prev ? report.kpis.scheduled - prev.scheduled : undefined}
+              />
+              <Stat
+                label="Avaliações agendadas pelo agente"
+                value={String(report.kpis.evaluations)}
+                delta={prev ? report.kpis.evaluations - prev.evaluations : undefined}
+                about="Avaliações não canceladas criadas pelo agente no período. No mês completo, usa as mesmas regras de tipo e seleção de agentes da revisão mensal."
               />
               <Stat
                 label="Mensagens recebidas"
@@ -222,11 +239,15 @@ export default async function RelatoriosPage({
                 label="Taxa de resposta"
                 value={`${Math.round(report.kpis.responseRate * 100)}%`}
                 hint={prev ? `antes ${Math.round(prev.responseRate * 100)}%` : undefined}
-                about="Conversas em que o lead respondeu duas vezes ou mais."
+                about="Dos contatos que escreveram no período, quantos receberam resposta do agente ou da equipe depois da mensagem."
               />
               <Stat label="Leads quentes" value={String(report.kpis.hotLeads)} hint="agora" />
               <Stat label="Precisam de você" value={String(report.kpis.needsHuman)} hint="agora" />
             </div>
+          </FadeIn>
+
+          <FadeIn>
+            <ContactContextSummary summary={report.contexts} />
           </FadeIn>
 
           <FadeIn>
@@ -256,7 +277,7 @@ export default async function RelatoriosPage({
               />
               <ChartPanel
                 variant="closed"
-                title="Leads fechados: IA x humano"
+                title="Agendamentos: IA x humano"
                 hint="Agendamentos fechados pela IA contra os marcados manualmente."
                 closed={report.closed}
               />
@@ -282,14 +303,14 @@ export default async function RelatoriosPage({
             <div className="grid gap-6 lg:grid-cols-3">
               <ChartPanel
                 variant="funnel"
-                title="Funil de conversão"
-                hint="De conversa a agendamento — quem entrou no período."
+                title="Volumes no período"
+                hint="Contatos ativos, contatos com duas mensagens, status atual dos leads novos e agendamentos criados. São bases distintas, não etapas de conversão."
                 funnel={report.funnel}
               />
               <ChartPanel
                 variant="autonomyRate"
                 title="Resolução autônoma"
-                hint="Fração dos contatos atendidos que a IA resolveu sem um humano entrar."
+                hint="Fração dos contatos atendidos só pelo agente, sem resposta humana nem transferência registrada."
                 autonomyRate={report.autonomyRate}
               />
               <ChartPanel
