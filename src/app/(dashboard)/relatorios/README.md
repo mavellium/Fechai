@@ -227,6 +227,26 @@ do PDF em `?ver=1`, confirmação das limitações, fechamento, envio e reunião
 - **Um formulário só.** As etapas ocultam seções com `hidden`, então "Salvar
   revisão" grava tudo de qualquer etapa. Campo `required` em seção oculta
   impediria o envio sem aviso: a validação é do código (`onSubmit`/`readAssumptions`).
+- **Rascunho da IA durante o envio.** Capture os campos antes de aguardar a
+  chamada: o `fieldset` fica desabilitado enquanto ela roda, e `FormData`
+  não inclui controles desabilitados. Não releia o formulário depois do
+  `await` para mesclar a resposta; preserve o rascunho capturado. O mesmo vale
+  para o recálculo. `monthlyDraftProblem` aponta o campo e sua etapa em erros
+  de validação, sem expor mensagens técnicas do schema.
+- **Requisitos da aprovação.** `monthlyCloseProblems` é usado na tela e no
+  servidor: decisor, ajustes (ou registro explícito de que não houve), plano
+  seguinte e revisão das ações anteriores. A etapa 5 lista o que falta,
+  oferece voltar à etapa 4 e desabilita aprovar até salvar esses requisitos.
+  Confirmar cobertura parcial não os substitui.
+- **Chave de retorno estimado.** Fica no topo do assistente e pode ser alterada
+  em qualquer etapa do rascunho. Na etapa 5 há também “Salvar revisão”; desligar
+  conserva as premissas e, ao salvar, retira o bloco do painel e do PDF.
+  Snapshot aprovado exige reabrir para alterar a escolha.
+- **Conferência do Clinicorp.** A etapa 2 oferece “Consultar Clinicorp novamente”
+  quando há erro. Sem status válidos, a marcação explícita de comparecimento
+  na Agenda do Fechai após a consulta continua sendo a alternativa; registrar
+  resposta na central não modifica presenças nem transforma confirmação em
+  comparecimento. Resposta inválida da API permanece como limitação real.
 - **A etapa mora fora do editor.** O editor remonta a cada revisão salva (a
   chave tem `revision`); o `MonthlyCloseWizard` guarda a etapa. A central de
   pendências tem formulários próprios e é renderizada fora do formulário.

@@ -8,8 +8,9 @@ import { monthlyAssumptionsSchema, monthKey, monthlyWindow } from "@/modules/rep
 import { FEATURED_CASE_MAX, featuredCaseProblem, reviewTextProblem } from "@/modules/reports/monthly-time";
 import { HIGHLIGHTS_MAX, LIMITATIONS_NOTE_MAX, sameLimitations, unverifiedMetrics } from "@/modules/reports/monthly-limitations";
 import { computeMonthlyReport, loadMonthlyCaseFacts, type MonthlyReport } from "@/modules/reports/monthly";
-import { hasNextPlan, nextActionsSchema, type MonthlyNextAction } from "@/modules/reports/monthly-next-actions";
-import { ACTION_RESULT_MAX, previousActionsProblem, previousActionsSchema, reviewPreviousActions, type PreviousAction } from "@/modules/reports/monthly-previous-actions";
+import { nextActionsSchema, type MonthlyNextAction } from "@/modules/reports/monthly-next-actions";
+import { ACTION_RESULT_MAX, previousActionsSchema, reviewPreviousActions, type PreviousAction } from "@/modules/reports/monthly-previous-actions";
+import { monthlyCloseProblems } from "@/modules/reports/monthly-close-check";
 import type { CaseFacts } from "@/modules/reports/monthly-case";
 import { ACCOUNT_OWNERS_MAX, PERSON_NAME_MAX, decisionMakerProblem, parseAccountOwners } from "@/modules/reports/monthly-decision-maker";
 import { monthlyOverridesSchema, parseMonthlyOverrides, editableMonthlyMetrics } from "@/modules/reports/monthly-overrides";
@@ -185,14 +186,10 @@ export async function finalizeMonthlyRoi(tenantId: string, month: string, acknow
   const limitations = report.limitations ?? [];
   if (limitations.length && !acknowledged.length) return { ok: false, error: "Confirme as limitações do fechamento antes de fechar." };
   if (!sameLimitations(acknowledged, limitations)) return { ok: false, error: "As limitações mudaram desde a sua conferência. Revise a lista e confirme de novo." };
-  if (!(report.adjustments || report.agentChanges?.length) || !hasNextPlan(report)) return { ok: false, error: "Preencha decisor, ajustes e as próximas ações." };
   // O relatório vai para quem decide a mensalidade: dono ou sócio da conta, nunca a recepção.
   const account = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { ownerNames: true } });
-  const decisorProblem = decisionMakerProblem(report, parseAccountOwners(account?.ownerNames));
-  if (decisorProblem) return { ok: false, error: decisorProblem };
-  // O que foi combinado no relatório anterior volta com status e o número que comprova.
-  const previousProblem = previousActionsProblem(report.previousActions);
-  if (previousProblem) return { ok: false, error: previousProblem };
+  const editorial = monthlyCloseProblems(report, parseAccountOwners(account?.ownerNames));
+  if (editorial.length) return { ok: false, error: `Na etapa 4: ${editorial[0]} Salve a revisão antes de aprovar.` };
   // Relatório v2: número que não fecha ou decisor errado, o decisor da clínica veria.
   const blocking = report.data ? blockingIssues(validateMonthlyReport(report.data, report)) : [];
   if (blocking.length) return { ok: false, error: `${blocking[0].message} ${blocking[0].action}` };

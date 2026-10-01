@@ -14,6 +14,21 @@ export const monthlyAiDraftSchema = z.object({
   nextActions: nextActionsSchema.default([]),
 }).strict();
 export type MonthlyAiDraft = z.infer<typeof monthlyAiDraftSchema>;
+/** Validação legível também antes de a chamada à IA chegar ao servidor. */
+export function monthlyDraftProblem(issues: { path: PropertyKey[]; message: string }[]): string {
+  const labels: Record<string, string> = {
+    evaluationTypes: "Tipos de atendimento considerados avaliações (etapa 2)", humanHours: "Expediente humano (etapa 2)",
+    humanClosedDates: "Feriados e dias sem recepção (etapa 2)", procedures: "Procedimentos, ticket e conversão (etapa 2)",
+    attendantMonthlyHours: "Carga mensal do atendente (etapa 2)", attendantMonthlyCents: "Custo mensal do atendente (etapa 2)",
+    investmentCents: "Mensalidade (etapa 2)", secondsPerMessage: "Tempo por mensagem (etapa 2)", minutesPerConversation: "Tempo por conversa (etapa 2)",
+    completedStatusTypes: "Status de comparecimento (etapa 2)", noShowStatusTypes: "Status de falta (etapa 2)",
+    timezone: "Fuso da clínica (etapa 2)", agentIds: "Agentes (etapa 1)", procedureVariable: "Variável do procedimento (etapa 2)",
+    metricOverrides: "Indicadores corrigidos (etapa 1)", adjustments: "Ajustes no agente (etapa 4)", nextActions: "Próximas ações (etapa 4)",
+    nextMonth: "Plano do próximo mês (etapa 4)", decisionMaker: "Decisor (etapa 4)", highlights: "Resumo do período (etapa 4)", limitationsNote: "O que não saiu como planejado (etapa 4)",
+  };
+  const fields = [...new Set(issues.map((issue) => String(issue.path[0] === "assumptions" ? issue.path[1] : issue.path[0])))];
+  return `Confira: ${fields.map((key) => labels[key] ?? "dados da revisão").join("; ")}.`;
+}
 export const monthlyAiRequestSchema = z.object({
   question: z.string().trim().min(1, "Escreva uma pergunta para a IA.").max(2000),
   history: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().max(5000) }).strict()).max(12),

@@ -270,6 +270,18 @@ describe("fechamento com cobertura parcial", () => {
     const row = saved();
     db.monthlyRoiReport.findUnique.mockImplementation(async ({ where }) => where.tenantId_month.month === "2026-09" ? row : null);
   });
+  it.each([
+    [{ adjustments: "", nextMonth: "Plano" }, "Descreva o que foi ajustado"],
+    [{ adjustments: "Sem ajustes executados neste mês.", nextMonth: "" }, "Preencha ao menos uma próxima ação"],
+    [{ decisionMaker: "" }, "Escolha o decisor"],
+  ])("aponta exatamente o requisito editorial ausente após aceitar a cobertura parcial: %j", async (patch, message) => {
+    const row = { ...saved(), ...patch };
+    db.monthlyRoiReport.findUnique.mockImplementation(async ({ where }) => where.tenantId_month.month === "2026-09" ? row : null);
+    const seen = limitationFingerprint((await computeMonthlyReport("own", "2026-09", false)).limitations ?? []);
+    const result = await finalizeMonthlyRoi("own", "2026-09", seen);
+    expect(result.ok).toBe(false); expect(result.error).toContain(message); expect(result.error).toContain("etapa 4");
+    expect(db.monthlyRoiReport.updateMany).not.toHaveBeenCalled();
+  });
   it("fecha com pendência depois de confirmar a lista, e congela o número sem evidência como não verificado", async () => {
     const seen = limitationFingerprint((await computeMonthlyReport("own", "2026-09", false)).limitations ?? []);
     expect(seen.some((l) => l.startsWith("hours|"))).toBe(true);
