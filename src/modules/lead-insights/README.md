@@ -74,6 +74,14 @@ triagem (`disqualifiedAt`), follow-up de quem recusou/pediu para parar, status
 (`sumiu`, derivado, o agente nunca o declara). Antes disso é "em andamento":
 chamar de perdido um lead de ontem inflaria a perda do mês corrente.
 
+**Um único motivo principal por lead que não agendou** (`LeadQuality.notScheduled`):
+`leadOutcome` devolve um desfecho só, então cada lead entra em uma linha só e a
+soma é **exatamente** `leads − outcomes.scheduled`. A lista não tem corte de
+ranking (cortar quebraria a soma) e inclui, além dos motivos de perda, "Em
+atendimento com a equipe" (transbordou) e "Ainda em conversa" (em andamento).
+É a tabela "Motivo principal de não agendar" do relatório mensal. `losses`
+continua existindo para o painel, com os seis maiores motivos de perda.
+
 **A coorte é o lead criado no período** (`Lead.createdAt`, `isTest: false`), com
 ou sem registro. Quem não disse a cidade conta em "leads", não em "informaram a
 cidade" — a cobertura aparece sempre ao lado do percentual. Conversa de teste

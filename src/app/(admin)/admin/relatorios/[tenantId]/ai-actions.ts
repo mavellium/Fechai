@@ -8,7 +8,7 @@ import { monthlyAgentSource } from "@/modules/reports/monthly-import";
 import { monthlyAiDraftSchema, monthlyAiRequestSchema } from "@/modules/reports/monthly-ai";
 import { answerMonthlyAi, draftMonthlyAnalysis, monthlyAiMessages, type MonthlyAiAnswer } from "@/modules/reports/monthly-ai-service";
 import { createMonthlyAiToolbox } from "@/modules/reports/monthly-ai-tools";
-import { draftAnalysisBase, monthlyAnalysisMessages, monthlyAnalysisRequestSchema, type MonthlyAgentChange, type MonthlyAnalysis } from "@/modules/reports/monthly-analysis";
+import { draftAnalysisBase, monthlyAnalysisFacts, monthlyAnalysisMessages, monthlyAnalysisRequestSchema, type MonthlyAgentChange, type MonthlyAnalysis } from "@/modules/reports/monthly-analysis";
 import { AUDIT_EVENTS } from "@/modules/audit/events";
 import { appendMonthlyAiChat, clearMonthlyAiChat, loadMonthlyAiChat, type MonthlyAiChatMessage } from "@/modules/reports/monthly-ai-chat";
 
@@ -112,8 +112,13 @@ export async function generateMonthlyRoiAnalysis(tenantId: string, month: string
     }
     const changes = [...grouped.values()].slice(0, 40);
     const { limitations } = draftAnalysisBase(report, draft.data);
+    // O motor de dados já calculou e validou; a IA só redige a partir disto, e
+    // as travas conferem depois o que ela escreveu contra os mesmos fatos.
+    const facts = monthlyAnalysisFacts(report, draft.data, changes);
     const analysis = await draftMonthlyAnalysis(monthlyAnalysisMessages(report, draft.data, changes, request.data.context), {
-      limitations: limitations.length, hasFacts: changes.length > 0 || Boolean(request.data.context) || Boolean(draft.data.adjustments.trim()),
+      limitations: limitations.length, incidents: facts.incidents.length, hasContext: Boolean(request.data.context),
+      hasFacts: changes.length > 0 || Boolean(request.data.context) || Boolean(draft.data.adjustments.trim()),
+      validated: `${JSON.stringify(facts)} ${request.data.context}`,
     });
     return { ok: true, analysis };
   } catch (error) {

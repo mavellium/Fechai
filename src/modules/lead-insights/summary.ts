@@ -50,6 +50,14 @@ export type LeadRow = {
 
 /** Motivo de perda derivado do que o sistema sabe (não é o agente quem declara). */
 const NOT_A_LEAD_KEY = "nao_e_paciente";
+/** Quem não agendou e também não foi perdido: está com a equipe ou ainda conversa. */
+export const WITH_TEAM_KEY = "com_a_equipe";
+export const IN_PROGRESS_KEY = "em_andamento";
+export function notScheduledLabel(key: string): string {
+  if (key === WITH_TEAM_KEY) return "Em atendimento com a equipe";
+  if (key === IN_PROGRESS_KEY) return "Ainda em conversa";
+  return key === NOT_A_LEAD_KEY ? "Não era paciente" : lossLabel(key);
+}
 
 /**
  * Resultado do lead. Ordem que decide: agendou > transbordou > perdeu > em
@@ -99,6 +107,13 @@ export type LeadQuality = {
   doubts: RankItem[];
   lostTotal: number;
   losses: RankItem[];
+  /**
+   * Um único motivo principal por lead que não agendou, sem corte: a soma é
+   * exatamente `leads − outcomes.scheduled`. Além dos motivos de perda, quem
+   * está com a equipe e quem ainda está conversando. Ausente em resumo
+   * congelado antes do campo.
+   */
+  notScheduled?: { total: number; reasons: RankItem[] };
   outcomes: Record<LeadOutcome, number>;
   /** `withCity` abaixo de `MIN_SAMPLE`: amostra pequena demais para sugerir. */
   lowSample: boolean;
@@ -129,6 +144,7 @@ export function summarizeLeadQuality(rows: LeadRow[], area: ServiceArea | null, 
   const outcomes: Record<LeadOutcome, number> = { scheduled: 0, handoff: 0, lost: 0, open: 0 };
   const doubts = new Map<string, number>();
   const losses = new Map<string, number>();
+  const reasons = new Map<string, number>();
   const byCity = new Map<string, { labels: Map<string, number>; count: number; scheduled: number }>();
   let withCity = 0, inRadius = 0, outOfRadius = 0, inScheduled = 0, outScheduled = 0, withDoubt = 0, lostTotal = 0;
 
@@ -136,6 +152,8 @@ export function summarizeLeadQuality(rows: LeadRow[], area: ServiceArea | null, 
     const { outcome, lossKey } = leadOutcome(row, now);
     outcomes[outcome]++;
     if (outcome === "lost" && lossKey) { bump(losses, lossKey); lostTotal++; }
+    // `leadOutcome` devolve um desfecho só, então cada lead entra numa linha só.
+    if (outcome !== "scheduled") bump(reasons, outcome === "lost" && lossKey ? lossKey : outcome === "handoff" ? WITH_TEAM_KEY : IN_PROGRESS_KEY);
     const insight = row.insight;
     if (insight?.firstQuestionKey) { bump(doubts, insight.firstQuestionKey); withDoubt++; }
     if (!insight?.cityKey) continue;
@@ -162,6 +180,7 @@ export function summarizeLeadQuality(rows: LeadRow[], area: ServiceArea | null, 
     version: 1, leads: rows.length, withCity, areaConfigured: Boolean(area), baseCity: area?.baseCity ?? null,
     inRadius, outOfRadius, inScheduled, outScheduled, cities,
     withDoubt, doubts: rank(doubts, doubtLabel, 6), lostTotal, losses: rank(losses, lossLabel, 6),
+    notScheduled: { total: rows.length - outcomes.scheduled, reasons: rank(reasons, notScheduledLabel, Number.MAX_SAFE_INTEGER) },
     outcomes, lowSample: withCity < MIN_SAMPLE, suggestions: [],
   };
   quality.suggestions = trafficSuggestions(quality);

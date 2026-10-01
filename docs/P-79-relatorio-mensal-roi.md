@@ -4,6 +4,69 @@ Implementação do escopo mínimo solicitado para 30/09/2026. Primeira entrega a
 Instituto do Sorriso até 05/10/2026. Base: requisitos fornecidos na conversa;
 a especificação citada no Obsidian não estava disponível.
 
+## Modelo revisado (30/09/2026): todos os leads, tudo que é mensurável
+
+Vale sobre o que este documento diz mais abaixo quando houver conflito. Regras
+completas em `src/app/(dashboard)/relatorios/README.md` ("Modelo revisado").
+
+- **Tudo que puder ser medido aparece.** **Todos os leads entram**, de dentro e
+  de fora do expediente; a divisão por expediente é só um detalhe dentro de
+  cada número. A regra conservadora (receita só de quem chegou fora do
+  expediente) vale apenas no bloco opcional de retorno estimado.
+- **Ordem do relatório**: frase do mês; contatos atendidos, avaliações
+  agendadas (o número principal), compareceram e 1ª resposta do agente;
+  01 Atendimento · 02 Agenda · 03 O que ajustamos no agente · 04 Qualidade dos
+  leads · 05 O que não saiu como planejado · 06 Próximo mês · + Retorno
+  estimado (opcional) · Como contamos.
+- **Novo no relatório**: disponibilidade do agente (% no ar, quedas, contatos
+  afetados), recepção (transferências respondidas x de y, mediana da 1ª
+  resposta humana, espera acima de 1h, sem resposta), tempo devolvido
+  detalhado, chegada pelo expediente cadastrado (nunca faixa fixa), motivo
+  principal de não agendar (soma exata), ações do mês anterior com status e
+  número, e os fatos do caso do mês (idade, áudios, dia da semana, período;
+  nunca nome, telefone ou data).
+- **Selo "estimativa" só no que é estimado**; número medido não leva selo.
+- **"O que não saiu como planejado" aparece sempre**: sem incidente comprovado,
+  diz "Nenhum incidente relevante identificado neste mês". Não é mais texto
+  obrigatório, e a IA nunca inventa problema.
+- **Arquitetura**: o motor de dados calcula e valida; a IA só redige a partir
+  dos números validados; o PDF é gerado no servidor só com o conteúdo aprovado
+  e versionado (cada fechamento é uma versão). Notas internas não entram.
+- **Disponibilidade só existe a partir da implantação do registro de quedas**:
+  meses anteriores saem como "não medida", com a limitação dita no relatório.
+- **Não mudou**: agendadas pelo mês da marcação e realizadas pelo mês da
+  consulta. O modelo de referência conta o comparecimento pela coorte das
+  avaliações marcadas no mês; essa troca de definição ficou em aberto.
+
+## Decisão de 30/09/2026: o que o relatório mede
+
+O relatório mede o que o Fechai controla: **atendimento, agendamento e
+comparecimento**. A métrica âncora é **avaliações agendadas e realizadas**. O
+financeiro da clínica é do Clinicorp, não nosso.
+
+- **Retorno estimado é opcional.** Receita, economia e ROI só aparecem quando
+  ticket, conversão e custo do atendente estão preenchidos e confirmados (a
+  chave "Retorno estimado" na etapa 2 do fechamento). Sem isso o bloco some do
+  painel e do PDF: nada de "Pendente" nem de zeros.
+- **Página 1**, nesta ordem: avaliações agendadas (dentro/fora do horário),
+  comparecimentos, contatos atendidos e % fora do horário, primeira resposta
+  (mediana); depois Atendimento, Agenda, O que ajustamos no agente, Qualidade
+  dos leads, Próximo mês (até 3 ações) e O que não saiu como planejado (nunca
+  vazio).
+- **Fechamento**: premissa financeira ausente não é pendência nem limitação com
+  o bloco desligado. Do Clinicorp só se exige o status de comparecimento.
+- **Central de pendências**: "Ticket e conversão" (e custo da equipe e
+  mensalidade) viram opcionais.
+- **Aba Financeiro**: sem valor definido, fica só o convite.
+- **Em aberto**: unificar "valor por lead" (aba Financeiro) e "ticket ×
+  conversão por procedimento" (relatório mensal) numa premissa só. Hoje são
+  dois modelos que não batem: o primeiro multiplica todo agendamento do período
+  por um valor fixo; o segundo conta só avaliações realizadas de quem chegou
+  fora do horário.
+
+As seções abaixo descrevem o cálculo do retorno estimado, que continua valendo
+quando o bloco está ligado.
+
 ## Operação mensal
 
 1. Mavellium abre **Admin → ROI mensal**, seleciona o cliente e a competência.
@@ -17,8 +80,9 @@ a especificação citada no Obsidian não estava disponível.
    é usado para inferir comparecimento. `CONFIRMED` não comprova realização.
 4. Nos agendamentos históricos sem tipo, só habilita a classificação como
    avaliação depois de conferir. Essa decisão fica nas premissas do mês.
-5. Escreve **O que ajustamos no agente**, o **Resumo do período**, até três
-   **Próximas ações** (cada uma com responsável e indicador) e o nome do decisor.
+5. Escreve **O que ajustamos no agente**, até três **Próximas ações** (cada uma
+   com responsável e indicador), **O que não saiu como planejado** (nunca vazio)
+   e o nome do decisor. O **Resumo do período** é opcional e abre a análise detalhada.
 6. Salva, confere o relatório e fecha após o término do mês. Pendências de
    dados e premissas **não bloqueiam**: o relatório pode fechar com cobertura
    parcial, desde que o admin confirme a lista de limitações (calculada pela

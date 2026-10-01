@@ -3,6 +3,7 @@ import { sendMail } from "@/lib/mail";
 import type { WhatsAppProviderName } from "./index";
 import { channelProvider } from "./instances";
 import { getWhatsAppProviderForInstance } from "./meta-config";
+import { trackWhatsappIncident } from "./incidents";
 
 /**
  * Saúde da conexão de WhatsApp de cada conta.
@@ -328,6 +329,8 @@ export async function scanWhatsappHealth(now = new Date()): Promise<{
 
     try {
       const health = await checkTenantWhatsapp(row.tenantId, now, channelProvider(row));
+      // Queda e volta ficam registradas para a disponibilidade do relatório mensal.
+      await trackWhatsappIncident(health, now);
       if (health.verdict === "ok" || health.verdict === "indeterminado") continue;
       broken += 1;
 

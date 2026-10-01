@@ -17,7 +17,8 @@ controle de publicação.
   odontológico P-79, separado do Financeiro legado. Premissas mensais revisadas
   pelo superadmin, comparecimento confirmado, receita apenas da chegada fora
   do horário humano, economia estimada declarada, fechamento em snapshot e
-  PDF A4 com resumo executivo (página 1) e análise detalhada. Contrato: [`docs/P-79-relatorio-mensal-roi.md`](../../../docs/P-79-relatorio-mensal-roi.md).
+  PDF A4 no modelo revisado (todos os contatos contam; a receita conservadora
+  vale só no bloco opcional de retorno estimado). Contrato: [`docs/P-79-relatorio-mensal-roi.md`](../../../docs/P-79-relatorio-mensal-roi.md).
 - `monthly.ts` também recebe `gaps` (perguntas da fila P-87 aprovadas na
   janela: `agentId`, `firstAskedAt`, `answeredAt`) e calcula
   `gapsAnswered`/`gapAnswerSeconds` no mês da aprovação, no escopo de agentes.
@@ -30,14 +31,33 @@ controle de publicação.
 - `monthly-evidence.ts` e `monthly-quality.ts`: os registros por trás de cada
   número e o selo de qualidade de cada indicador — ver "Registros e selo de
   qualidade" no [README da seção](../../app/(dashboard)/relatorios/README.md).
-- `monthly-next-actions.ts`: até 3 próximas ações `{ action, owner, indicator }` da
-  página 1 (`parseNextActions` nunca lança; `hasNextPlan` aceita o `nextMonth` antigo).
+- `monthly-executive.ts`: o conteúdo que o decisor lê (PDF e topo do painel) —
+  `executiveSummary` (frase do mês, 4 números, as 6 partes e as tabelas),
+  `monthlyIncidents` (faltas, quedas e espera da recepção: os incidentes
+  comprovados de "O que não saiu como planejado"), `NO_INCIDENT` e
+  `monthlyFinancial` (única porta do bloco financeiro opcional). Nada é escrito por IA.
+- `monthly-operations.ts`: puro. Recepção (`ReceptionMetrics`), chegada pelo
+  expediente cadastrado (`arrivalSlot`, nunca faixa fixa) e disponibilidade do
+  agente (`availabilityMetrics`; sem medição é `null`, nunca 100%).
+- `monthly-previous-actions.ts`: ações do relatório anterior aprovado com status
+  (funcionou / parcial / não funcionou) e o número que comprova; fechar exige os dois.
+- `monthly-case.ts`: fatos do caso do mês (idade, áudios, dia da semana, período,
+  se agendou). Duração, dia e período vêm de `loadMonthlyCaseFacts` (`monthly.ts`),
+  nunca do formulário.
+- `monthly-document.ts`: `approvedDocument` — a fronteira do que entra no PDF
+  (só conteúdo aprovado; registros, correções e notas internas ficam de fora) e
+  a descrição da cadeia motor de dados → IA redige → PDF aprovado e versionado.
+- `monthly-next-actions.ts`: até 3 próximas ações `{ action, owner, indicator }`
+  (`parseNextActions` nunca lança; `hasNextPlan` aceita o `nextMonth` antigo).
+  Voltam no relatório seguinte como ações do mês anterior.
 - `monthly-limitations.ts`: limitações do fechamento (pendências + cobertura),
   indicadores não verificados e a impressão digital que o fechamento confere.
   Fechar com cobertura parcial exige confirmar a lista exata.
 - `monthly-analysis.ts`: etapa 4 do assistente de fechamento — prompt da
   análise (resumo do período, limitações, melhorias, até 3 próximas ações), parse e travas
-  deterministas; `draftMonthlyAnalysis` em `monthly-ai-service.ts` percorre a
+  deterministas. A IA só redige: recebe as frases e tabelas já validadas
+  (`monthlyAnalysisFacts`), não inventa incidente e tem os números conferidos
+  contra os fatos (`unbackedNumbers`); `draftMonthlyAnalysis` em `monthly-ai-service.ts` percorre a
   cadeia de IA.
 - `monthly-overrides.ts`: valida `assumptions.metricOverrides` para o mês e o
   comparativo, aplica correções manuais e recalcula receita/economia/ROI.

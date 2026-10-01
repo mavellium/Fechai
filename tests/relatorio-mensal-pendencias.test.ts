@@ -1,16 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { applyMonthlyOverrides } from "@/modules/reports/monthly-overrides";
 import {
-  buildPendencyBoard, buildPendencyRequest, detectMonthlyPendencies, requestableRows, whatsappNumber,
+  buildPendencyBoard, buildPendencyRequest, detectMonthlyPendencies, FINANCIAL_TOPICS, isOpenPendency, requestableRows, whatsappNumber,
   type PendencyTracking,
 } from "@/modules/reports/monthly-pendencies";
-import type { MonthlyAssumptions } from "@/modules/reports/monthly-config";
+import { financialEnabled, type MonthlyAssumptions } from "@/modules/reports/monthly-config";
 import { roiConfig, roiFixture } from "./fixtures/monthly-roi";
 
 const due = new Date("2026-10-05T03:00:00Z");
 const before = new Date("2026-10-01T12:00:00Z");
 function incomplete(): { config: MonthlyAssumptions; metrics: ReturnType<typeof applyMonthlyOverrides> } {
-  const config = { ...roiConfig(), humanHours: null, attendantMonthlyCents: null, investmentCents: null,
+  // Retorno estimado ligado de propósito: é quando premissa financeira vira pendência.
+  const config = { ...roiConfig(), financialEnabled: true, humanHours: null, attendantMonthlyCents: null, investmentCents: null,
     procedures: [{ name: "Implante", ticketCents: null, conversionBps: 3000 }] };
   const metrics = applyMonthlyOverrides(roiFixture().current, { attendanceUnknown: 2, untypedAppointments: 1 }, config);
   return { config, metrics };
@@ -21,6 +22,35 @@ const board = (tracking: PendencyTracking[] = []) => {
 };
 const row = (rows: ReturnType<typeof board>, topic: string) => rows.find((r) => r.topic === topic)!;
 
+describe("retorno estimado desligado", () => {
+  // Como o Instituto do Sorriso: sem ticket nem conversão; só o custo do atendente.
+  const off = () => ({ ...roiConfig(), procedures: [], investmentCents: null });
+  it("premissa financeira ausente não é pendência, e nenhum valor em dinheiro é calculado", () => {
+    const metrics = applyMonthlyOverrides(roiFixture().current, {}, off());
+    expect(metrics.missing).toEqual([]);
+    expect([metrics.revenueCents, metrics.savingsCents, metrics.roiPercent]).toEqual([null, null, null]);
+    // Do que o Fechai controla, a exigência continua: expediente e comparecimento.
+    const partial = applyMonthlyOverrides(roiFixture().current, { attendanceUnknown: 2 }, { ...off(), humanHours: null });
+    expect(detectMonthlyPendencies(partial, { ...off(), humanHours: null }).map((p) => p.topic)).toEqual(["hours", "attendance"]);
+  });
+  it("revisão antiga sem a chave: ligado só se as premissas financeiras estavam completas", () => {
+    expect(financialEnabled(roiConfig())).toBe(true);
+    expect(financialEnabled(off())).toBe(false);
+    expect(financialEnabled({ ...roiConfig(), financialEnabled: false })).toBe(false);
+    expect(financialEnabled({ ...off(), financialEnabled: true })).toBe(true);
+  });
+  it("na central, ticket, equipe e mensalidade viram opcionais e ficam fora da solicitação", () => {
+    const config = { ...off(), humanHours: null };
+    const rows = buildPendencyBoard({ metrics: applyMonthlyOverrides(roiFixture().current, { attendanceUnknown: 2 }, config), config, monthName: "setembro", tracking: [] });
+    expect(FINANCIAL_TOPICS.map((topic) => rows.find((r) => r.topic === topic)!.status)).toEqual(["optional", "optional", "optional"]);
+    expect(rows.filter(isOpenPendency).map((r) => r.topic)).toEqual(["hours", "attendance"]);
+    // Sem dinheiro no relatório, a falta não "afeta" receita nem ROI.
+    expect(rows.find((r) => r.topic === "attendance")!.affects).toEqual(["Avaliações realizadas"]);
+    const text = buildPendencyRequest({ rows, clinicName: "Clínica", contactName: null, monthLabel: "setembro de 2026", dueAt: due, now: before, timezone: "America/Sao_Paulo", format: "whatsapp" });
+    expect(text).toContain("recepção atende"); expect(text).not.toMatch(/ticket|custo mensal/i);
+  });
+});
+
 describe("central de pendências do relatório mensal", () => {
   it("é a mesma regra do fechamento: missing sai de detectMonthlyPendencies", () => {
     const { config, metrics } = incomplete();
@@ -30,7 +60,7 @@ describe("central de pendências do relatório mensal", () => {
   });
 
   it("sem pendência de receita, a receita é calculada mesmo faltando economia", () => {
-    const config = { ...roiConfig(), attendantMonthlyCents: null };
+    const config = { ...roiConfig(), financialEnabled: true, attendantMonthlyCents: null };
     const metrics = applyMonthlyOverrides(roiFixture().current, {}, config);
     expect(metrics.missing).toHaveLength(1);
     expect(metrics.revenueCents).not.toBeNull();

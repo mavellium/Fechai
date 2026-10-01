@@ -27,6 +27,16 @@ número. Contas antigas continuam só com a Evolution.
 - `blocklist.ts` — números que o agente ignora (`isPhoneBlocked`,
   `canonicalPhone`, `listBlockedNumbers`). Ver abaixo.
 - `health.ts` — detecta número fora do ar (`checkTenantWhatsapp`, `scanWhatsappHealth`, `diagnose`), sincroniza `WhatsappInstance.status` com a realidade e garante periodicamente o webhook da Evolution.
+- `incidents.ts` — registro das quedas (`WhatsappIncident`), a base da
+  "disponibilidade do agente" do relatório mensal. `trackWhatsappIncident(health)`
+  é chamada pelo monitor a cada checagem e **nunca lança**: abre incidente só com
+  queda **confirmada pelo provedor** (`reachable` e conexão não aberta, com o
+  banco achando que estava conectada), fecha quando a conexão volta, e marca
+  `Tenant.uptimeTrackedSince` na primeira varredura. `silencioso` (suspeita) e
+  `indeterminado` (não deu para perguntar) não abrem nem fecham nada.
+  `closeWhatsappIncidents` também roda quando a pessoa desconecta pelo painel:
+  desligado por decisão não é queda. Mudança de schema: `db push` + `generate`
+  na web e no worker.
 
 ## Contratos expostos
 

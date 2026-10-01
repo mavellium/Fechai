@@ -18,7 +18,10 @@ import { formatBRL } from "@/lib/format";
 import { TIMEZONES } from "@/modules/scheduling/time";
 import { minuteLabel } from "@/modules/scheduling/weekly-availability";
 import type { MonthlyCaseCandidate, MonthlyMetrics, MonthlyReport } from "@/modules/reports/monthly";
-import { normalizeLabel, type MonthlyAssumptions } from "@/modules/reports/monthly-config";
+import { financialEnabled, normalizeLabel, type MonthlyAssumptions } from "@/modules/reports/monthly-config";
+import { NO_INCIDENT, executiveSummary, monthlyIncidents } from "@/modules/reports/monthly-executive";
+import { ACTION_RESULT_MAX, ACTION_STATUSES, ACTION_STATUS_LABEL, previousActionsProblem, type ActionStatus, type PreviousAction } from "@/modules/reports/monthly-previous-actions";
+import { PERIOD_LABEL, WEEKDAY_LABEL, caseFactItems } from "@/modules/reports/monthly-case";
 import { FEATURED_CASE_MAX, formatDuration, hoursPremise } from "@/modules/reports/monthly-time";
 import { monthlyOverridesSchema, type MonthlyOverrides } from "@/modules/reports/monthly-overrides";
 import type { MonthlyQuality, QualityKey } from "@/modules/reports/monthly-quality";
@@ -26,6 +29,7 @@ import { QualityBadge } from "@/app/(dashboard)/relatorios/MonthlyEvidence";
 import { HIGHLIGHTS_MAX, LIMITATIONS_NOTE_MAX, limitationFingerprint, unverifiedMetrics, type MonthlyLimitation } from "@/modules/reports/monthly-limitations";
 import { ANALYSIS_CONTEXT_MAX, draftAnalysisBase } from "@/modules/reports/monthly-analysis";
 import { NEXT_ACTIONS_MAX, hasNextPlan, type MonthlyNextAction } from "@/modules/reports/monthly-next-actions";
+import { ACCOUNT_OWNERS_MAX, PERSON_NAME_MAX, decisionMakerProblem, ownersFromText, samePerson } from "@/modules/reports/monthly-decision-maker";
 import { MonthlyMetricFields } from "./MonthlyMetricFields";
 import { MonthlyAgentImport } from "./MonthlyAgentImport";
 import { MonthlyClinicorpStatus } from "./MonthlyClinicorpStatus";
@@ -76,29 +80,33 @@ const pendenciesOf = (list: MonthlyLimitation[] = []) => list.filter((l) => !COV
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 type StepState = { done: boolean; hint: string };
-function stepStates(r: MonthlyReport): StepState[] {
+function stepStates(r: MonthlyReport, owners: string[]): StepState[] {
   const a = r.current, coverage = coverageOf(r.limitations), pending = pendenciesOf(r.limitations);
-  const unverified = [a.revenueCents, a.savingsCents, a.roiPercent].filter((v) => v === null).length;
-  const analysis = Boolean(r.adjustments && hasNextPlan(r) && r.decisionMaker);
+  // A âncora é a agenda; dinheiro só conta para o status com o retorno estimado ligado.
+  const anchorsOpen = (["scheduled", "attended", "conversations"] as const).filter((k) => r.quality?.[k]?.status === "pending").length;
+  const unverified = anchorsOpen + (financialEnabled(r.assumptions) ? [a.revenueCents, a.savingsCents, a.roiPercent].filter((v) => v === null).length : 0);
+  const decisor = !decisionMakerProblem(r, owners);
+  const analysis = Boolean(r.adjustments && hasNextPlan(r) && decisor && !previousActionsProblem(r.previousActions));
   return [
     // Fechado antes da lista de limitações: não há como dizer "completa".
     { done: Boolean(r.revision), hint: !r.revision ? "revisão não salva" : !r.limitations ? "sem registro" : coverage.length ? count(coverage.length, "aviso de cobertura", "avisos de cobertura") : "cobertura completa" },
     { done: pending.length === 0, hint: !r.limitations ? "sem registro" : pending.length ? count(pending.length, "pendência", "pendências") : "nada pendente" },
-    { done: unverified === 0, hint: unverified ? count(unverified, "valor não verificado", "valores não verificados") : "receita, economia e ROI" },
-    { done: analysis, hint: analysis ? "textos preenchidos" : "textos a escrever" },
+    { done: unverified === 0, hint: unverified ? count(unverified, "número não verificado", "números não verificados") : "agenda e atendimento" },
+    { done: analysis, hint: analysis ? "textos preenchidos" : !(r.adjustments && hasNextPlan(r)) ? "textos a escrever" : decisor ? "ações anteriores a avaliar" : "decisor a definir" },
     { done: r.status === "ready", hint: r.status !== "ready" ? "aguardando aprovação" : r.meetingAt ? "reunião registrada" : r.sentAt ? "enviado" : "fechado" },
   ];
 }
-function initialStep(r: MonthlyReport): StepIndex {
+function initialStep(r: MonthlyReport, owners: string[]): StepIndex {
   if (r.status === "ready") return 4;
-  const s = stepStates(r);
+  const s = stepStates(r, owners);
   if (!s[0].done) return 0;
   if (!s[1].done) return 1;
   if (!s[3].done) return 3;
   return 4;
 }
 
-type EditorProps = { tenantId: string; report: MonthlyReport; sources: MonthlyImportSources; caseCandidates?: MonthlyCaseCandidate[]; pendencyCenter?: ReactNode };
+/** `owners`: donos e sócios da conta (`Tenant.ownerNames`), os únicos que podem ser o decisor. */
+type EditorProps = { tenantId: string; report: MonthlyReport; sources: MonthlyImportSources; owners: string[]; caseCandidates?: MonthlyCaseCandidate[]; pendencyCenter?: ReactNode };
 
 /**
  * Guarda a etapa fora do editor: salvar muda a revisão, o editor remonta (a
@@ -106,13 +114,13 @@ type EditorProps = { tenantId: string; report: MonthlyReport; sources: MonthlyIm
  */
 export function MonthlyCloseWizard(props: EditorProps) {
   const r = props.report;
-  const [step, setStep] = useState<StepIndex>(() => initialStep(r));
+  const [step, setStep] = useState<StepIndex>(() => initialStep(r, props.owners));
   return <MonthlyRoiEditor key={`${r.month}:${r.status}:${r.revision ?? "new"}`} {...props} step={r.status === "ready" ? 4 : step} onStep={setStep} />;
 }
 
 type Check = { current: MonthlyMetrics; quality: MonthlyQuality; limitations: MonthlyLimitation[]; assumptions: MonthlyAssumptions; metricOverrides?: MonthlyOverrides; fresh: boolean };
 
-function MonthlyRoiEditor({ tenantId, report: r, sources, caseCandidates = [], pendencyCenter, step, onStep }: EditorProps & { step: StepIndex; onStep: (step: StepIndex) => void }) {
+function MonthlyRoiEditor({ tenantId, report: r, sources, owners, caseCandidates = [], pendencyCenter, step, onStep }: EditorProps & { step: StepIndex; onStep: (step: StepIndex) => void }) {
   const [defaults, setDefaults] = useState<MonthlyAiDraft>({ assumptions: r.assumptions, metricOverrides: r.metricOverrides ?? { current: {}, previous: {} }, adjustments: r.adjustments, nextMonth: r.nextMonth, decisionMaker: r.decisionMaker, highlights: r.highlights ?? "", limitationsNote: r.limitationsNote ?? "", nextActions: r.nextActions ?? [] });
   const c = defaults.assumptions;
   const [aiOpen, setAiOpen] = useState(false);
@@ -133,8 +141,26 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, caseCandidates = [], p
   const nextId = useRef(procedures.length);
   const [untyped, setUntyped] = useState(c.countUntypedAsEvaluations);
   const [statuses, setStatuses] = useState(c.completedStatusTypes);
+  // Retorno estimado (receita, economia, ROI): opcional, ligado só com as premissas conferidas.
+  const [financial, setFinancial] = useState(financialEnabled(c));
   // Controlado: preencher com a IA remonta o formulário, e o caso não passa por ela.
   const [featuredCase, setFeaturedCase] = useState(r.featuredCase ?? "");
+  // Decisor × contato operacional: também controlados, pelo mesmo motivo.
+  const [ownersText, setOwnersText] = useState(owners.join("\n"));
+  const [decisionMaker, setDecisionMaker] = useState(r.decisionMaker);
+  const [operationalContact, setOperationalContact] = useState(r.operationalContact ?? "");
+  const accountOwners = ownersFromText(ownersText);
+  // Só vale como decisor quem está na lista: nome de fora (o campo antigo era livre) vai vazio.
+  const chosenOwner = accountOwners.find((name) => samePerson(name, decisionMaker)) ?? "";
+  const savedDecisorProblem = decisionMakerProblem(r, owners);
+  // Ações do mês anterior: a lista vem do relatório anterior aprovado; aqui só o status e o resultado.
+  const [previousActions, setPreviousActions] = useState<PreviousAction[]>(r.previousActions ?? []);
+  const setPrevious = (index: number, patch: Partial<PreviousAction>) => setPreviousActions(previousActions.map((item, i) => i === index ? { ...item, ...patch } : item));
+  // Fatos do caso do mês: a conversa escolhida e a idade. Duração, dia e período são lidos no servidor.
+  const [caseConversation, setCaseConversation] = useState(r.caseFacts?.conversationId ?? "");
+  const [caseAge, setCaseAge] = useState(r.caseFacts?.age == null ? "" : String(r.caseFacts.age));
+  const chosenCase = caseCandidates.find((candidate) => candidate.conversationId === caseConversation);
+  const incidents = monthlyIncidents(r);
   const [error, setError] = useState<string | null>(null);
   const [actionFeedback, setActionFeedback] = useState<{ ok: boolean; error?: string; info?: string } | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
@@ -148,7 +174,7 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, caseCandidates = [], p
   const confirmNavigation = useUnsavedNavigation();
   const locked = r.status === "ready";
   const pending = busy || saving;
-  const states = stepStates(r);
+  const states = stepStates(r, owners);
   const act = (fn: () => Promise<{ ok: boolean; error?: string; info?: string }>) => start(async () => {
     try { setActionFeedback(await fn()); } catch { setActionFeedback({ ok: false, error: "Não foi possível salvar. Tente novamente." }); }
   });
@@ -160,7 +186,7 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, caseCandidates = [], p
     minutesPerConversation: readNumber(form.get("minutesPerConversation")), secondsPerMessage: readNumber(form.get("secondsPerMessage")),
     investmentCents: readNumber(form.get("investmentCents"), 100, true),
     procedureVariable: String(form.get("procedureVariable") ?? ""), evaluationTypes: String(form.get("evaluationTypes") ?? "").split("\n").map((v) => v.trim()).filter(Boolean),
-    countUntypedAsEvaluations: untyped, completedStatusTypes: statuses,
+    countUntypedAsEvaluations: untyped, completedStatusTypes: statuses, financialEnabled: financial,
     procedures: procedures.map((p) => ({ name: String(form.get(`procedure-${p.id}`) ?? ""), ticketCents: readNumber(form.get(`ticket-${p.id}`), 100, true), conversionBps: readNumber(form.get(`conversion-${p.id}`), 100) })),
   });
   const getAiDraft = (): MonthlyAiDraft => {
@@ -176,7 +202,7 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, caseCandidates = [], p
     const current = getAiDraft();
     if (JSON.stringify(current) !== JSON.stringify(basis)) throw new Error("A revisão mudou desde esta resposta. Envie uma nova pergunta para usar os dados atuais.");
     const next = applyMonthlyAiChanges(current, changes);
-    setDefaults(next); setImportedInvestment(null); setMetricOverrides(next.metricOverrides);
+    setDefaults(next); setImportedInvestment(null); setMetricOverrides(next.metricOverrides); setDecisionMaker(next.decisionMaker);
     setTimezone(next.assumptions.timezone);
     if (changes.some((change) => change.field === "assumptions.humanHours")) {
       setHoursConfirmed(false); setHoursOrigin("sugestão da IA");
@@ -242,7 +268,7 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, caseCandidates = [], p
   return <Card className="text-ink panel:text-white/85">
     <CardTitle action={<Badge tone={locked ? "success" : "neutral"}>{locked ? "Fechado" : "Rascunho"}</Badge>}>Fechamento do mês</CardTitle>
     <div className="flex flex-wrap items-start justify-between gap-4">
-      <div className="max-w-xl text-sm text-neutral panel:text-white/60"><p>{locked ? `Relatório disponível para a clínica${r.decisionMaker ? ` · decisor: ${r.decisionMaker}` : ""}.` : "Siga as etapas na ordem ou pule para qualquer uma. Nada trava o avanço: o que ficar sem evidência sai como limitação explícita no fechamento."}</p><p className="mt-1">Prazo de entrega: {new Intl.DateTimeFormat("pt-BR", { timeZone: c.timezone }).format(new Date(r.dueAt))}.</p></div>
+      <div className="max-w-xl text-sm text-neutral panel:text-white/60"><p>{locked ? `Relatório disponível para a clínica${r.decisionMaker ? ` · decisor (dono): ${r.decisionMaker}` : ""}${r.operationalContact ? ` · cópia: ${r.operationalContact}` : ""}.` : "Siga as etapas na ordem ou pule para qualquer uma. Nada trava o avanço: o que ficar sem evidência sai como limitação explícita no fechamento."}</p><p className="mt-1">Prazo de entrega: {new Intl.DateTimeFormat("pt-BR", { timeZone: c.timezone }).format(new Date(r.dueAt))}.</p></div>
       {!locked && <Button variant="outline" disabled={pending} onClick={() => setAiOpen(true)}><Sparkles size={15} aria-hidden />Perguntar à I.A</Button>}
     </div>
 
@@ -316,13 +342,21 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, caseCandidates = [], p
             <MonthlyClinicorpStatus report={loaded} />
             {[...new Map([...c.completedStatusTypes.map((type) => ({ type, description: type })), ...loaded.clinicorpStatusTypes].map((s) => [s.type, s])).values()].map((s) => <div key={s.type} className="flex items-center gap-3"><Switch label={`Comparecimento: ${s.description}`} disabled={pending || s.type.toUpperCase() === "CONFIRMED"} checked={statuses.includes(s.type)} onCheckedChange={(checked) => setStatuses(checked ? [...statuses, s.type] : statuses.filter((type) => type !== s.type))} /><span className="text-sm">{s.description}</span></div>)}<input type="hidden" name="completedStatusTypes" value={JSON.stringify(statuses)} />
           </section>
-          <section className="space-y-4 border-t border-ink/10 pt-6 panel:border-white/10"><CardTitle as="h3" hint="Campos vazios ficam pendentes até serem levantados com a clínica.">Investimento e equipe</CardTitle><div className="grid items-end gap-5 sm:grid-cols-2 xl:grid-cols-4">
+          <section className="space-y-4 border-t border-ink/10 pt-6 panel:border-white/10"><CardTitle as="h3" hint="Opcional. Sem ele, o relatório não mostra horas devolvidas.">Tempo devolvido à equipe</CardTitle><div className="grid items-end gap-5 sm:grid-cols-2">
+            {numberField("secondsPerMessage", "Tempo por mensagem (s)", c.secondsPerMessage, "Ler e responder cada mensagem que o agente atendeu, somado aos minutos de áudio ouvidos. Ex.: 30.")}
+            {numberField("minutesPerConversation", "Tempo humano por conversa (min)", c.minutesPerConversation, "Usado só enquanto o tempo por mensagem estiver vazio.")}
+          </div></section>
+          <section className="space-y-4 border-t border-ink/10 pt-6 panel:border-white/10">
+            <CardTitle as="h3" hint="O relatório mede atendimento, agendamento e comparecimento. O financeiro da clínica é opcional.">Retorno estimado (opcional)</CardTitle>
+            <div className="flex items-start gap-3"><Switch checked={financial} onCheckedChange={setFinancial} disabled={pending} label="Ativar retorno estimado" /><p className="text-sm">Ativar receita, economia e ROI. Ligue só com ticket, conversão e custo do atendente conferidos com a clínica.</p></div>
+            {!financial && <Alert>Desligado: o relatório não mostra receita, economia nem ROI, e a falta dessas premissas não é pendência nem limitação. O fechamento segue normalmente.</Alert>}
+          </section>
+          {/* Desligado, os campos seguem no formulário (ocultos) para o que já foi levantado não se perder. */}
+          <section hidden={!financial} className="space-y-4"><CardTitle as="h3" hint="Campos vazios viram limitação enquanto o retorno estimado estiver ligado.">Investimento e equipe</CardTitle><div className="grid items-end gap-5 sm:grid-cols-3">
             {moneyField("investmentCents", "Mensalidade do Fechai (R$)", c.investmentCents)}{moneyField("attendantMonthlyCents", "Custo mensal do atendente (R$)", c.attendantMonthlyCents)}
             {numberField("attendantMonthlyHours", "Carga mensal do atendente (h)", c.attendantMonthlyHours)}
-            {numberField("secondsPerMessage", "Tempo por mensagem (s)", c.secondsPerMessage, "Ler e responder cada mensagem que o agente atendeu. Somado aos minutos de áudio ouvidos, calcula a economia. Ex.: 30.")}
-            {numberField("minutesPerConversation", "Tempo humano por conversa (min)", c.minutesPerConversation, "Usado só enquanto o tempo por mensagem estiver vazio.")}
           </div>{r.investmentSource && <p className="text-xs text-neutral panel:text-white/55">Mensalidade carregada de: {r.investmentSource}. Confira o valor cobrado nesta competência antes de salvar.</p>}</section>
-          <section className="space-y-4 border-t border-ink/10 pt-6 panel:border-white/10"><CardTitle as="h3" hint="Conversão é a porcentagem das avaliações que viram tratamento.">Ticket e conversão por procedimento</CardTitle>
+          <section hidden={!financial} className="space-y-4 border-t border-ink/10 pt-6 panel:border-white/10"><CardTitle as="h3" hint="Conversão é a porcentagem das avaliações que viram tratamento.">Ticket e conversão por procedimento</CardTitle>
             {procedures.length === 0 && <p className="text-sm text-neutral panel:text-white/55">Adicione os procedimentos para estimar a receita.</p>}
             <div className="space-y-4">{procedures.map((p) => <div key={p.id} className="grid items-end gap-4 rounded-control border border-ink/10 p-4 panel:border-white/10 sm:grid-cols-[1fr_1fr_1fr_auto]">
               {/* Sem `required`: a seção pode estar oculta ao salvar de outra etapa, e o navegador recusaria o envio sem mostrar por quê. */}
@@ -335,37 +369,85 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, caseCandidates = [], p
         </div>
 
         {/* 3 · Validar resultados */}
-        <div hidden={step !== 2}><ResultsCheck check={check} investmentSource={loaded.investmentSource} onRecalculate={recalculate} pending={pending} /></div>
+        <div hidden={step !== 2}><ResultsCheck report={loaded} check={check} investmentSource={loaded.investmentSource} onRecalculate={recalculate} pending={pending} /></div>
 
         {/* 4 · Análise com IA */}
         <div hidden={step !== 3} className="space-y-6">
           <section className="space-y-4 rounded-control border border-ink/10 p-4 panel:border-white/10">
             <div className="flex items-center gap-2 text-sm font-medium"><Sparkles size={16} aria-hidden />Gerar a análise com IA</div>
-            <p className="text-sm text-neutral panel:text-white/60">A IA lê só os números agregados, o selo de cada um, as limitações e as alterações registradas no agente neste mês. Ela redige; você confere e salva. Número sem evidência nunca entra nos destaques, e melhoria sem registro não é inventada.</p>
+            <p className="text-sm text-neutral panel:text-white/60">A IA lê só os números agregados, o selo de cada um, as limitações e as alterações registradas no agente neste mês. Ela redige; você confere e salva. Número sem evidência nunca é citado, dinheiro só aparece com o retorno estimado ligado e melhoria sem registro não é inventada.</p>
             <Field label="Contexto para a IA (opcional)" htmlFor="roi-ai-context" hint="O que a Mavellium fez ou combinou com a clínica e o sistema não registra. Não vai para o relatório."><Textarea {...fieldProps("roi-ai-context", { hint: true })} value={aiContext} onChange={(e) => setAiContext(e.target.value)} maxLength={ANALYSIS_CONTEXT_MAX} rows={2} placeholder="Ex.: revisamos o tom das respostas e incluímos os preços de clareamento na base." /></Field>
-            <Button type="button" size="sm" loading={busy} disabled={pending} onClick={generateAnalysis}><Sparkles size={14} aria-hidden />Gerar resumo, limitações e próximas ações</Button>
+            <Button type="button" size="sm" loading={busy} disabled={pending} onClick={generateAnalysis}><Sparkles size={14} aria-hidden />Gerar ajustes, próximas ações e o que não saiu como planejado</Button>
             {analysisInfo && <Alert title="Rascunho preenchido">Confira o resumo, as limitações, os ajustes e as ações abaixo e salve a revisão.{analysisInfo.notes && ` ${analysisInfo.notes}`} <span className="opacity-75">IA: {analysisInfo.provider}.</span></Alert>}
           </section>
-          <Field label="Resumo do período" htmlFor="roi-highlights" hint={`Até ${HIGHLIGHTS_MAX} caracteres. Abre a página 1 do PDF: o valor entregue, os principais resultados e as limitações relevantes.`}><Textarea {...fieldProps("roi-highlights", { hint: true })} name="highlights" maxLength={HIGHLIGHTS_MAX} defaultValue={defaults.highlights} rows={5} /></Field>
+          <Field label="Resumo do período (opcional)" htmlFor="roi-highlights" hint={`Até ${HIGHLIGHTS_MAX} caracteres. Abre a análise detalhada, depois da página 1.`}><Textarea {...fieldProps("roi-highlights", { hint: true })} name="highlights" maxLength={HIGHLIGHTS_MAX} defaultValue={defaults.highlights} rows={5} /></Field>
           <div className="space-y-3">
-            <Field label="Limitações do fechamento" htmlFor="roi-limitationsNote" hint={`Até ${LIMITATIONS_NOTE_MAX} caracteres. Explica a lista abaixo ao decisor; a lista vai ao relatório de qualquer jeito.`}><Textarea {...fieldProps("roi-limitationsNote", { hint: true })} name="limitationsNote" maxLength={LIMITATIONS_NOTE_MAX} defaultValue={defaults.limitationsNote} rows={3} /></Field>
-            {limitations.length ? <ul className="list-disc space-y-1 pl-5 text-sm text-neutral panel:text-white/60">{limitations.map((l) => <li key={l.key}>{l.text}</li>)}</ul>
-              : <p className="text-sm text-neutral panel:text-white/55">Sem limitações na revisão salva: o texto não aparece no relatório.</p>}
+            <Field label="O que não saiu como planejado (opcional)" htmlFor="roi-limitationsNote" hint={`Até ${LIMITATIONS_NOTE_MAX} caracteres. A seção aparece sempre: mostra os incidentes comprovados abaixo e este texto. Escreva só o que aconteceu de fato e o sistema não registra; não invente problema para preencher.`}><Textarea {...fieldProps("roi-limitationsNote", { hint: true })} name="limitationsNote" maxLength={LIMITATIONS_NOTE_MAX} defaultValue={defaults.limitationsNote} rows={3} /></Field>
+            {incidents.length > 0 && <div><p className="text-sm font-medium">Incidentes comprovados pelos dados (entram sozinhos)</p><ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-neutral panel:text-white/60">{incidents.map((item) => <li key={item}>{item}</li>)}</ul></div>}
+            {limitations.length > 0 && <div><p className="text-sm font-medium">Limites dos dados deste mês (entram sozinhos)</p><ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-neutral panel:text-white/60">{limitations.map((l) => <li key={l.key}>{l.text}</li>)}</ul></div>}
+            {!incidents.length && !limitations.length && <p className="text-sm text-neutral panel:text-white/55">Sem incidente comprovado na revisão salva. Com o campo em branco, a seção dirá: “{NO_INCIDENT}”</p>}
           </div>
+          {previousActions.length > 0 && <section className="space-y-3">
+            <CardTitle as="h3" hint="Abrem o bloco “O que ajustamos no agente”. Fechar exige o status e o número que comprova em cada uma.">Ações combinadas no mês anterior</CardTitle>
+            <input type="hidden" name="previousActions" value={JSON.stringify(previousActions)} />
+            {previousActions.map((item, i) => <div key={item.action} className="space-y-3 rounded-control border border-ink/10 p-3 panel:border-white/10">
+              <p className="text-sm font-medium">{item.action}{item.owner && <span className="font-normal text-neutral panel:text-white/55"> · {item.owner}{item.indicator && ` · indicador: ${item.indicator}`}</span>}</p>
+              <div className="grid items-end gap-3 md:grid-cols-[14rem_1fr]">
+                <SelectMenu label={`Status da ação ${i + 1}`} value={item.status ?? ""} disabled={pending} onChange={(value) => setPrevious(i, { status: (ACTION_STATUSES as readonly string[]).includes(value) ? value as ActionStatus : null })}
+                  options={[{ value: "", label: "Como foi?" }, ...ACTION_STATUSES.map((status) => ({ value: status, label: ACTION_STATUS_LABEL[status] }))]} />
+                <Field label="O número que comprova" htmlFor={`roi-previous-${i}`}><Input {...fieldProps(`roi-previous-${i}`)} maxLength={ACTION_RESULT_MAX} value={item.result} onChange={(e) => setPrevious(i, { result: e.target.value })} placeholder="Ex.: faltas caíram de 31% para 22%" /></Field>
+              </div>
+            </div>)}
+          </section>}
           <div className="grid gap-5 lg:grid-cols-2"><Field label="O que ajustamos no agente" htmlFor="roi-adjustments" hint="Até 400 caracteres. Melhorias executadas neste mês."><Textarea {...fieldProps("roi-adjustments", { hint: true })} name="adjustments" maxLength={400} defaultValue={defaults.adjustments} rows={4} /></Field></div>
           <NextActionsFields defaults={defaults.nextActions} legacy={defaults.nextMonth} />
-          <Field label="Nome do decisor" htmlFor="roi-decisionMaker"><Input {...fieldProps("roi-decisionMaker")} name="decisionMaker" maxLength={100} defaultValue={defaults.decisionMaker} placeholder="Quem recebe e acompanha o resultado" /></Field>
-          <Field label="Caso do mês (opcional)" htmlFor="roi-featuredCase" hint={`Até ${FEATURED_CASE_MAX} caracteres. Escrito por você, nunca pela IA. Só o perfil genérico, como "paciente de 74 anos": sem nome, telefone ou e-mail. Nomes de contatos do mês são recusados ao salvar.`}>
+          <section className="space-y-4">
+            <CardTitle as="h3" hint="O relatório é de quem paga a mensalidade. Quem opera o painel recebe cópia.">Para quem vai o relatório</CardTitle>
+            <Field label="Donos e sócios da conta" htmlFor="roi-accountOwners" hint={`Um nome por linha, até ${ACCOUNT_OWNERS_MAX}. Fica na conta e vale para os próximos meses. Só quem decide a mensalidade: recepção e gerência não entram aqui.`}>
+              <Textarea {...fieldProps("roi-accountOwners", { hint: true })} value={ownersText} onChange={(e) => setOwnersText(e.target.value)} rows={2} placeholder="Ex.: Dra. Ana Souza" />
+            </Field>
+            <input type="hidden" name="accountOwners" value={JSON.stringify(accountOwners)} />
+            <div className="grid items-start gap-5 lg:grid-cols-2">
+              <div className="space-y-1.5">
+                <p className="text-sm font-medium">Decisor (dono)</p>
+                <SelectMenu label="Decisor (dono)" name="decisionMaker" value={chosenOwner} onChange={setDecisionMaker} disabled={pending || accountOwners.length === 0}
+                  options={[{ value: "", label: accountOwners.length ? "Escolha um dono ou sócio" : "Informe os donos e sócios acima" }, ...accountOwners.map((name) => ({ value: name, label: name }))]} />
+                <p className="text-xs text-neutral panel:text-white/55">Recebe o relatório e a reunião de 30 min.</p>
+              </div>
+              <Field label="Contato operacional (recepção)" htmlFor="roi-operationalContact" hint="Opcional. Recebe cópia do relatório; não substitui o decisor.">
+                <Input {...fieldProps("roi-operationalContact", { hint: true })} name="operationalContact" maxLength={PERSON_NAME_MAX} value={operationalContact} onChange={(e) => setOperationalContact(e.target.value)} placeholder="Quem usa o painel no dia a dia" />
+              </Field>
+            </div>
+            {decisionMaker.trim() && !chosenOwner && <Alert tone="warn" title="Decisor a corrigir">“{decisionMaker.trim()}” não está entre os donos e sócios da conta. Se é quem opera o painel, informe como contato operacional e escolha o dono ou sócio como decisor.</Alert>}
+            {chosenOwner && samePerson(chosenOwner, operationalContact) && <Alert tone="warn">O decisor e o contato operacional são a mesma pessoa. O decisor é o dono ou sócio; a recepção recebe cópia.</Alert>}
+          </section>
+          <Field label="Caso do mês (opcional)" htmlFor="roi-featuredCase" hint={`Até ${FEATURED_CASE_MAX} caracteres. Escrito por você, nunca pela IA. Pode ser de quem não agendou: o valor está no tempo e na paciência que o agente absorveu. Só o perfil genérico, como "paciente de 74 anos", com dia da semana e período: sem nome, telefone, e-mail ou data exata, que são recusados ao salvar.`}>
             <Textarea {...fieldProps("roi-featuredCase", { hint: true })} name="featuredCase" maxLength={FEATURED_CASE_MAX} value={featuredCase} onChange={(e) => setFeaturedCase(e.target.value)} rows={3}
-              placeholder="Ex.: Uma paciente de 74 anos enviou 2 áudios de quase 5 minutos; o agente ouviu tudo, respondeu com paciência e deixou o retorno combinado." />
+              placeholder="Ex.: Uma paciente de 76 anos mandou dois áudios num sábado à noite; o agente ouviu tudo, respondeu no ritmo dela e entendeu que ela não quer agendar agora." />
           </Field>
-          {caseCandidates.length > 0 && <div className="rounded-control border border-ink/10 p-4 panel:border-white/10">
-            <p className="text-sm font-medium">Conversas com áudios longos neste mês</p>
-            <p className="mt-1 text-xs text-neutral panel:text-white/55">Para abrir, use “Entrar como” na conta do cliente. Leia a conversa antes de escrever o caso.</p>
-            <ul className="mt-3 space-y-2">{caseCandidates.map((candidate) => <li key={candidate.conversationId} className="flex flex-wrap items-center justify-between gap-2 text-sm">
-              <span className="tabular-nums">{new Intl.DateTimeFormat("pt-BR", { timeZone: c.timezone, day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(candidate.firstAt))} · {candidate.audios.length} {candidate.audios.length === 1 ? "áudio longo" : "áudios longos"}: {candidate.audios.map((s) => formatDuration(s)).join(", ")}</span>
-              <a href={`/conversas?id=${candidate.conversationId}`} target="_blank" rel="noreferrer" className="rounded-sm text-iris underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-iris">Abrir conversa</a>
-            </li>)}</ul>
+          {/* O formulário só diz qual conversa e a idade: duração dos áudios, dia e período são lidos no servidor. */}
+          <input type="hidden" name="caseConversationId" value={caseConversation} />
+          <input type="hidden" name="caseAge" value={caseConversation ? caseAge : ""} />
+          {(caseCandidates.length > 0 || caseConversation) && <div className="space-y-3 rounded-control border border-ink/10 p-4 panel:border-white/10">
+            <div><p className="text-sm font-medium">Fatos do caso: escolha a conversa</p>
+              <p className="mt-1 text-xs text-neutral panel:text-white/55">O relatório mostra a idade, a duração de cada áudio, o dia da semana e o período da conversa escolhida. Nunca o nome, o telefone ou a data. Para abrir, use “Entrar como” na conta do cliente e leia a conversa antes de escrever.</p></div>
+            <ul className="space-y-2">{caseCandidates.map((candidate) => {
+              const selected = candidate.conversationId === caseConversation;
+              return <li key={candidate.conversationId} className={cn("flex flex-wrap items-center justify-between gap-2 rounded-control border p-2 text-sm", selected ? "border-iris/60 bg-iris/10" : "border-transparent")}>
+                <span className="tabular-nums">{new Intl.DateTimeFormat("pt-BR", { timeZone: c.timezone, day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(candidate.firstAt))} · {WEEKDAY_LABEL[candidate.weekday]} {PERIOD_LABEL[candidate.period]} · {candidate.audios.length} {candidate.audios.length === 1 ? "áudio longo" : "áudios longos"}: {candidate.audios.map((s) => formatDuration(s)).join(", ")} · {candidate.scheduled ? "agendou" : "não agendou"}</span>
+                <span className="flex items-center gap-3">
+                  <a href={`/conversas?id=${candidate.conversationId}`} target="_blank" rel="noreferrer" className="rounded-sm text-iris underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-iris">Abrir conversa</a>
+                  <Button type="button" size="sm" variant={selected ? "outline" : "ghost"} aria-pressed={selected} disabled={pending} onClick={() => setCaseConversation(selected ? "" : candidate.conversationId)}>{selected ? "Tirar do caso" : "Usar no caso"}</Button>
+                </span>
+              </li>;
+            })}</ul>
+            {caseConversation && <div className="grid items-end gap-4 sm:grid-cols-[10rem_1fr]">
+              <Field label="Idade (anos)" htmlFor="roi-caseAge" hint="Como o contato disse. Em branco, não aparece."><Input {...fieldProps("roi-caseAge", { hint: true })} inputMode="numeric" maxLength={3} value={caseAge} onChange={(e) => setCaseAge(e.target.value.replace(/\D/g, ""))} placeholder="Ex.: 76" /></Field>
+              <p className="text-sm text-neutral panel:text-white/65">{chosenCase
+                ? <>Vai ao relatório: <span className="text-ink panel:text-white/90">{caseFactItems({ conversationId: "", age: caseAge ? Number(caseAge) : null, audioSeconds: chosenCase.audios, weekday: chosenCase.weekday, period: chosenCase.period, scheduled: chosenCase.scheduled }).join(" · ")}</span></>
+                : r.caseFacts ? <>Fatos salvos: <span className="text-ink panel:text-white/90">{caseFactItems(r.caseFacts).join(" · ")}</span>. A conversa saiu da lista de sugestões; ao salvar, os fatos são lidos dela de novo.</> : null}
+                {" "}<button type="button" className="rounded-sm text-iris underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-iris" onClick={() => setCaseConversation("")}>Remover os fatos</button></p>
+            </div>}
           </div>}
         </div>
 
@@ -390,16 +472,20 @@ function MonthlyRoiEditor({ tenantId, report: r, sources, caseCandidates = [], p
       {!locked && <ul className="space-y-1 text-sm">{[
         [!r.partial, r.partial ? "O mês ainda está em andamento: o fechamento abre no mês seguinte." : "Mês encerrado."],
         [Boolean(r.revision), r.revision ? "Revisão salva." : "Salve a revisão."],
-        [Boolean(r.decisionMaker && r.adjustments && hasNextPlan(r)), r.decisionMaker && r.adjustments && hasNextPlan(r) ? "Decisor, ajustes e próximas ações preenchidos." : "Preencha decisor, ajustes e as próximas ações na etapa 4."],
+        [!savedDecisorProblem, savedDecisorProblem ? `${savedDecisorProblem} Corrija na etapa 4.` : `Decisor (dono): ${r.decisionMaker}${r.operationalContact ? ` · cópia para o contato operacional: ${r.operationalContact}` : ""}.`],
+        [Boolean(r.adjustments && hasNextPlan(r)), r.adjustments && hasNextPlan(r) ? "Ajustes e próximas ações preenchidos." : "Preencha ajustes e as próximas ações na etapa 4."],
+        [!previousActionsProblem(r.previousActions), previousActionsProblem(r.previousActions) ?? (r.previousActions?.length ? "Ações do mês anterior avaliadas, com o número que comprova." : "Sem ações combinadas no relatório anterior para avaliar.")],
+        [true, incidents.length || limitations.length || r.limitationsNote ? "\"O que não saiu como planejado\": só o que os dados comprovam e o texto da revisão." : `"O que não saiu como planejado" dirá: ${NO_INCIDENT}`],
       ].map(([ok, label]) => <li key={String(label)} className="flex items-center gap-2"><span aria-hidden className={ok ? "text-success" : "text-warn"}>{ok ? "✓" : "•"}</span>{label}</li>)}</ul>}
       <div className="flex flex-wrap items-center gap-3">
         <Button type="button" variant="outline" size="sm" aria-expanded={preview} aria-controls="roi-pdf-preview" onClick={() => setPreview(!preview)}><Eye size={14} aria-hidden />{preview ? "Fechar prévia" : "Visualizar PDF"}</Button>
         <ButtonLink href={pdfHref} variant="outline" size="sm"><Download size={14} aria-hidden />Baixar PDF{locked ? "" : " · rascunho"}</ButtonLink>
         {!locked ? <Button size="sm" loading={busy} disabled={pending || r.partial || (limitations.length > 0 && !acknowledged)}
           onClick={() => confirmNavigation(() => act(() => finalizeMonthlyRoi(tenantId, r.month, acknowledged ? limitationFingerprint(limitations) : [])))}>{limitations.length ? "Aprovar com cobertura parcial" : "Aprovar e fechar"}</Button> : <>
-          <Button size="sm" disabled={pending || Boolean(r.sentAt)} loading={busy} onClick={() => act(() => recordMonthlyDelivery(tenantId, r.month, "sent"))}>{r.sentAt ? "Envio registrado" : "Registrar envio ao decisor"}</Button><Button size="sm" variant="outline" disabled={pending || !r.sentAt || Boolean(r.meetingAt)} onClick={() => act(() => recordMonthlyDelivery(tenantId, r.month, "meeting"))}>{r.meetingAt ? "Reunião registrada" : "Registrar reunião"}</Button>{!r.sentAt && <Button size="sm" variant="ghost" disabled={pending} onClick={() => act(() => reopenMonthlyRoi(tenantId, r.month))}>Reabrir revisão</Button>}
+          <Button size="sm" disabled={pending || Boolean(r.sentAt)} loading={busy} onClick={() => act(() => recordMonthlyDelivery(tenantId, r.month, "sent"))}>{r.sentAt ? "Envio registrado" : "Registrar envio ao decisor"}</Button><Button size="sm" variant="outline" disabled={pending || !r.sentAt || Boolean(r.meetingAt)} onClick={() => act(() => recordMonthlyDelivery(tenantId, r.month, "meeting"))}>{r.meetingAt ? "Reunião registrada" : "Registrar reunião com o decisor"}</Button>{!r.sentAt && <Button size="sm" variant="ghost" disabled={pending} onClick={() => act(() => reopenMonthlyRoi(tenantId, r.month))}>Reabrir revisão</Button>}
         </>}
       </div>
+      {locked && !r.sentAt && savedDecisorProblem && <Alert tone="warn" title="Decisor a corrigir antes do envio">{savedDecisorProblem} Reabra a revisão e escolha o dono ou sócio.</Alert>}
       {preview && <div id="roi-pdf-preview" className="overflow-hidden rounded-control border border-ink/10 panel:border-white/10">
         <iframe src={`${pdfHref}&ver=1`} title={`Prévia do PDF de ${r.label}`} className="h-[80vh] w-full bg-white" />
       </div>}
@@ -453,12 +539,19 @@ function CoverageCheck({ report }: { report: MonthlyReport }) {
   </section>;
 }
 
-/** Etapa 3: receita, economia e ROI com as premissas que os produziram. */
-function ResultsCheck({ check, investmentSource, onRecalculate, pending }: { check: Check; investmentSource?: string; onRecalculate: () => void; pending: boolean }) {
+/**
+ * Etapa 3: os números da página 1 (agenda primeiro) com o selo e o motivo de
+ * cada um. Receita, economia e ROI só aparecem com o retorno estimado ligado.
+ */
+function ResultsCheck({ report, check, investmentSource, onRecalculate, pending }: { report: MonthlyReport; check: Check; investmentSource?: string; onRecalculate: () => void; pending: boolean }) {
   const a = check.current, c = check.assumptions, q = check.quality;
-  const money = (v: number | null) => v === null ? "Não verificado" : formatBRL(v);
+  const exec = executiveSummary({ ...report, current: check.current, assumptions: c, quality: q, limitations: check.limitations });
+  const financial = financialEnabled(c);
+  const money = (v: number | null) => v === null ? "Não calculado" : formatBRL(v);
   const costPerHour = c.attendantMonthlyCents !== null && c.attendantMonthlyHours ? Math.round(c.attendantMonthlyCents / c.attendantMonthlyHours) : null;
-  const reasons = (metric: QualityKey) => q[metric]?.status === "pending" ? q[metric]!.reasons : [];
+  const reasons = (metric: QualityKey) => q[metric]?.reasons ?? [];
+  const pendingReasons = (metric: QualityKey) => q[metric]?.status === "pending" ? q[metric]!.reasons : [];
+  const anchors = exec.kpis.map((kpi) => ({ metric: kpi.key, label: kpi.label, value: kpi.value, lines: [kpi.hint, ...reasons(kpi.key)] }));
   const rows: { metric: QualityKey; label: string; value: string; lines: string[] }[] = [
     { metric: "revenue", label: "Receita estimada", value: money(a.revenueCents), lines: [
       `${a.attended.outside} ${a.attended.outside === 1 ? "avaliação realizada" : "avaliações realizadas"} de contatos que chegaram fora do expediente${c.humanHours ? "" : " (expediente não conferido)"}.`,
@@ -468,31 +561,35 @@ function ResultsCheck({ check, investmentSource, onRecalculate, pending }: { che
           ? `${p.name}: ${p.attendedOutside} × ${(premise.conversionBps / 100).toLocaleString("pt-BR")}% × ${formatBRL(premise.ticketCents)} = ${formatBRL(p.revenueCents ?? 0)}`
           : `${p.name}: ${p.attendedOutside} realizadas, sem ticket ou conversão.`;
       }),
-      ...reasons("revenue"),
+      ...pendingReasons("revenue"),
     ] },
     { metric: "savings", label: "Economia estimada", value: money(a.savingsCents), lines: [
       `Horas devolvidas: ${hoursPremise({ current: a, assumptions: c, metricOverrides: check.metricOverrides })}${a.assumedHours === null ? "" : ` = ${formatDuration(a.assumedHours * 3600)}`}.`,
       `Custo/hora do atendente: ${costPerHour === null ? "não informado" : `${formatBRL(c.attendantMonthlyCents!)} ÷ ${c.attendantMonthlyHours} h = ${formatBRL(costPerHour)}`}.`,
-      ...reasons("savings"),
+      ...pendingReasons("savings"),
     ] },
-    { metric: "investment", label: "Investimento mensal", value: money(a.investmentCents), lines: [investmentSource ? `${investmentSource}, a conferir nesta competência.` : "Mensalidade informada na revisão.", ...reasons("investment")] },
-    { metric: "roi", label: "ROI do mês", value: a.roiPercent === null ? "Não verificado" : `${a.roiPercent.toLocaleString("pt-BR")}%`, lines: [
+    { metric: "investment", label: "Investimento mensal", value: money(a.investmentCents), lines: [investmentSource ? `${investmentSource}, a conferir nesta competência.` : "Mensalidade informada na revisão.", ...pendingReasons("investment")] },
+    { metric: "roi", label: "ROI do mês", value: a.roiPercent === null ? "Não calculado" : `${a.roiPercent.toLocaleString("pt-BR")}%`, lines: [
       a.roiPercent !== null && a.revenueCents !== null && a.savingsCents !== null && a.investmentCents
         ? `(${formatBRL(a.revenueCents)} + ${formatBRL(a.savingsCents)} − ${formatBRL(a.investmentCents)}) ÷ ${formatBRL(a.investmentCents)}`
         : "(receita + economia − investimento) ÷ investimento: precisa dos três.",
     ] },
   ];
+  const grid = (items: typeof rows) => <div className="grid gap-4 lg:grid-cols-2">{items.map((row) => <div key={row.metric} className="rounded-control border border-ink/10 p-4 panel:border-white/10">
+    <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm font-medium">{row.label}</p><QualityBadge all quality={q[row.metric]} /></div>
+    <p className="mt-1 font-display text-2xl font-semibold tabular-nums">{row.value}</p>
+    <ul className="mt-2 space-y-1 text-xs leading-relaxed text-neutral panel:text-white/60">{row.lines.map((line, i) => <li key={i}>{line}</li>)}</ul>
+  </div>)}</div>;
   return <section className="space-y-4">
     <div className="flex flex-wrap items-start justify-between gap-3">
-      <div><CardTitle as="h3" hint="Os valores são estimativas: somam só o que tem evidência nos registros.">Validar os resultados</CardTitle>
+      <div><CardTitle as="h3" hint="São os quatro números da página 1. A âncora do relatório é a agenda: avaliações agendadas e realizadas.">Validar os resultados</CardTitle>
         <p className="text-sm text-neutral panel:text-white/60">{check.fresh ? "Recalculado agora com os dados da tela, ainda não salvos." : "Calculado com a revisão salva. Recalcule depois de mudar premissas ou indicadores."}</p></div>
       <Button type="button" size="sm" variant="outline" loading={pending} onClick={onRecalculate}><RefreshCw size={14} aria-hidden />Recalcular com os dados da tela</Button>
     </div>
-    <div className="grid gap-4 lg:grid-cols-2">{rows.map((row) => <div key={row.metric} className="rounded-control border border-ink/10 p-4 panel:border-white/10">
-      <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm font-medium">{row.label}</p><QualityBadge quality={q[row.metric]} /></div>
-      <p className="mt-1 font-display text-2xl font-semibold tabular-nums">{row.value}</p>
-      <ul className="mt-2 space-y-1 text-xs leading-relaxed text-neutral panel:text-white/60">{row.lines.map((line, i) => <li key={i}>{line}</li>)}</ul>
-    </div>)}</div>
+    {grid(anchors)}
+    {financial ? <><CardTitle as="h3" hint="Estimativas: somam só o que tem evidência nos registros. O bloco só vai ao relatório com os três valores calculados.">Retorno estimado</CardTitle>{grid(rows)}
+      {!exec.financial && <Alert tone="warn">O retorno estimado está ligado, mas ainda não dá para calcular os três valores. Enquanto isso, o bloco não aparece no painel nem no PDF.</Alert>}</>
+      : <Alert>Retorno estimado desligado: receita, economia e ROI não aparecem no painel nem no PDF, e a falta de ticket, conversão ou custo não é pendência. Para incluir, ative na etapa 2.</Alert>}
     {check.limitations.length > 0 && <p className="text-sm text-neutral panel:text-white/60">{count(check.limitations.length, "limitação segue", "limitações seguem")} nesta revisão. Dá para fechar assim: o que não tem evidência vai como não verificado.</p>}
   </section>;
 }

@@ -1,6 +1,7 @@
 import type { MonthlyReport } from "./monthly";
-import { AFFECTED_METRIC_LABELS, detectMonthlyPendencies, PENDENCY_TOPICS, TOPIC_DEFS } from "./monthly-pendencies";
-import { QUALITY_KEY_LABEL, QUALITY_KEYS } from "./monthly-quality";
+import { AFFECTED_METRIC_LABELS, affectedLabels, detectMonthlyPendencies, PENDENCY_TOPICS } from "./monthly-pendencies";
+import { financialEnabled } from "./monthly-config";
+import { clinicorpReadFailed, QUALITY_KEY_LABEL, QUALITY_KEYS } from "./monthly-quality";
 
 /*
  * Limitações do fechamento mensal.
@@ -21,7 +22,7 @@ import { QUALITY_KEY_LABEL, QUALITY_KEYS } from "./monthly-quality";
  */
 
 export type MonthlyLimitation = { key: string; text: string; affects: string[] };
-type Source = Pick<MonthlyReport, "current" | "assumptions" | "clinicorpError">;
+type Source = Pick<MonthlyReport, "current" | "assumptions" | "clinicorpError"> & Partial<Pick<MonthlyReport, "clinicorpIntegrationState">>;
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
@@ -31,11 +32,11 @@ export function monthlyLimitations(r: Source): MonthlyLimitation[] {
   const pendencies = detectMonthlyPendencies(a, c);
   for (const topic of PENDENCY_TOPICS) {
     const texts = pendencies.filter((p) => p.topic === topic).map((p) => p.text);
-    if (texts.length) found.push({ key: topic, text: texts.join(" "), affects: TOPIC_DEFS[topic].affects.map((m) => AFFECTED_METRIC_LABELS[m]) });
+    if (texts.length) found.push({ key: topic, text: texts.join(" "), affects: affectedLabels(topic, c) });
   }
   if (!a.trackingComplete) found.push({ key: "tracking", affects: ["Leads qualificados", "Transbordos", "Perguntas sem resposta"],
     text: "Só eventos registrados depois da implantação: o histórico anterior não foi medido e não significa zero." });
-  if (r.clinicorpError) found.push({ key: "clinicorp", affects: ["Avaliações realizadas"],
+  if (clinicorpReadFailed(r)) found.push({ key: "clinicorp", affects: ["Avaliações realizadas"],
     text: "A agenda do Clinicorp não pôde ser lida: comparecimentos vinculados ficaram sem confirmação." });
   // Sem expediente, dentro/fora inteiro já é a pendência "hours".
   const noArrival = [
@@ -45,8 +46,13 @@ export function monthlyLimitations(r: Source): MonthlyLimitation[] {
   if (c.humanHours && noArrival.length) found.push({ key: "arrival", affects: [AFFECTED_METRIC_LABELS.classification],
     text: `Sem horário de chegada do contato: ${noArrival.join(" e ")}, fora da divisão dentro/fora.` });
   if (a.time?.unmeasuredAudios) found.push({ key: "audio",
-    affects: c.secondsPerMessage != null ? ["Horas devolvidas", "Economia estimada"] : ["Áudios ouvidos"],
+    affects: c.secondsPerMessage != null ? ["Horas devolvidas", ...(financialEnabled(c) ? ["Economia estimada"] : [])] : ["Áudios ouvidos"],
     text: `${plural(a.time.unmeasuredAudios, "áudio", "áudios")} sem duração medida: entram só com o tempo de resposta.` });
+  // `undefined` é snapshot antigo ou leitura indisponível: nada a dizer.
+  if (a.availability === null) found.push({ key: "uptime", affects: ["Disponibilidade do agente"],
+    text: "A conexão do WhatsApp ainda não era monitorada com registro de queda neste mês: a disponibilidade não foi medida." });
+  else if (a.availability?.partial) found.push({ key: "uptime", affects: ["Disponibilidade do agente"],
+    text: `A disponibilidade foi medida só a partir de ${new Intl.DateTimeFormat("pt-BR", { timeZone: c.timezone, day: "2-digit", month: "2-digit" }).format(new Date(a.availability.measuredFrom))}, quando o registro de quedas começou.` });
   return found;
 }
 

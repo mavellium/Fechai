@@ -34,6 +34,10 @@ export const monthlyAssumptionsSchema = z.object({
     ticketCents: nullableNumber(1_000_000_000).refine((v) => v === null || Number.isInteger(v)),
     conversionBps: nullableNumber(10_000).refine((v) => v === null || Number.isInteger(v)),
   })).max(12).refine((rows) => new Set(rows.map((p) => normalizeLabel(p.name))).size === rows.length, "Procedimento duplicado."),
+  // Retorno estimado (receita, economia, ROI) é opcional: só existe com ticket,
+  // conversão e custo do atendente conferidos com a clínica. Ausente = revisão
+  // anterior à chave; ver `financialEnabled`.
+  financialEnabled: z.boolean().optional(),
 });
 export type MonthlyAssumptions = z.infer<typeof monthlyAssumptionsSchema>;
 export const EMPTY_ASSUMPTIONS: MonthlyAssumptions = {
@@ -41,6 +45,21 @@ export const EMPTY_ASSUMPTIONS: MonthlyAssumptions = {
   attendantMonthlyHours: null, minutesPerConversation: null, secondsPerMessage: null, investmentCents: null,
   procedureVariable: "procedimento", evaluationTypes: ["Avaliação"], countUntypedAsEvaluations: false, completedStatusTypes: [], procedures: [],
 };
+/**
+ * O relatório mede o que o Fechai controla (atendimento, agendamento,
+ * comparecimento); o financeiro da clínica é opcional. Desligado, receita,
+ * economia e ROI não são calculados, não aparecem e a falta de premissa
+ * financeira não é pendência nem limitação.
+ *
+ * Revisão salva antes da chave (e snapshot já fechado): vale o que ela tinha —
+ * ligado só se as premissas financeiras estavam completas, para o relatório
+ * entregue com ROI continuar mostrando o ROI e o incompleto parar de mostrar
+ * "pendente".
+ */
+export function financialEnabled(config: MonthlyAssumptions): boolean {
+  return config.financialEnabled ?? (config.attendantMonthlyCents !== null && Boolean(config.attendantMonthlyHours)
+    && config.procedures.length > 0 && config.procedures.every((p) => p.ticketCents !== null && p.conversionBps !== null));
+}
 export function parseMonthlyAssumptions(raw: unknown): MonthlyAssumptions {
   const result = monthlyAssumptionsSchema.safeParse(raw);
   return result.success ? result.data : { ...EMPTY_ASSUMPTIONS };

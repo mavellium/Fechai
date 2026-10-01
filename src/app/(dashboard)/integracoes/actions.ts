@@ -14,6 +14,7 @@ import {
   WHATSAPP_PROVIDER_SELECT,
 } from "@/modules/whatsapp/meta-config";
 import { isWhatsappProviderName, stampLegacyConversations } from "@/modules/whatsapp/instances";
+import { closeWhatsappIncidents } from "@/modules/whatsapp/incidents";
 import {
   MAX_BLOCKED_NUMBERS,
   canonicalPhone,
@@ -415,6 +416,8 @@ export async function disconnectWhatsapp(requested: string): Promise<WhatsappCon
     where: instanceKey(tenantId, requested),
     data: { status: "disconnected" },
   });
+  // Desligado pelo painel é decisão, não falha: uma queda em aberto termina aqui.
+  await closeWhatsappIncidents(tenantId, requested);
 
   // Não revertível: religar o WhatsApp exige ler um QR code novo no aparelho,
   // e nenhum campo do banco faz isso. O evento registra o fato — a tela do

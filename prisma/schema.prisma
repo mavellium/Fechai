@@ -45,6 +45,13 @@ model Tenant {
   // limite de agentes e ações continuam vindo do plano, como antes.
   priceCentsOverride Int?
 
+  // Donos e sócios da clínica: quem decide a mensalidade. O decisor do
+  // relatório mensal de ROI só pode sair desta lista
+  // (`modules/reports/monthly-decision-maker.ts`). Não é `User.role = OWNER`:
+  // esse é o login da conta, que costuma ser o da recepção. Mantida pela
+  // Mavellium na revisão do relatório; vazia = nenhum relatório fecha.
+  ownerNames String[] @default([])
+
   // Fim do período de teste do plano grátis. O FREE é um trial por tempo: a
   // conta responde até `messagesPerMonth` do plano E até esta data — o que
   // vier primeiro. Passou da data, a IA cala e só volta assinando um plano
@@ -144,6 +151,12 @@ model Tenant {
   serviceArea       TenantServiceArea?
   conversationInsights ConversationInsight[]
   reportTrackingStartedAt DateTime @default(now())
+  /// Desde quando a conexão do WhatsApp é monitorada com registro de queda
+  /// (`WhatsappIncident`). Gravado pelo monitor de saúde na primeira varredura;
+  /// null = nunca medido. O relatório mensal só mostra a disponibilidade do
+  /// período coberto: sem medição é "não medido", jamais 100% presumido.
+  uptimeTrackedSince DateTime?
+  whatsappIncidents WhatsappIncident[]
 }
 
 /// Pergunta que o agente não soube responder (P-87), agrupada por semelhança.
@@ -292,7 +305,11 @@ model MonthlyRoiReport {
   assumptions  Json
   adjustments  String @default("")
   nextMonth    String @default("")
+  /// Dono ou sócio que decide a mensalidade: recebe o relatório e a reunião.
+  /// Fechar exige que esteja em `Tenant.ownerNames`.
   decisionMaker String @default("")
+  /// Quem opera o painel na clínica (recepção): recebe cópia, nunca é o decisor.
+  operationalContact String @default("")
   /// Caso real do mês, escrito pela Mavellium só com o perfil genérico
   /// ("paciente de 74 anos"). Nome, telefone e e-mail são recusados ao salvar.
   featuredCase String @default("")
@@ -306,6 +323,16 @@ model MonthlyRoiReport {
   /// Explicação das limitações do fechamento. A LISTA das limitações não mora
   /// aqui: é calculada (`monthly-limitations.ts`) e congelada no snapshot.
   limitationsNote String @default("")
+  /// Ações combinadas no relatório do mês anterior, avaliadas neste:
+  /// `{ action, owner, indicator, status, result }` (`monthly-previous-actions.ts`).
+  /// As ações vêm do snapshot anterior; aqui ficam o status e o número que comprova.
+  previousActions Json @default("[]")
+  /// Fatos medidos do caso do mês (`monthly-case.ts`): idade informada, duração
+  /// de cada áudio, dia da semana e período. Nunca nome, telefone ou data exata.
+  caseFacts    Json?
+  /// Quantas vezes este relatório foi aprovado. Cada fechamento gera uma versão;
+  /// o PDF do cliente sai só do snapshot aprovado e mostra o número dela.
+  approvalVersion Int @default(0)
   status       String @default("draft") // draft | ready
   snapshot     Json?
   preparedBy   String?
@@ -710,6 +737,24 @@ model WhatsappInstance {
 
   @@unique([tenantId, provider])
   @@index([provider, externalId])
+}
+
+/// Queda comprovada de uma conexão do WhatsApp, aberta e fechada pelo monitor
+/// de saúde (`modules/whatsapp/incidents.ts`). Base da "disponibilidade do
+/// agente" no relatório mensal. Só o que o provedor confirmou: silêncio
+/// suspeito não vira incidente. `endedAt` null = ainda fora do ar.
+model WhatsappIncident {
+  id        String    @id @default(cuid())
+  tenantId  String
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  provider  String // evolution | meta
+  kind      String // desconectado | sumiu
+  startedAt DateTime
+  endedAt   DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([tenantId, startedAt])
+  @@index([tenantId, provider, endedAt])
 }
 
 model Lead {

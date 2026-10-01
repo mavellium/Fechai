@@ -2,6 +2,68 @@
 
 Uma linha por milestone concluído (mais recente no topo).
 
+## Relatório mensal: modelo revisado (todos os leads, tudo que é mensurável) — 2026-10-01
+
+Decisões do Vinícius (30/09). Regras em `src/app/(dashboard)/relatorios/README.md`
+("Modelo revisado" e "PDF e painel: a ordem do relatório").
+**Schema:** `WhatsappIncident`, `Tenant.uptimeTrackedSince`,
+`MonthlyRoiReport.previousActions`, `caseFacts`, `approvalVersion` — `db push` +
+`generate` na web e no worker.
+
+- **Todos os leads entram**, de dentro e de fora do expediente; a divisão é um
+  detalhe de cada número. Receita só de quem chegou fora do expediente vale
+  apenas no bloco opcional de retorno estimado.
+- **Recepção**: transferências respondidas (x de y), mediana da 1ª resposta
+  humana, espera acima de 1 hora e sem resposta no fim do mês.
+- **Disponibilidade do agente**: % no ar, quedas e contatos afetados, a partir
+  das quedas que o monitor de saúde passou a registrar. Mês sem medição sai
+  como "não medido", nunca 100%.
+- **Tempo devolvido detalhado** e **selo "estimativa" só no que é estimado**.
+- **Horário pelo expediente cadastrado**, nunca por faixa fixa.
+- **Motivo principal de não agendar**: um por lead, somando exatamente os que
+  não agendaram.
+- **Ações do mês anterior** no topo de "O que ajustamos", com funcionou /
+  parcial / não funcionou e o número que comprova; fechar exige a avaliação.
+- **Caso do mês** com idade, duração de cada áudio, dia da semana e período,
+  lidos da conversa escolhida; data exata é recusada no texto.
+- **"O que não saiu como planejado" aparece sempre** e deixou de ser texto
+  obrigatório: sem incidente comprovado, diz "Nenhum incidente relevante
+  identificado neste mês". A IA não inventa problema.
+- **PDF** refeito no modelo novo, fluindo em várias páginas, gerado no servidor
+  só com o conteúdo aprovado (`approvedDocument`) e com a versão do fechamento
+  no rodapé. O PDF da clínica sai só do snapshot aprovado.
+- **IA só redige**: recebe as frases e tabelas validadas pelo motor de dados, e
+  número fora delas é apontado para conferência.
+
+## ROI mensal: decisor (dono) separado do contato operacional — 2026-10-01
+
+**Schema:** `Tenant.ownerNames`, `MonthlyRoiReport.operationalContact`.
+
+- O decisor é escolhido entre os donos e sócios da conta (lista mantida na
+  etapa 4); a recepção vira "contato operacional" e recebe cópia.
+- Fechar e registrar o envio recusam decisor vazio, fora da lista ou igual ao
+  contato operacional.
+
+## ROI mensal: âncora na agenda e bloco financeiro opcional — 2026-10-01
+
+Decisão de 30/09 (Vinícius). Regras em `src/app/(dashboard)/relatorios/README.md`
+("O que o relatório mede e o bloco financeiro opcional"). Sem schema novo
+(`financialEnabled` mora em `assumptions`).
+
+- O relatório mede atendimento, agendamento e comparecimento; a âncora é
+  **avaliações agendadas e realizadas**.
+- **Receita, economia e ROI são opcionais**: sem o retorno estimado ligado e
+  calculado, o bloco some do painel e do PDF — nada de "Pendente" nem de ROI
+  negativo só com a economia.
+- **Página 1**: agendadas (dentro/fora), comparecimentos, contatos atendidos e
+  % fora do horário, primeira resposta (mediana); depois Atendimento, Agenda,
+  O que ajustamos, Qualidade dos leads, Próximo mês e **O que não saiu como
+  planejado**, que nunca fica vazio.
+- **Fechamento**: premissa financeira ausente não é pendência nem limitação com
+  o bloco desligado; na central, ticket, equipe e mensalidade viram opcionais.
+- Conta sem Clinicorp deixou de ganhar a limitação "agenda não pôde ser lida".
+- Aba Financeiro: sem valor do lead, só o convite.
+
 ## ROI mensal: fechamento guiado, cobertura parcial, IA que investiga e resumo executivo — 2026-09-30
 
 Regras em `src/app/(dashboard)/relatorios/README.md` ("Assistente de fechamento",

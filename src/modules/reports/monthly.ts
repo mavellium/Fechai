@@ -14,10 +14,16 @@ import { capEvidence, emptyEvidence, type AppointmentEvidence, type Bucket, type
 import { monthlyQuality, type MonthlyQuality } from "./monthly-quality";
 import { monthlyLimitations, type MonthlyLimitation } from "./monthly-limitations";
 import { parseNextActions, type MonthlyNextAction } from "./monthly-next-actions";
+import { arrivalSlot, availabilityMetrics, emptyArrivals, median, RECEPTION_LONG_WAIT_SECONDS,
+  type ArrivalBreakdown, type AvailabilityMetrics, type ReceptionMetrics, type UptimeIncident } from "./monthly-operations";
+import { CASE_AUDIOS_MAX, casePeriod, parseCaseFacts, type CaseFacts, type CasePeriod } from "./monthly-case";
+import { parsePreviousActions, reviewPreviousActions, type PreviousAction } from "./monthly-previous-actions";
 
 export type SplitCount = { inside: number; outside: number; unclassified: number };
 export type MonthlyMetrics = {
   newContacts: number; conversations: SplitCount; firstResponseSeconds: number | null;
+  /** Mediana dos mesmos pares da média: é a que vai à página 1 (um atraso isolado não a distorce). Ausente em snapshot antigo. */
+  firstResponseMedianSeconds?: number | null;
   scheduled: SplitCount; attended: SplitCount; attendanceUnknown: number; untypedAppointments: number;
   qualified: number; handoffs: number; unanswered: number; trackingComplete: boolean;
   /**
@@ -32,7 +38,28 @@ export type MonthlyMetrics = {
    * (`monthly-time.ts`). Opcional porque snapshots fechados antes dele não o têm.
    */
   time?: MonthlyTimeMetrics;
-  procedures: { name: string; qualified: number; attendedOutside: number; revenueCents: number | null }[];
+  /**
+   * Tudo que dá para medir da operação (`monthly-operations.ts`), de todos os
+   * contatos, de dentro e de fora do expediente. Opcionais: snapshot fechado
+   * antes deles não os tem. `availability: null` = mês sem medição da conexão.
+   */
+  reception?: ReceptionMetrics;
+  arrivals?: ArrivalBreakdown;
+  availability?: AvailabilityMetrics | null;
+  /** Só a resposta do agente (a da equipe fica em `reception`). */
+  agentFirstResponseMedianSeconds?: number | null;
+  /**
+   * O resto da agenda, além de `attended`: consultas do mês com falta marcada
+   * (`noShow`), consultas do mês já passadas sem comparecimento comprovado
+   * (`unconfirmed`, nunca lidas como falta) e avaliações marcadas no mês que
+   * ainda vão acontecer (`upcoming`).
+   */
+  agenda?: { noShow: SplitCount; unconfirmed: SplitCount; upcoming: SplitCount };
+  /**
+   * `attendedOutside` é a base da receita (regra conservadora, só no retorno
+   * estimado); `scheduled` e `attended` contam todos os contatos.
+   */
+  procedures: { name: string; qualified: number; attendedOutside: number; revenueCents: number | null; scheduled?: number; attended?: number }[];
   peaks: { hour: number; messages: number }[]; revenueCents: number | null; savingsCents: number | null;
   investmentCents: number | null; roiPercent: number | null; missing: string[];
 };
@@ -49,8 +76,16 @@ export type MonthlyReport = {
   clinicorpStatusTypes: ClinicorpReportData["statusTypes"];
   clinicorpIntegrationState?: ClinicorpReportData["integrationState"];
   adjustments: string; nextMonth: string; decisionMaker: string;
+  /** Recepção, que recebe cópia (`monthly-decision-maker.ts`). Ausente em snapshots anteriores ao campo. */
+  operationalContact?: string;
   /** Caso real do mês, anonimizado. Ausente em snapshots anteriores ao campo. */
   featuredCase?: string;
+  /** Fatos medidos do caso (`monthly-case.ts`): idade, áudios, dia da semana e período. */
+  caseFacts?: CaseFacts | null;
+  /** Ações combinadas no relatório anterior, com status e o número que comprova. */
+  previousActions?: PreviousAction[];
+  /** Versão aprovada (cada fechamento gera uma). Ausente em rascunho e em fechados antes dela. */
+  approval?: { version: number; approvedAt: string };
   /**
    * Qualidade dos leads do mês (cidade, raio, dúvidas, motivos de perda,
    * sugestões de tráfego). Congelada no snapshot; relatórios fechados antes
@@ -109,6 +144,8 @@ export type MonthlyInput = {
   start: Date; end: Date; now: Date; trackingSince: Date; accountCreatedAt?: Date; config: MonthlyAssumptions;
   conversations: MonthlyConversation[]; appointments: MonthlyAppointment[]; events: MonthlyEvent[];
   gaps?: MonthlyGap[];
+  /** Quedas registradas do WhatsApp e desde quando são medidas. Ausente = sem leitura (testes, fixtures antigas). */
+  uptime?: { trackedSince: Date | null; incidents: UptimeIncident[] };
   clinicorp: ClinicorpReportData;
 };
 
@@ -145,7 +182,12 @@ export function evaluateMonthlyMetrics(input: MonthlyInput): { metrics: MonthlyM
   const byConversation = new Map(conversations.map((c) => [c.id, c]));
   const byLead = new Map(conversations.map((c) => [c.leadId, c]));
   const responseTimes: number[] = [];
+  const agentResponseTimes: number[] = [];
   const hourCounts = new Map<number, number>();
+  const arrivals = emptyArrivals();
+  // Conversas que contaram, para dizer depois quem cuidou de cada uma.
+  const counted = new Map<string, { conversation: MonthlyConversation; teamReplied: boolean; row: MonthlyEvidence["conversations"][number] }>();
+  const inbound: { conversationId: string; at: Date }[] = [];
   for (const conversation of conversations) {
     if (!includesAgent(conversation.agentId)) continue;
     const messages = conversation.messages.filter((m) => inRange(m.createdAt, start, end));
@@ -158,10 +200,11 @@ export function evaluateMonthlyMetrics(input: MonthlyInput): { metrics: MonthlyM
     let firstPair: { inbound: Date; reply: Msg } | null = null;
     let answeredByAgent = false;
     let answeredByHuman = false;
-    let inbound = 0;
+    let inboundCount = 0;
     for (const message of messages) {
       if (message.role === "user") {
-        inbound++;
+        inbound.push({ conversationId: conversation.id, at: message.createdAt });
+        inboundCount++;
         pending ??= message.createdAt;
         const hour = partsInZone(message.createdAt, config.timezone).hour;
         hourCounts.set(hour, (hourCounts.get(hour) ?? 0) + 1);
@@ -177,38 +220,52 @@ export function evaluateMonthlyMetrics(input: MonthlyInput): { metrics: MonthlyM
     if (firstPair) {
       const seconds = (firstPair.reply.createdAt.getTime() - firstPair.inbound.getTime()) / 1000;
       responseTimes.push(seconds);
+      if (firstPair.reply.sentBy === "agent") agentResponseTimes.push(seconds);
       evidence.responses.push({ conversationId: conversation.id, inboundAt: firstPair.inbound.toISOString(),
         replyAt: firstPair.reply.createdAt.toISOString(), seconds, by: firstPair.reply.sentBy === "agent" ? "agent" : "human" });
     }
     const newContact = inRange(conversation.lead.createdAt, start, end);
     const arrival = firstPair?.inbound ?? null;
     // Conversa só com mensagem nossa no mês (follow-up, lembrete) não é atendimento.
-    if (answeredByAgent || inbound > 0) evidence.conversations.push({ conversationId: conversation.id, arrivalAt: iso(arrival),
+    const row: MonthlyEvidence["conversations"][number] = { conversationId: conversation.id, arrivalAt: iso(arrival),
       bucket: bucketOf(arrival, config), counted: answeredByAgent, excluded: answeredByAgent ? null : answeredByHuman ? "human_only" : "no_reply",
-      newContact, aiOnly: !answeredByHuman });
+      newContact, aiOnly: !answeredByHuman };
+    if (answeredByAgent || inboundCount > 0) evidence.conversations.push(row);
     if (!answeredByAgent) continue;
+    counted.set(conversation.id, { conversation, teamReplied: answeredByHuman, row });
+    arrivals[arrivalSlot(arrival, config)]++;
     addSplit(current.conversations, arrival, config);
     if (newContact) current.newContacts++;
     if (!answeredByHuman) current.aiOnlyConversations++;
   }
   current.firstResponseSeconds = responseTimes.length ? responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length : null;
+  const sorted = [...responseTimes].sort((x, z) => x - z), mid = Math.floor(sorted.length / 2);
+  current.firstResponseMedianSeconds = !sorted.length ? null : sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  current.agentFirstResponseMedianSeconds = median(agentResponseTimes);
+  current.arrivals = arrivals;
+  if (input.uptime) current.availability = availabilityMetrics({ start, end, now, trackedSince: input.uptime.trackedSince, incidents: input.uptime.incidents, inbound });
   current.peaks = [...hourCounts].map(([hour, messages]) => ({ hour, messages })).sort((a, b) => b.messages - a.messages || a.hour - b.hour).slice(0, 3);
 
-  const procedures = new Map<string, { qualified: Set<string>; attendedOutside: number }>();
+  const procedures = new Map<string, { qualified: Set<string>; attendedOutside: number; scheduled: number; attended: number }>();
   const getProcedure = (name: string | null) => {
     const key = name ?? "Não informado";
     const existing = [...procedures.keys()].find((p) => normalizeLabel(p) === normalizeLabel(key));
     if (existing) return procedures.get(existing)!;
-    const value = { qualified: new Set<string>(), attendedOutside: 0 };
+    const value = { qualified: new Set<string>(), attendedOutside: 0, scheduled: 0, attended: 0 };
     procedures.set(key, value);
     return value;
   };
   const qualified = new Set<string>();
+  const firstHandoff = new Map<string, Date>();
   for (const event of events.filter((e) => inRange(e.createdAt, start, end))) {
     if (!includesAgent(byConversation.get(event.conversationId)?.agentId)) continue;
     const row = (procedure: string | null = null) => evidence.events.push({ eventId: event.id ?? "", conversationId: event.conversationId,
       kind: event.kind as EventEvidence["kind"], at: event.createdAt.toISOString(), procedure });
-    if (event.kind === "handoff") { current.handoffs++; row(); }
+    if (event.kind === "handoff") {
+      current.handoffs++; row();
+      const first = firstHandoff.get(event.conversationId);
+      if (!first || event.createdAt < first) firstHandoff.set(event.conversationId, event.createdAt);
+    }
     if (event.kind === "unanswered") { current.unanswered++; row(); }
     if (event.kind === "qualified") {
       qualified.add(event.conversationId);
@@ -220,6 +277,23 @@ export function evaluateMonthlyMetrics(input: MonthlyInput): { metrics: MonthlyM
     }
   }
   current.qualified = qualified.size;
+  // Quem cuidou de cada conversa que contou. As três partes somam os contatos
+  // atendidos; a espera é do aviso de transferência até a primeira resposta de
+  // uma pessoa, em tempo corrido, e para de contar no fim do mês.
+  const reception: ReceptionMetrics = { agentOnly: 0, transferred: 0, teamJoined: 0, answered: 0, medianSeconds: null, overHour: 0, unanswered: 0 };
+  const waits: number[] = [], cut = Math.min(now.getTime(), end.getTime());
+  for (const [id, info] of counted) {
+    const at = firstHandoff.get(id);
+    if (!at) { reception[info.teamReplied ? "teamJoined" : "agentOnly"]++; continue; }
+    reception.transferred++;
+    const reply = info.conversation.messages.find((m) => m.role === "assistant" && m.sentBy === "human" && m.createdAt >= at && m.createdAt < end);
+    info.row.handoffAt = at.toISOString(); info.row.teamReplyAt = reply?.createdAt.toISOString() ?? null;
+    const wait = ((reply?.createdAt.getTime() ?? cut) - at.getTime()) / 1000;
+    if (reply) { reception.answered++; waits.push(wait); } else reception.unanswered++;
+    if (wait > RECEPTION_LONG_WAIT_SECONDS) reception.overHour++;
+  }
+  reception.medianSeconds = median(waits);
+  current.reception = reception;
   // Tempo de resposta da equipe entra no mês da APROVAÇÃO: é quando a
   // pergunta deixou de estar sem resposta.
   const answeredGaps = (input.gaps ?? []).filter((g) => inRange(g.answeredAt, start, end) && includesAgent(g.agentId));
@@ -230,6 +304,8 @@ export function evaluateMonthlyMetrics(input: MonthlyInput): { metrics: MonthlyM
   for (const g of answeredGaps) evidence.gaps.push({ gapId: g.id ?? "", firstAskedAt: g.firstAskedAt.toISOString(),
     answeredAt: g.answeredAt.toISOString(), seconds: (g.answeredAt.getTime() - g.firstAskedAt.getTime()) / 1000 });
   const external = new Map(clinicorp.appointments.map((a) => [a.id, a]));
+  const agenda = { noShow: split(), unconfirmed: split(), upcoming: split() };
+  current.agenda = agenda;
   for (const appointment of appointments) {
     if (!includesAgent(appointment.agentId)) continue;
     // Marcação manual não é do agente: nem entra na lista do relatório.
@@ -259,6 +335,10 @@ export function evaluateMonthlyMetrics(input: MonthlyInput): { metrics: MonthlyM
     if (createdInMonth) {
       addSplit(current.scheduled, origin, config);
       row.scheduled = typed ? "counted" : "counted_untyped";
+      // Por procedimento contam todos os contatos; só a receita olha o horário.
+      getProcedure(procedureName(appointment, conversation)).scheduled++;
+      // Marcada no mês para depois: aguarda a consulta, não é falta.
+      if (!remote?.canceled && (appointment.startsAt >= end || appointment.startsAt > now)) addSplit(agenda.upcoming, origin, config);
     }
     if (!startsInMonth) continue;
     if (appointment.startsAt > now) { row.attended = "future"; continue; }
@@ -274,14 +354,21 @@ export function evaluateMonthlyMetrics(input: MonthlyInput): { metrics: MonthlyM
         ? config.completedStatusTypes.includes(remote.statusType) : null;
       attended = remoteAnswer ?? (appointment.attendanceAt ? attended : null);
     }
-    if (attended === null) { current.attendanceUnknown++; row.attended = "unknown"; continue; }
-    if (!attended) { row.attended = "not_attended"; continue; }
+    if (attended === null) { current.attendanceUnknown++; row.attended = "unknown"; addSplit(agenda.unconfirmed, origin, config); continue; }
+    if (!attended) {
+      row.attended = "not_attended";
+      // Falta é só a marcada na /agenda; status do Clinicorp que não comprova
+      // presença é "sem confirmação", nunca falta presumida.
+      addSplit(local === "no_show" ? agenda.noShow : agenda.unconfirmed, origin, config);
+      continue;
+    }
     row.attended = "attended";
     addSplit(current.attended, origin, config);
+    getProcedure(procedureName(appointment, conversation)).attended++;
     if (origin && outsideHumanHours(origin, config) === true) getProcedure(procedureName(appointment, conversation)).attendedOutside++;
   }
   current.procedures = [...procedures].map(([name, value]) => {
-    return { name, qualified: value.qualified.size, attendedOutside: value.attendedOutside, revenueCents: null };
+    return { name, qualified: value.qualified.size, attendedOutside: value.attendedOutside, revenueCents: null, scheduled: value.scheduled, attended: value.attended };
   }).sort((a, b) => b.qualified - a.qualified || b.attendedOutside - a.attendedOutside);
   current.time = calculateTimeMetrics({ start, end, conversations: conversations.filter((c) => includesAgent(c.agentId)), appointments, events }, evidence);
   return { metrics: applyMonthlyOverrides(current, {}, config), evidence: capEvidence(evidence) };
@@ -289,7 +376,7 @@ export function evaluateMonthlyMetrics(input: MonthlyInput): { metrics: MonthlyM
 
 export async function computeMonthlyReport(tenantId: string, month: string, useSnapshot = true, previewAssumptions?: MonthlyAssumptions): Promise<MonthlyReport> {
   const [tenant, saved] = await Promise.all([
-    prisma.tenant.findUniqueOrThrow({ where: { id: tenantId }, select: { name: true, createdAt: true, reportTrackingStartedAt: true, planKey: true, priceCentsOverride: true } }),
+    prisma.tenant.findUniqueOrThrow({ where: { id: tenantId }, select: { name: true, createdAt: true, reportTrackingStartedAt: true, planKey: true, priceCentsOverride: true, uptimeTrackedSince: true } }),
     prisma.monthlyRoiReport.findUnique({ where: { tenantId_month: { tenantId, month } } }),
   ]);
   if (useSnapshot && !previewAssumptions && saved?.status === "ready" && saved.snapshot) {
@@ -315,7 +402,7 @@ export async function computeMonthlyReport(tenantId: string, month: string, useS
   const previousWindow = monthlyWindow(window.previousMonth, previousAssumptions.timezone);
   const start = new Date(Math.min(window.start.getTime(), previousWindow.start.getTime()));
   const end = new Date(Math.max(window.end.getTime(), previousWindow.end.getTime()));
-  const [rawConversations, appointments, events, clinicorp, gaps, lead] = await Promise.all([
+  const [rawConversations, appointments, events, clinicorp, gaps, lead, incidents] = await Promise.all([
     prisma.conversation.findMany({ where: { tenantId, isTest: false, lead: { isTest: false }, OR: [
       { messages: { some: { createdAt: { gte: start, lt: end } } } },
       { appointments: { some: { OR: [{ startsAt: { gte: start, lt: end } }, { createdAt: { gte: start, lt: end } }] } } },
@@ -338,7 +425,13 @@ export async function computeMonthlyReport(tenantId: string, month: string, useS
     // um complemento: se falhar, o relatório sai sem o bloco em vez de não sair.
     loadLeadQualityDetail(tenantId, { from: window.start, to: window.end }, { agentIds: assumptions.agentIds ?? undefined })
       .catch((error) => { console.error("[monthly] qualidade dos leads indisponível", error); return undefined; }),
+    // Quedas do WhatsApp que tocam a janela. Também complemento: sem a leitura,
+    // a disponibilidade sai "sem registro" e o resto do relatório segue.
+    Promise.resolve().then(() => prisma.whatsappIncident.findMany({ where: { tenantId, startedAt: { lt: end }, OR: [{ endedAt: null }, { endedAt: { gt: start } }] },
+      select: { provider: true, startedAt: true, endedAt: true }, orderBy: { startedAt: "asc" } }))
+      .catch((error) => { console.error("[monthly] quedas do WhatsApp indisponíveis", error); return undefined; }),
   ]);
+  const uptime = incidents ? { trackedSince: tenant.uptimeTrackedSince ?? null, incidents } : undefined;
   const conversationIds = rawConversations.map((c) => c.id);
   const [firstInbound, unheard] = conversationIds.length ? await Promise.all([
     // Uma consulta agregada evita buscar todo o histórico só para descobrir a chegada.
@@ -355,11 +448,13 @@ export async function computeMonthlyReport(tenantId: string, month: string, useS
       audio: audioUrl || audioSeconds != null || unheardIds.has(m.id) ? { seconds: audioSeconds, heard: !unheardIds.has(m.id) } : null })) }));
   const now = new Date();
   const trackingSince = new Date(Math.max(tenant.createdAt.getTime(), tenant.reportTrackingStartedAt.getTime()));
-  const { metrics: automaticCurrent, evidence } = evaluateMonthlyMetrics({ start: window.start, end: window.end, now, trackingSince, accountCreatedAt: tenant.createdAt, config: assumptions, conversations, appointments, events, gaps, clinicorp });
+  const { metrics: automaticCurrent, evidence } = evaluateMonthlyMetrics({ start: window.start, end: window.end, now, trackingSince, accountCreatedAt: tenant.createdAt, config: assumptions, conversations, appointments, events, gaps, uptime, clinicorp });
   if (lead) evidence.leads = lead.leads;
   capEvidence(evidence);
   const previousSnapshot = previousSaved?.status === "ready" && previousSaved.snapshot ? previousSaved.snapshot as unknown as MonthlyReport : null;
-  const previousAuto = calculateMonthlyMetrics({ start: previousWindow.start, end: previousWindow.end, now, trackingSince, accountCreatedAt: tenant.createdAt, config: previousAssumptions, conversations, appointments, events, gaps, clinicorp });
+  const previousAuto = calculateMonthlyMetrics({ start: previousWindow.start, end: previousWindow.end, now, trackingSince, accountCreatedAt: tenant.createdAt, config: previousAssumptions, conversations, appointments, events, gaps, uptime, clinicorp });
+  // As ações avaliadas neste mês são as do relatório anterior APROVADO: plano em rascunho não foi combinado com ninguém.
+  const previousPlan = previousSnapshot?.version === 1 ? previousSnapshot.nextActions ?? [] : [];
   const samePreviousScope = sameMonthlyAgentScope(assumptions, originalPreviousAssumptions);
   const automaticPrevious = samePreviousScope && previousBase ? previousBase.previous
     : samePreviousScope && previousSnapshot?.version === 1 ? previousSnapshot.current
@@ -375,7 +470,9 @@ export async function computeMonthlyReport(tenantId: string, month: string, useS
     automatic: { current: automaticCurrent, previous: automaticPrevious }, previousAssumptions, previousConfigured: previousBase?.previousConfigured ?? Boolean(previousSaved), current, previous,
     clinicorpError: clinicorp.error, clinicorpStatusTypes: clinicorp.statusTypes, clinicorpIntegrationState: clinicorp.integrationState,
     adjustments: saved?.adjustments ?? "", nextMonth: saved?.nextMonth ?? "", decisionMaker: saved?.decisionMaker ?? "",
-    featuredCase: saved?.featuredCase ?? "",
+    operationalContact: saved?.operationalContact ?? "",
+    featuredCase: saved?.featuredCase ?? "", caseFacts: parseCaseFacts(saved?.caseFacts),
+    previousActions: reviewPreviousActions(previousPlan, parsePreviousActions(saved?.previousActions)),
     highlights: saved?.highlights ?? "", limitationsNote: saved?.limitationsNote ?? "", nextActions: parseNextActions(saved?.nextActions),
     ...(lead ? { leadQuality: lead.quality } : {}),
     evidence,
@@ -389,18 +486,35 @@ export async function computeMonthlyReport(tenantId: string, month: string, useS
   return report;
 }
 
-export type MonthlyCaseCandidate = { conversationId: string; firstAt: string; audios: number[] };
+/**
+ * O relatório aprovado de uma competência: o snapshot congelado no fechamento,
+ * e só ele. É o que a clínica recebe (painel e PDF) — rascunho, relatório
+ * reaberto e fechamento sem snapshot válido devolvem `null`, nunca um cálculo
+ * feito na hora no lugar do que foi aprovado.
+ */
+export async function loadApprovedReport(tenantId: string, month: string): Promise<MonthlyReport | null> {
+  const saved = await prisma.monthlyRoiReport.findUnique({ where: { tenantId_month: { tenantId, month } } });
+  if (saved?.status !== "ready" || !saved.snapshot) return null;
+  const snapshot = saved.snapshot as unknown as MonthlyReport;
+  if (snapshot.version !== 1 || snapshot.month !== month) return null;
+  return { ...snapshot, revision: saved.updatedAt?.toISOString(), status: saved.status, finalizedAt: saved.finalizedAt?.toISOString() ?? null,
+    sentAt: saved.sentAt?.toISOString() ?? null, meetingAt: saved.meetingAt?.toISOString() ?? null };
+}
+
+export type MonthlyCaseCandidate ={ conversationId: string; firstAt: string; audios: number[];
+  /** Dia da semana e período do primeiro áudio longo, no fuso da clínica, e se o contato agendou no mês. */
+  weekday: number; period: CasePeriod; scheduled: boolean };
 
 /**
- * Sugestões para o caso do mês (só no admin, nunca no snapshot nem no PDF):
- * conversas em que o agente ouviu áudios longos. A Mavellium abre a conversa,
- * confere o que aconteceu e escreve o caso só com o perfil genérico.
+ * Conversas do mês em que o agente ouviu áudios longos, com o que se mede
+ * delas. `conversationId` restringe a uma (para gravar os fatos do caso); o
+ * filtro de conta e de agentes é sempre o do relatório.
  */
-export async function loadMonthlyCaseCandidates(tenantId: string, month: string, config: MonthlyAssumptions): Promise<MonthlyCaseCandidate[]> {
+async function readCaseConversations(tenantId: string, month: string, config: MonthlyAssumptions, conversationId?: string): Promise<MonthlyCaseCandidate[]> {
   const window = monthlyWindow(month, config.timezone);
   const rows = await prisma.message.findMany({
     where: { role: "user", audioSeconds: { gt: LONG_AUDIO_SECONDS }, content: { not: UNTRANSCRIBED_AUDIO },
-      createdAt: { gte: window.start, lt: window.end },
+      createdAt: { gte: window.start, lt: window.end }, ...(conversationId ? { conversationId } : {}),
       conversation: { tenantId, isTest: false, lead: { isTest: false }, ...(config.agentIds?.length ? { agentId: { in: config.agentIds } } : {}) } },
     select: { conversationId: true, audioSeconds: true, createdAt: true }, orderBy: { audioSeconds: "desc" }, take: 200,
   });
@@ -412,7 +526,37 @@ export async function loadMonthlyCaseCandidates(tenantId: string, month: string,
     byConversation.set(row.conversationId, entry);
   }
   const longest = (audios: { seconds: number }[]) => Math.max(...audios.map((a) => a.seconds));
-  return [...byConversation].sort(([, a], [, b]) => longest(b.audios) - longest(a.audios) || b.audios.length - a.audios.length)
-    .slice(0, 5).map(([conversationId, entry]) => ({ conversationId, firstAt: entry.first.toISOString(),
-      audios: entry.audios.sort((a, b) => a.at.getTime() - b.at.getTime()).map((a) => a.seconds) }));
+  const top = [...byConversation].sort(([, a], [, b]) => longest(b.audios) - longest(a.audios) || b.audios.length - a.audios.length).slice(0, 5);
+  // O caso pode ser de quem não agendou: o dado entra como fato, não como filtro.
+  const booked = top.length ? await prisma.appointment.findMany({
+    where: { tenantId, source: "agent", status: { not: "canceled" }, conversationId: { in: top.map(([id]) => id) }, createdAt: { gte: window.start, lt: window.end } },
+    select: { conversationId: true },
+  }) : [];
+  const scheduled = new Set(booked.map((a) => a.conversationId));
+  return top.map(([id, entry]) => {
+    const local = partsInZone(entry.first, config.timezone);
+    return { conversationId: id, firstAt: entry.first.toISOString(), weekday: local.weekday, period: casePeriod(local.hour), scheduled: scheduled.has(id),
+      audios: entry.audios.sort((a, b) => a.at.getTime() - b.at.getTime()).map((a) => a.seconds) };
+  });
+}
+
+/**
+ * Sugestões para o caso do mês (só no admin, nunca no snapshot nem no PDF):
+ * conversas em que o agente ouviu áudios longos. A Mavellium abre a conversa,
+ * confere o que aconteceu e escreve o caso só com o perfil genérico.
+ */
+export function loadMonthlyCaseCandidates(tenantId: string, month: string, config: MonthlyAssumptions): Promise<MonthlyCaseCandidate[]> {
+  return readCaseConversations(tenantId, month, config);
+}
+
+/**
+ * Os fatos do caso, lidos da conversa escolhida: duração de cada áudio, dia da
+ * semana e período. O formulário só informa qual conversa e a idade — duração
+ * é medida, nunca digitada. `null` = a conversa não é desta conta, deste mês ou
+ * não tem áudio longo ouvido pelo agente.
+ */
+export async function loadMonthlyCaseFacts(tenantId: string, month: string, config: MonthlyAssumptions, conversationId: string, age: number | null): Promise<CaseFacts | null> {
+  const [found] = await readCaseConversations(tenantId, month, config, conversationId);
+  if (!found) return null;
+  return { conversationId, age, audioSeconds: found.audios.slice(0, CASE_AUDIOS_MAX), weekday: found.weekday, period: found.period, scheduled: found.scheduled };
 }

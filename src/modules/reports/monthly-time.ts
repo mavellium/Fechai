@@ -207,6 +207,31 @@ export function hoursPremise(r: Pick<MonthlyReport, "current" | "assumptions" | 
   return `${a.aiOnlyConversations} conversas sem resposta humana × ${num(c.minutesPerConversation, " min")} ÷ 60`;
 }
 
+export type TimeRow = { label: string; value: string; estimate?: boolean; strong?: boolean };
+
+/**
+ * O tempo devolvido linha a linha: o que foi medido (áudios) e o que é
+ * estimativa (tempo de leitura e resposta, que depende da premissa). Só as
+ * linhas estimadas levam o selo. Sem premissa de tempo não há linha de texto
+ * nem total: nada é estimado no lugar.
+ */
+export function timeBreakdown(r: Pick<MonthlyReport, "current" | "assumptions" | "metricOverrides">): TimeRow[] {
+  const a = r.current, t = a.time, spm = r.assumptions.secondsPerMessage;
+  if (!t) return [];
+  const manual = r.metricOverrides?.current.assumedHours !== undefined;
+  const rows: TimeRow[] = [
+    { label: `Áudios ouvidos pelo agente (${t.audios} ${t.audios === 1 ? "áudio" : "áudios"}${t.unmeasuredAudios ? `, ${t.unmeasuredAudios} sem duração medida` : ""})`, value: formatMinutes(t.audioMinutes) },
+    { label: "Maior áudio do mês", value: formatDuration(t.longestAudioSeconds) },
+    { label: "Áudios acima de 2 minutos", value: String(t.longAudios) },
+  ];
+  const messages = t.textMessages + t.audios;
+  if (spm != null && !manual) rows.push({ label: `Leitura e resposta de ${messages.toLocaleString("pt-BR")} ${messages === 1 ? "mensagem" : "mensagens"} (${t.textMessages.toLocaleString("pt-BR")} de texto e ${t.audios} em áudio)`,
+    value: formatDuration(messages * spm), estimate: true });
+  else rows.push({ label: "Mensagens de texto respondidas pelo agente", value: t.textMessages.toLocaleString("pt-BR") });
+  if (a.assumedHours !== null) rows.push({ label: "Total devolvido à equipe", value: formatDuration(a.assumedHours * 3600), estimate: true, strong: true });
+  return rows;
+}
+
 /** Palavras de nome de contato que também são tratamento ou parentesco, não identidade. */
 const GENERIC_WORDS = new Set(["paciente", "cliente", "contato", "senhora", "senhor", "dona", "doutor", "doutora",
   "dra", "sra", "srta", "dos", "das", "mae", "pai", "filho", "filha", "clinica", "odonto"]);
@@ -221,8 +246,19 @@ export function featuredCaseProblem(text: string, contactNames: (string | null)[
   if (text.length > FEATURED_CASE_MAX) return `Use até ${FEATURED_CASE_MAX} caracteres no caso do mês para caber em uma página.`;
   if (/\S+@\S+\.\S+/.test(text)) return "Tire o e-mail do caso do mês: use só o perfil genérico do paciente.";
   if (/(?:\d[\s().-]*){8,}/.test(text)) return "Tire telefone ou documento do caso do mês: use só o perfil genérico do paciente.";
+  const date = exactDateIn(text);
+  if (date) return `Tire a data ("${date}") do caso do mês: diga só o dia da semana e o período, como "num sábado à noite".`;
   const word = contactNameIn(text, contactNames);
   return word ? `O caso do mês cita "${word}", que é nome de um contato atendido neste mês. Use só o perfil genérico (ex.: "paciente de 74 anos").` : null;
+}
+
+const MONTH_NAMES = "janeiro|fevereiro|março|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro";
+// Sem `\b` no fim do nome do mês: "março" termina em letra acentuada.
+const EXACT_DATE = new RegExp(`(?<!\\d)\\d{1,2}\\s*/\\s*\\d{1,2}(?:\\s*/\\s*\\d{2,4})?(?!\\d)|(?<!\\d)\\d{1,2}º?\\s+de\\s+(?:${MONTH_NAMES})|\\bdia\\s+\\d{1,2}(?!\\d)`, "i");
+
+/** O caso diz o dia da semana e o período, nunca a data: com ela o contato é identificável na agenda. */
+export function exactDateIn(text: string): string | null {
+  return EXACT_DATE.exec(text)?.[0] ?? null;
 }
 
 /** A primeira palavra do nome de um contato do mês que aparece no texto, ou null. */

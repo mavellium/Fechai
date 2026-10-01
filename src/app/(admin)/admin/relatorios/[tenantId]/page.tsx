@@ -11,6 +11,7 @@ import { ArrowLeft } from "lucide-react";
 import { MonthlyCloseWizard } from "./MonthlyRoiEditor";
 import { MonthlyPendencyCenter } from "./MonthlyPendencyCenter";
 import { buildPendencyBoard } from "@/modules/reports/monthly-pendencies";
+import { parseAccountOwners } from "@/modules/reports/monthly-decision-maker";
 import { Alert } from "@/components/ui/alert";
 
 export default async function MonthlyRoiPage({ params, searchParams }: {
@@ -20,7 +21,7 @@ export default async function MonthlyRoiPage({ params, searchParams }: {
   const { tenantId } = await params;
   const requested = (await searchParams).mes;
   const latest = requested ? null : await prisma.monthlyRoiReport.findFirst({ where: { tenantId }, orderBy: { month: "desc" }, select: { month: true } });
-  const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { createdAt: true, planKey: true, priceCentsOverride: true } });
+  const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { createdAt: true, planKey: true, priceCentsOverride: true, ownerNames: true } });
   if (!tenant) notFound();
   const month = monthlyInitialMonth(tenant.createdAt, requested, latest?.month);
   const [report, agents] = await Promise.all([
@@ -40,10 +41,9 @@ export default async function MonthlyRoiPage({ params, searchParams }: {
     <PageHeader eyebrow="Relatórios" title={report.tenantName} description="Feche o mês em cinco etapas: conferir os dados, resolver pendências, validar o retorno, escrever a análise e entregar ao decisor." />
     <div className="flex flex-wrap items-center justify-between gap-3"><MonthPicker value={month} href={`/admin/relatorios/${tenantId}`} /><ButtonLink href={`/admin/relatorios?mes=${month}`} size="sm" variant="ghost"><ArrowLeft size={14} aria-hidden />Todos os clientes</ButtonLink></div>
     {requested && /^20\d{2}-(0[1-9]|1[0-2])$/.test(requested) && requested < month && <Alert>A conta foi criada em {month.split("-").reverse().join("/")}. Abrimos a primeira competência com dados deste cliente.</Alert>}
-    {/* Com o fechamento aberto, as limitações estão nas etapas; o resumo mostra só o retorno. */}
-    <MonthlyRoiSummary report={report} showMissing={!open} />
+    <MonthlyRoiSummary report={report} />
     {/* Os registros ficam só nas tabelas do painel: o editor não os usa e eles dobrariam o que vai ao navegador. */}
-    <MonthlyCloseWizard key={month} tenantId={tenantId} report={{ ...report, evidence: undefined }} sources={sources} caseCandidates={caseCandidates}
+    <MonthlyCloseWizard key={month} tenantId={tenantId} report={{ ...report, evidence: undefined }} sources={sources} owners={parseAccountOwners(tenant.ownerNames)} caseCandidates={caseCandidates}
       pendencyCenter={open ? <MonthlyPendencyCenter tenantId={tenantId} month={month} clinicName={report.tenantName} monthLabel={report.label}
         dueAt={report.dueAt} now={new Date().toISOString()} timezone={report.assumptions.timezone}
         rows={buildPendencyBoard({ metrics: report.current, config: report.assumptions, monthName: report.label.split(" de ")[0], tracking })}

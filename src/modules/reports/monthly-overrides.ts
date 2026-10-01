@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { normalizeLabel, type MonthlyAssumptions } from "./monthly-config";
+import { financialEnabled, normalizeLabel, type MonthlyAssumptions } from "./monthly-config";
 import type { MonthlyMetrics } from "./monthly";
 import { returnedHours } from "./monthly-time";
 import { blocksRevenue, detectMonthlyPendencies } from "./monthly-pendencies";
@@ -65,7 +65,9 @@ export function applyMonthlyOverrides(auto: MonthlyMetrics, overrides: MonthlyMe
     const premise = config.procedures.find((c) => normalizeLabel(c.name) === normalizeLabel(p.name));
     const revenueCents = p.attendedOutside === 0 ? 0 : premise?.ticketCents != null && premise.conversionBps != null
       ? Math.round(p.attendedOutside * premise.ticketCents * premise.conversionBps / 10_000) : null;
-    return { ...p, revenueCents };
+    // A correção só traz qualificados e realizadas fora; o resto segue o registro.
+    const counted = auto.procedures.find((c) => normalizeLabel(c.name) === normalizeLabel(p.name));
+    return { scheduled: counted?.scheduled, attended: counted?.attended, ...p, revenueCents };
   });
   m.investmentCents = config.investmentCents;
   // Regra única do que falta (a central de pendências lê a mesma função).
@@ -74,5 +76,11 @@ export function applyMonthlyOverrides(auto: MonthlyMetrics, overrides: MonthlyMe
   m.revenueCents = blocksRevenue(pendencies) ? null : m.procedures.reduce((sum, p) => sum + (p.revenueCents ?? 0), 0);
   m.roiPercent = m.revenueCents !== null && m.savingsCents !== null && m.investmentCents !== null && m.investmentCents > 0
     ? Math.round((m.revenueCents + m.savingsCents - m.investmentCents) / m.investmentCents * 1000) / 10 : null;
+  // Retorno estimado desligado: nenhum valor em dinheiro existe (nem economia
+  // sozinha contra a mensalidade, que daria um ROI negativo sem sentido).
+  if (!financialEnabled(config)) {
+    m.revenueCents = m.savingsCents = m.roiPercent = null;
+    m.procedures = m.procedures.map((p) => ({ ...p, revenueCents: null }));
+  }
   return m;
 }

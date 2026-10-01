@@ -25,6 +25,12 @@ export type ConversationEvidence = {
   newContact: boolean;
   /** Sem resposta humana no mês (base da estimativa de horas por conversa). */
   aiOnly: boolean;
+  /**
+   * Primeira transferência para a equipe no mês e a primeira resposta de uma
+   * pessoa depois dela (`null` = seguia sem resposta no fim do mês). Só em
+   * conversa transferida; ausente em snapshot anterior aos campos.
+   */
+  handoffAt?: string; teamReplyAt?: string | null;
 };
 
 /** Um par por conversa: a primeira mensagem pendente e a primeira resposta a ela. */

@@ -7,6 +7,7 @@ import { applyMonthlyOverrides, editableMonthlyMetrics } from "./monthly-overrid
 import { HIGHLIGHTS_MAX, LIMITATIONS_NOTE_MAX, monthlyLimitations, unverifiedMetrics } from "./monthly-limitations";
 import { monthlyQuality, QUALITY_KEYS } from "./monthly-quality";
 import { NEXT_ACTIONS_MAX, nextActionsSchema } from "./monthly-next-actions";
+import { executiveSummary, monthlyFinancial } from "./monthly-executive";
 
 /*
  * Etapa 4 do assistente de fechamento: a IA redige o resumo do período (página
@@ -19,9 +20,10 @@ import { NEXT_ACTIONS_MAX, nextActionsSchema } from "./monthly-next-actions";
  * agente e na base no mês (nome do evento e do alvo, nunca conteúdo). Nenhuma
  * conversa, nome ou telefone.
  *
- * Duas travas deterministas, depois da resposta: melhorias executadas só com
- * registro de alteração ou nota do admin (senão viria inventada), e texto de
- * limitações só quando há limitação.
+ * Trava determinista, depois da resposta: melhorias executadas só com registro
+ * de alteração ou nota do admin (senão viria inventada). Dinheiro só chega à
+ * IA com o retorno estimado ligado e calculado (`monthlyFinancial`); e "o que
+ * não saiu como planejado" nunca volta vazio sem um aviso para quem confere.
  */
 
 export const ANALYSIS_CONTEXT_MAX = 1000;
@@ -48,15 +50,58 @@ export function parseMonthlyAnalysis(content: string): MonthlyAnalysis {
   return monthlyAnalysisSchema.parse(JSON.parse(text));
 }
 
-/** Aplica as travas; `hasFacts` = há alteração registrada, nota do admin ou texto já escrito. */
-export function guardMonthlyAnalysis(analysis: MonthlyAnalysis, input: { limitations: number; hasFacts: boolean }): MonthlyAnalysis {
+export type MonthlyAnalysisGuard = {
+  limitations: number;
+  /** Incidentes comprovados pelo motor de dados (`monthlyIncidents`). */
+  incidents?: number;
+  /** Há alteração registrada, nota do admin ou texto já escrito. */
+  hasFacts: boolean;
+  /** O administrador contou algo que o sistema não registra. */
+  hasContext?: boolean;
+  /** Tudo que a IA recebeu (fatos validados + contexto), para conferir os números que ela escreveu. */
+  validated?: string;
+};
+
+const numbersIn = (text: string) => (text.match(/\d+(?:[.,]\d+)*/g) ?? []).map((token) => {
+  // "1.234" e "12.345,67" são milhar; "5,2" e "0.5" são decimal.
+  const thousands = /^\d{1,3}(?:\.\d{3})+(?:,\d+)?$/.test(token);
+  return Number(thousands ? token.replace(/\./g, "").replace(",", ".") : token.replace(",", "."));
+}).filter(Number.isFinite);
+
+/**
+ * Números que a IA escreveu e que não estão nos dados validados nem no que o
+ * administrador contou. O motor de dados é a única origem de número: a IA
+ * redige, não calcula. Devolve os tokens como apareceram, sem repetição.
+ */
+export function unbackedNumbers(text: string, validated: string): string[] {
+  const known = new Set<number>();
+  for (const value of numbersIn(validated)) { known.add(value); known.add(Math.round(value)); known.add(value / 100); }
+  const found = new Set<string>();
+  for (const token of text.match(/\d+(?:[.,]\d+)*/g) ?? []) {
+    const [value] = numbersIn(token);
+    if (value !== undefined && !known.has(value)) found.add(token);
+  }
+  return [...found];
+}
+
+/** Aplica as travas deterministas depois da resposta da IA. */
+export function guardMonthlyAnalysis(analysis: MonthlyAnalysis, input: MonthlyAnalysisGuard): MonthlyAnalysis {
   const notes = [analysis.notes];
   let { adjustments, limitationsNote } = analysis;
   if (!input.hasFacts && adjustments) {
     adjustments = "";
     notes.push("Sem alteração registrada no agente neste mês: descreva as melhorias executadas.");
   }
-  if (!input.limitations) limitationsNote = "";
+  // A IA nunca cria problema para preencher a seção: sem incidente comprovado,
+  // sem limitação e sem nada contado pelo administrador, o texto dela sai.
+  if (limitationsNote && !input.incidents && !input.limitations && !input.hasContext) {
+    limitationsNote = "";
+    notes.push("Sem incidente comprovado nos dados: \"O que não saiu como planejado\" ficou em branco e o relatório dirá \"Nenhum incidente relevante identificado neste mês\". Se houve algo que o sistema não registra, escreva você.");
+  }
+  if (input.validated !== undefined) {
+    const loose = unbackedNumbers([analysis.highlights, limitationsNote, adjustments, ...analysis.nextActions.flatMap((a) => [a.action, a.indicator])].join(" \n "), input.validated);
+    if (loose.length) notes.push(`Números sem origem nos dados validados: ${loose.slice(0, 8).join(", ")}. Confira ou apague antes de salvar.`);
+  }
   return { ...analysis, adjustments, limitationsNote, notes: notes.filter(Boolean).join(" ").slice(0, 600) };
 }
 
@@ -69,13 +114,30 @@ export function draftAnalysisBase(report: MonthlyReport, draft: MonthlyAiDraft) 
   return { current, previous, quality, limitations };
 }
 
-export function monthlyAnalysisMessages(report: MonthlyReport, draft: MonthlyAiDraft, changes: MonthlyAgentChange[], context: string): LlmMessage[] {
+/**
+ * O que a IA recebe: os números do motor de dados, já validados (selo e
+ * limitações calculados), e as frases e tabelas do relatório como o decisor
+ * vai ler. Ela redige a partir disto; não calcula e não consulta nada.
+ */
+export function monthlyAnalysisFacts(report: MonthlyReport, draft: MonthlyAiDraft, changes: MonthlyAgentChange[]) {
   const { current, previous, quality, limitations } = draftAnalysisBase(report, draft);
-  const facts = {
+  const financial = monthlyFinancial({ current, assumptions: draft.assumptions });
+  const exec = executiveSummary({ ...report, current, previous, assumptions: draft.assumptions, metricOverrides: draft.metricOverrides, quality, limitations,
+    adjustments: draft.adjustments, limitationsNote: draft.limitationsNote, nextActions: draft.nextActions });
+  const tables = Object.values(exec.tables).filter((t): t is NonNullable<typeof t> => Boolean(t))
+    .map((t) => ({ title: t.title, rows: t.rows.map((row) => `${row.cells.join(" | ")}${row.estimate ? " (estimativa)" : ""}`) }));
+  return {
+    // Os incidentes saem do motor (faltas, quedas, espera da recepção): é só deles que a IA pode falar.
+    incidents: exec.unplanned.incidents,
+    validated: { lede: exec.lede, attendance: exec.attendance, agenda: exec.agenda, questions: exec.questions, tables },
+    previousActions: (report.previousActions ?? []).map((a) => ({ action: a.action, status: a.status, result: a.result })),
     client: report.tenantName, month: report.label, previousMonth: report.previousMonth,
     current: editableMonthlyMetrics(current), previous: editableMonthlyMetrics(previous),
-    money: { revenueCents: current.revenueCents, savingsCents: current.savingsCents, investmentCents: current.investmentCents, roiPercent: current.roiPercent,
-      previousRoiPercent: previous.roiPercent },
+    anchor: { scheduled: current.scheduled, attended: current.attended, attendanceUnknown: current.attendanceUnknown,
+      previousScheduled: previous.scheduled, previousAttended: previous.attended, firstResponseMedianSeconds: current.firstResponseMedianSeconds ?? null },
+    // Retorno estimado desligado ou incalculável: a IA nem recebe os valores.
+    financial: financial !== null,
+    ...(financial ? { money: { ...financial, previousRoiPercent: previous.roiPercent } } : {}),
     quality: Object.fromEntries(QUALITY_KEYS.filter((k) => quality[k]).map((k) => [k, quality[k]!.status])),
     limitations: limitations.map((l) => ({ text: l.text, affects: l.affects })),
     unverified: unverifiedMetrics({ quality }),
@@ -83,12 +145,17 @@ export function monthlyAnalysisMessages(report: MonthlyReport, draft: MonthlyAiD
     agentChanges: changes,
     currentTexts: { highlights: draft.highlights, limitationsNote: draft.limitationsNote, adjustments: draft.adjustments, nextActions: draft.nextActions, legacyNextMonth: draft.nextMonth },
   };
-  return [{ role: "system", content: `Você redige a análise do relatório mensal de ROI do Fechai que a Mavellium entrega ao decisor de uma clínica. Português do Brasil, frases curtas, sem jargão, sem exagero comercial.
-A página 1 do relatório é o resumo executivo: o decisor lê primeiro o valor entregue. Escreva:
-- highlights (até ${HIGHLIGHTS_MAX} caracteres): o "Resumo do período" da página 1. Síntese do valor entregue no mês, os principais resultados e, numa frase, as limitações relevantes. Use só números cujo selo em "quality" seja verified ou estimated; valor estimado é dito como estimativa. NUNCA cite número de indicador que esteja em "unverified" ou com selo pending/inconsistent. Compare com o mês anterior só quando os dois números existirem.
-- limitationsNote (até ${LIMITATIONS_NOTE_MAX} caracteres): explique ao decisor, sem tom de desculpa, o que ficou sem evidência neste fechamento (lista "limitations") e que esses indicadores aparecem como "não verificado". Não repita a lista palavra por palavra: agrupe e diga o efeito. Lista vazia = "".
+}
+
+export function monthlyAnalysisMessages(report: MonthlyReport, draft: MonthlyAiDraft, changes: MonthlyAgentChange[], context: string): LlmMessage[] {
+  const facts = monthlyAnalysisFacts(report, draft, changes);
+  return [{ role: "system", content: `Você redige a análise do relatório mensal do Fechai que a Mavellium entrega ao decisor de uma clínica. Português do Brasil, frases curtas, sem jargão, sem exagero comercial.
+Os números já foram calculados e validados antes de chegar a você. Você só redige: NÃO calcule, não some, não tire percentual e não arredonde de outro jeito. Todo número que você escrever tem de aparecer em FATOS exatamente como está lá (prefira as frases e tabelas de facts.validated, que já estão no formato que o decisor lê); número que não está em FATOS não entra no texto.
+O relatório mede o que o Fechai controla: atendimento, agendamento e comparecimento, de TODOS os contatos — de dentro e de fora do expediente, porque o agente atende todos igual. A divisão por expediente é só um detalhe de cada número; não trate quem chegou no expediente como menos importante. A métrica âncora é AVALIAÇÕES AGENDADAS E REALIZADAS (facts.anchor). Se facts.financial for false, o retorno estimado está desligado: NÃO mencione ROI, receita, economia, retorno financeiro nem valores em reais, em nenhum texto. Escreva:
+- highlights (até ${HIGHLIGHTS_MAX} caracteres): "Resumo do período", que abre o relatório. Síntese do mês a partir da agenda e do atendimento. Use só números cujo selo em "quality" seja verified ou estimated; valor estimado é dito como estimativa. NUNCA cite número de indicador que esteja em "unverified" ou com selo pending/inconsistent. Compare com o mês anterior só quando os dois números existirem.
+- limitationsNote (até ${LIMITATIONS_NOTE_MAX} caracteres): "O que não saiu como planejado". Comente, com franqueza e sem tom de desculpa, SOMENTE o que está em facts.incidents (incidentes comprovados pelos dados: faltas, quedas do agente, espera da recepção), em "limitations" e no contexto do administrador — sem repetir as listas palavra por palavra; elas aparecem ao lado. Se os três estiverem vazios, retorne "" (texto vazio): o relatório dirá sozinho que não houve incidente relevante. NUNCA invente, suponha ou exagere um problema para preencher a seção, e não transforme uma variação normal de número em incidente.
 - adjustments (até 400): melhorias EXECUTADAS no agente neste mês. Só a partir de "agentChanges", de currentTexts.adjustments e do contexto do administrador. Nada registrado = "". Nunca invente ajuste.
-- nextActions (até ${NEXT_ACTIONS_MAX}): as prioridades do mês seguinte, em ordem. Cada uma {"action":"ação concreta, até 120 caracteres","owner":"área ou função responsável (Recepção, Agenda, Financeiro, Mavellium), até 60","indicator":"o que o próximo relatório mede para acompanhar, até 100"}. Priorize resolver as limitações (ex.: confirmar comparecimentos na agenda, levantar ticket) e o que os indicadores sugerem. Responsável nunca é paciente.
+- nextActions (até ${NEXT_ACTIONS_MAX}): as prioridades do mês seguinte, em ordem. Cada uma {"action":"ação concreta, até 120 caracteres","owner":"área ou função responsável (Recepção, Agenda, Financeiro, Mavellium), até 60","indicator":"o que o próximo relatório mede para acompanhar, até 100"}. Priorize resolver os incidentes e as limitações (ex.: confirmar comparecimentos na agenda, responder as conversas transferidas) e o que os indicadores sugerem. Considere facts.previousActions (o que foi combinado no mês anterior e como foi): ação que não funcionou pode voltar ajustada. Responsável nunca é paciente.
 - notes (até 600): recado curto para o administrador sobre o que conferir ou o que faltou para escrever; não vai ao decisor.
 Se currentTexts já tiver texto ou ações, melhore mantendo os fatos deles (legacyNextMonth é o plano antigo em texto livre). Nunca cite paciente, nome, telefone ou conversa. Dinheiro está em centavos (250000 = R$ 2.500,00); escreva em reais.
 Retorne SOMENTE JSON: {"highlights":"","limitationsNote":"","adjustments":"","nextActions":[],"notes":""}.

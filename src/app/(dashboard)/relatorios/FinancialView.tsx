@@ -50,6 +50,10 @@ export function FinancialView({ summary }: { summary: FinancialSummary }) {
 
   return (
     <div className="space-y-6">
+      {/* Sem valor do lead não há retorno para mostrar: fica só o convite, nunca
+          cartões com travessão ou "ROI —" (mesma regra do bloco financeiro do
+          relatório mensal). */}
+      {hasValue && <>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Stat
           label="Retorno estimado"
@@ -126,6 +130,7 @@ export function FinancialView({ summary }: { summary: FinancialSummary }) {
           </Button>
         </div>
       </div>
+      </>}
 
       {hasValue ? (
         <FinancialCharts summary={summary} />
@@ -133,8 +138,8 @@ export function FinancialView({ summary }: { summary: FinancialSummary }) {
         <Card>
           <EmptyState
             icon={TrendingUp}
-            title="Defina o valor do lead para ver os gráficos"
-            description="Retorno acumulado, retorno por agente, ponto de equilíbrio e retorno mês a mês dependem de quanto vale um lead fechado para você — sem isso, seriam números inventados."
+            title="Quer ver o retorno estimado?"
+            description="O retorno financeiro é opcional. Ele depende de quanto vale um lead fechado para você: defina esse valor e mostramos retorno, ROI, ponto de equilíbrio e a evolução mês a mês. Sem ele, não mostramos números inventados."
             action={
               <Button type="button" size="sm" onClick={openValueDialog}>
                 <Pencil size={14} aria-hidden />

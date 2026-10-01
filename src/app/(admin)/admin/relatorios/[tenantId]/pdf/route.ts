@@ -18,6 +18,6 @@ export async function GET(request: Request, { params }: { params: Promise<{ tena
     const pdf = await generateMonthlyPdf(report);
     return new Response(Buffer.from(pdf), { headers: { "Content-Type": "application/pdf", "Content-Disposition": `${disposition}; filename="fechai-roi-${month}.pdf"`, "Cache-Control": "private, no-store" } });
   } catch {
-    return new Response("O conteúdo excedeu uma página. Reduza os textos de revisão ou os nomes nas premissas antes de exportar.", { status: 422, headers: { "Content-Type": "text/plain; charset=utf-8" } });
+    return new Response("Não foi possível gerar o PDF desta revisão. Confira os textos e tente de novo.", { status: 422, headers: { "Content-Type": "text/plain; charset=utf-8" } });
   }
 }

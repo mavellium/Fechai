@@ -1,4 +1,4 @@
-import { normalizeLabel, type MonthlyAssumptions } from "./monthly-config";
+import { financialEnabled, normalizeLabel, type MonthlyAssumptions } from "./monthly-config";
 import type { MonthlyMetrics } from "./monthly";
 
 /*
@@ -26,11 +26,17 @@ const OWNER_ORDER: PendencyOwner[] = ["reception", "agenda", "finance", "mavelli
 
 /** O que falta: um dado que ninguém passou, algo a confirmar ou um número a conferir. */
 export type PendencyKind = "data" | "confirm" | "check";
-export type AffectedMetric = "classification" | "revenue" | "savings" | "investment" | "roi";
+export type AffectedMetric = "classification" | "scheduled" | "attended" | "revenue" | "savings" | "investment" | "roi";
 export const AFFECTED_METRIC_LABELS: Record<AffectedMetric, string> = {
-  classification: "Dentro/fora do horário", revenue: "Receita estimada", savings: "Economia estimada",
-  investment: "Investimento mensal", roi: "ROI do mês",
+  classification: "Dentro/fora do horário", scheduled: "Avaliações agendadas", attended: "Avaliações realizadas",
+  revenue: "Receita estimada", savings: "Economia estimada", investment: "Investimento mensal", roi: "ROI do mês",
 };
+const MONEY_METRICS: AffectedMetric[] = ["revenue", "savings", "investment", "roi"];
+/** O que a falta segura. Com o retorno estimado desligado, dinheiro não entra na lista. */
+export function affectedLabels(topic: PendencyTopic, config: MonthlyAssumptions): string[] {
+  const money = financialEnabled(config);
+  return TOPIC_DEFS[topic].affects.filter((m) => money || !MONEY_METRICS.includes(m)).map((m) => AFFECTED_METRIC_LABELS[m]);
+}
 
 export const PENDENCY_TOPICS = ["hours", "attendance", "classification", "ticket", "team", "consistency", "investment"] as const;
 export type PendencyTopic = (typeof PENDENCY_TOPICS)[number];
@@ -41,11 +47,11 @@ export function isPendencyTopic(value: string): value is PendencyTopic {
 type TopicDef = { owner: PendencyOwner; kind: PendencyKind; affects: AffectedMetric[]; title: (monthName: string) => string };
 export const TOPIC_DEFS: Record<PendencyTopic, TopicDef> = {
   hours: { owner: "reception", kind: "confirm", affects: ["classification", "revenue", "roi"], title: () => "Expediente da recepção" },
-  attendance: { owner: "agenda", kind: "confirm", affects: ["revenue", "roi"], title: () => "Comparecimento das avaliações" },
-  classification: { owner: "agenda", kind: "check", affects: ["revenue", "roi"], title: () => "Classificação dos agendamentos" },
+  attendance: { owner: "agenda", kind: "confirm", affects: ["attended", "revenue", "roi"], title: () => "Comparecimento das avaliações" },
+  classification: { owner: "agenda", kind: "check", affects: ["scheduled", "attended", "revenue", "roi"], title: () => "Classificação dos agendamentos" },
   ticket: { owner: "finance", kind: "data", affects: ["revenue", "roi"], title: () => "Ticket e conversão" },
   team: { owner: "finance", kind: "data", affects: ["savings", "roi"], title: () => "Custo e tempo da equipe" },
-  consistency: { owner: "mavellium", kind: "check", affects: ["revenue", "roi"], title: () => "Conferência dos indicadores" },
+  consistency: { owner: "mavellium", kind: "check", affects: ["attended", "revenue", "roi"], title: () => "Conferência dos indicadores" },
   investment: { owner: "mavellium", kind: "data", affects: ["investment", "roi"], title: (monthName) => `Mensalidade de ${monthName}` },
 };
 /** Só a clínica responde estes; os da Mavellium nunca entram na solicitação. */
@@ -65,6 +71,9 @@ export function detectMonthlyPendencies(m: MonthlyMetrics, config: MonthlyAssump
   if (m.attendanceUnknown) add("attendance", `${m.attendanceUnknown} avaliação(ões) sem comparecimento confirmado.`);
   if (m.untypedAppointments) add("classification", `${m.untypedAppointments} agendamento(s) sem tipo de atendimento; confira se são avaliações.`);
   if (m.attended.unclassified) add("consistency", "Há avaliações realizadas sem horário de chegada do contato.");
+  // Premissa financeira só é pendência com o retorno estimado ligado: o
+  // relatório fecha sem ela, e do Clinicorp só se exige o comparecimento.
+  if (!financialEnabled(config)) return found;
   if (m.procedures.some((p) => p.revenueCents === null)) add("ticket", "Faltam procedimento, ticket ou conversão de avaliações realizadas fora do horário.");
   if (!config.procedures.length) add("ticket", "Ticket e conversão por procedimento ainda não informados.");
   if (config.procedures.some((p) => p.ticketCents === null || p.conversionBps === null)) add("ticket", "Há procedimentos sem ticket ou conversão nas premissas.");
@@ -115,9 +124,13 @@ export type PendencyTracking = {
   topic: string; assignee: string; requestedAt: Date | null; requestedVia: string | null;
   answer: string; answeredAt: Date | null;
 };
-export type PendencyStatus = "confirmed" | "answered" | "requested" | PendencyKind;
+export type PendencyStatus = "confirmed" | "optional" | "answered" | "requested" | PendencyKind;
+/** Só existem com o retorno estimado ligado; desligado, aparecem como opcionais. */
+export const FINANCIAL_TOPICS: PendencyTopic[] = ["ticket", "team", "investment"];
+/** Aberta = precisa de alguém. Opcional não é pendência: é um convite. */
+export const isOpenPendency = (row: { status: PendencyStatus }) => row.status !== "confirmed" && row.status !== "optional";
 export const PENDENCY_STATUS_LABELS: Record<PendencyStatus, string> = {
-  confirmed: "Confirmado", answered: "Resposta a aplicar", requested: "Aguardando clínica",
+  confirmed: "Confirmado", optional: "Opcional", answered: "Resposta a aplicar", requested: "Aguardando clínica",
   data: "Aguardando dados", confirm: "Aguardando confirmação", check: "Requer conferência",
 };
 export type PendencyRow = {
@@ -140,11 +153,12 @@ export function buildPendencyBoard(input: {
     const def = TOPIC_DEFS[topic], t = tracked.get(topic);
     const details = found.filter((p) => p.topic === topic).map((p) => p.text);
     const answered = Boolean(t?.answeredAt && (!t.requestedAt || t.answeredAt >= t.requestedAt));
-    const status: PendencyStatus = !details.length ? "confirmed" : answered ? "answered" : t?.requestedAt ? "requested" : def.kind;
+    const optional = !financialEnabled(input.config) && FINANCIAL_TOPICS.includes(topic);
+    const status: PendencyStatus = optional ? "optional" : !details.length ? "confirmed" : answered ? "answered" : t?.requestedAt ? "requested" : def.kind;
     return {
       topic, title: def.title(input.monthName), owner: def.owner, ownerLabel: PENDENCY_OWNERS[def.owner], status, details,
       question: details.length ? pendencyQuestion(topic, input.metrics, input.config) : null,
-      affects: def.affects.map((a) => AFFECTED_METRIC_LABELS[a]), askedFromClinic: askedFromClinic(topic),
+      affects: affectedLabels(topic, input.config), askedFromClinic: askedFromClinic(topic),
       assignee: t?.assignee ?? "", requestedAt: t?.requestedAt?.toISOString() ?? null, requestedVia: t?.requestedVia ?? null,
       answer: t?.answer ?? "", answeredAt: t?.answeredAt?.toISOString() ?? null,
     };
@@ -152,7 +166,7 @@ export function buildPendencyBoard(input: {
 }
 
 /** Tópicos que entram na solicitação: pendentes, da clínica e com pergunta. */
-export const requestableRows = (rows: PendencyRow[]) => rows.filter((r) => r.status !== "confirmed" && r.askedFromClinic && r.question);
+export const requestableRows = (rows: PendencyRow[]) => rows.filter((r) => isOpenPendency(r) && r.askedFromClinic && r.question);
 
 /**
  * Uma mensagem só para a clínica, agrupada por área (e pela pessoa atribuída),

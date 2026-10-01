@@ -113,9 +113,10 @@ describe("painel e PDF", () => {
   const render = (report: ReturnType<typeof roiFixture>) => renderToStaticMarkup(createElement(MonthlyView, { report }));
   it("mostra o selo e o acesso aos registros de cada indicador", () => {
     const html = render(roiFixture());
-    expect(html).toContain("Qualidade");
-    expect(html).toContain("Verificado");
-    expect(html).toContain("Estimado");
+    // Número medido não leva selo; "estimativa" só no que é estimado.
+    expect(html).toContain("Selo");
+    expect(html).not.toContain("Verificado");
+    expect(html).toContain("Estimativa");
     expect(html).toContain("Ver registros (1)");
     expect(html).toContain("Ver cálculo");
   });

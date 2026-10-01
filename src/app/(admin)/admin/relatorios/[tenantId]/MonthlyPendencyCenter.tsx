@@ -12,7 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Field, fieldProps } from "@/components/ui/field";
 import { useActionToast, useSaveFeedback } from "@/components/ui/toast";
 import {
-  buildPendencyRequest, requestableRows, whatsappNumber, PENDENCY_ANSWER_MAX, PENDENCY_ASSIGNEE_MAX,
+  buildPendencyRequest, isOpenPendency, requestableRows, whatsappNumber, PENDENCY_ANSWER_MAX, PENDENCY_ASSIGNEE_MAX,
   PENDENCY_OWNERS, PENDENCY_STATUS_LABELS, type PendencyOwner, type PendencyRow, type PendencyStatus,
 } from "@/modules/reports/monthly-pendencies";
 import { saveMonthlyPendency, recordMonthlyPendencyRequest } from "./pendency-actions";
@@ -21,7 +21,7 @@ type Contact = { name: string | null; email: string | null; phone: string | null
 type Via = "whatsapp" | "email" | "copy";
 const VIA_LABELS: Record<Via, string> = { whatsapp: "WhatsApp", email: "e-mail", copy: "texto copiado" };
 const STATUS_TONE: Record<PendencyStatus, "success" | "iris" | "neutral" | "warn"> = {
-  confirmed: "success", answered: "iris", requested: "neutral", data: "warn", confirm: "warn", check: "warn",
+  confirmed: "success", optional: "neutral", answered: "iris", requested: "neutral", data: "warn", confirm: "warn", check: "warn",
 };
 
 /**
@@ -36,7 +36,9 @@ export function MonthlyPendencyCenter({ tenantId, month, clinicName, monthLabel,
 }) {
   const due = new Date(dueAt);
   const format = (at: string, withTime = false) => new Intl.DateTimeFormat("pt-BR", { timeZone: timezone, day: "2-digit", month: "2-digit", ...(withTime ? { hour: "2-digit", minute: "2-digit" } : {}) }).format(new Date(at));
-  const pending = rows.filter((r) => r.status !== "confirmed");
+  const pending = rows.filter(isOpenPendency);
+  // Opcional (retorno estimado desligado) não conta nem como confirmado nem como pendente.
+  const required = rows.filter((r) => r.status !== "optional");
   const answered = rows.filter((r) => r.status === "answered").length;
   const daysLeft = Math.ceil((due.getTime() - new Date(now).getTime()) / 86_400_000);
   const owners = (Object.keys(PENDENCY_OWNERS) as PendencyOwner[]).map((owner) => ({ owner, items: rows.filter((r) => r.owner === owner) })).filter((g) => g.items.length);
@@ -47,13 +49,13 @@ export function MonthlyPendencyCenter({ tenantId, month, clinicName, monthLabel,
     </CardTitle>
     <p className="-mt-2 mb-5 text-sm text-neutral panel:text-white/60">Fechamento de {monthLabel} · {clinicName}</p>
     <div className="grid gap-4 sm:grid-cols-3">
-      <Stat compact label="Confirmado" value={String(rows.length - pending.length)} hint={`de ${rows.length} áreas`} />
-      <Stat compact label="Áreas pendentes" value={String(pending.length)} hint={answered ? `${answered} com resposta a aplicar` : pending.length ? "travam o fechamento" : "pronto para fechar"} />
+      <Stat compact label="Confirmado" value={String(required.length - pending.length)} hint={`de ${required.length} áreas`} />
+      <Stat compact label="Áreas pendentes" value={String(pending.length)} hint={answered ? `${answered} com resposta a aplicar` : pending.length ? "viram limitação no fechamento" : "pronto para fechar"} />
       <Stat compact label="Prazo de entrega" value={format(dueAt)} hint={daysLeft < 0 ? "prazo vencido" : daysLeft === 0 ? "vence hoje" : `faltam ${daysLeft} ${daysLeft === 1 ? "dia" : "dias"}`} />
     </div>
     <div className="mt-6 space-y-6">
       {owners.map(({ owner, items }) => {
-        const open = items.filter((r) => r.status !== "confirmed").length;
+        const open = items.filter(isOpenPendency).length;
         return <section key={owner} aria-labelledby={`pendency-owner-${owner}`}>
           <h3 id={`pendency-owner-${owner}`} className="font-mono text-micro uppercase tracking-[0.2em] text-neutral panel:text-white/55">
             {PENDENCY_OWNERS[owner]} · {open ? `${open} ${open === 1 ? "pendente" : "pendentes"}` : "em dia"}
@@ -71,7 +73,7 @@ export function MonthlyPendencyCenter({ tenantId, month, clinicName, monthLabel,
 function PendencyItem({ tenantId, month, row, format }: { tenantId: string; month: string; row: PendencyRow; format: (at: string, withTime?: boolean) => string }) {
   const [state, submit, saving] = useActionState(saveMonthlyPendency.bind(null, tenantId, month, row.topic), null);
   useActionToast(state, saving, { entity: "pendência", gender: "f" });
-  const open = row.status !== "confirmed";
+  const open = isOpenPendency(row);
   const id = `pendency-${row.topic}`;
   return <li className="py-4">
     <div className="flex flex-wrap items-start justify-between gap-2">
@@ -90,6 +92,7 @@ function PendencyItem({ tenantId, month, row, format }: { tenantId: string; mont
       {row.requestedAt && row.answeredAt && " · "}
       {row.answeredAt && `Resposta registrada em ${format(row.answeredAt, true)}`}
     </p>}
+    {row.status === "optional" && <p className="mt-2 text-sm text-neutral panel:text-white/60">Não é exigido para fechar. Só entra se você ativar o retorno estimado (receita, economia e ROI) nas premissas desta etapa.</p>}
     {row.answer && !open && <p className="mt-2 whitespace-pre-wrap border-l-2 border-ink/15 pl-3 text-sm text-neutral panel:border-white/20 panel:text-white/65">{row.answer}</p>}
     {open && <details className="group mt-3" open={row.status === "answered" || undefined}>
       <summary className="cursor-pointer rounded-sm text-sm font-medium text-iris outline-none focus-visible:ring-2 focus-visible:ring-iris panel:text-white/80">
@@ -114,7 +117,7 @@ function PendencyRequest({ tenantId, month, clinicName, monthLabel, due, now, ti
   const [via, setVia] = useState<Via | null>(null);
   const save = useSaveFeedback({ entity: "solicitação", gender: "f" });
   const requestable = requestableRows(rows);
-  const pending = rows.filter((r) => r.status !== "confirmed");
+  const pending = rows.filter(isOpenPendency);
   const base = { rows, clinicName, contactName: contact.name, monthLabel, dueAt: due, now, timezone };
   const text = buildPendencyRequest({ ...base, format: "whatsapp" });
   const phone = whatsappNumber(contact.phone);

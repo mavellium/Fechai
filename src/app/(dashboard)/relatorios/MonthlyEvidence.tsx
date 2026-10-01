@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { formatBRL } from "@/lib/format";
 import type { MonthlyReport } from "@/modules/reports/monthly";
 import { ATTENDED_LABEL, BUCKET_LABEL, SCHEDULED_LABEL, bucketReason, isScheduledCounted, type AppointmentEvidence, type Bucket, type MonthlyEvidence } from "@/modules/reports/monthly-evidence";
-import { QUALITY_LABEL, type MetricQuality, type QualityKey, type QualityStatus } from "@/modules/reports/monthly-quality";
+import { QUALITY_LABEL, showsSeal, type MetricQuality, type QualityKey, type QualityStatus } from "@/modules/reports/monthly-quality";
 import { formatDuration, formatMinutes, hoursPremise } from "@/modules/reports/monthly-time";
 import { doubtLabel, lossLabel } from "@/modules/lead-insights/categories";
 import { Badge } from "@/components/ui/badge";
@@ -20,8 +20,13 @@ const TONE: Record<QualityStatus, "success" | "neutral" | "warn" | "danger"> = {
   verified: "success", estimated: "neutral", partial: "warn", pending: "neutral", inconsistent: "danger",
 };
 
-export function QualityBadge({ quality }: { quality?: MetricQuality }) {
-  if (!quality) return null;
+/**
+ * No relatório que a clínica lê, número medido não leva selo: "estimativa" só
+ * no que é estimado, e aviso só onde há o que avisar. `all` é para a
+ * conferência interna da Mavellium, que precisa ver também o "verificado".
+ */
+export function QualityBadge({ quality, all = false }: { quality?: MetricQuality; all?: boolean }) {
+  if (!quality || (!all && !showsSeal(quality))) return null;
   return <Badge tone={TONE[quality.status]} title={quality.reasons.join(" ")}>{QUALITY_LABEL[quality.status]}</Badge>;
 }
 
@@ -51,7 +56,7 @@ function Body({ quality, summary, composition, truncated, total, children }: {
 }) {
   return <div className="space-y-5 text-white/85">
     {quality && <div className="space-y-2">
-      <p className="flex flex-wrap items-center gap-2 text-sm"><span className="text-white/55">Qualidade do dado:</span><QualityBadge quality={quality} /></p>
+      <p className="flex flex-wrap items-center gap-2 text-sm"><span className="text-white/55">{showsSeal(quality) ? "Atenção ao ler este número:" : "Como é contado:"}</span><QualityBadge quality={quality} /></p>
       <ul className="list-disc space-y-1 pl-5 text-sm text-white/70">{quality.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>
     </div>}
     <p className="text-sm leading-relaxed">{summary}</p>
@@ -184,6 +189,25 @@ function entry(r: MonthlyReport, e: MonthlyEvidence, key: QualityKey): Entry | n
             x.verdict ? VERDICT_LABEL[x.verdict] : "—", OUTCOME_LABEL[x.outcome], x.lossKey ? lossLabel(x.lossKey) : "—", x.doubtKey ? doubtLabel(x.doubtKey) : "—"] }))} />
       </Body> };
     }
+    case "reception": {
+      const rows = e.conversations.filter((x) => x.handoffAt).sort((x, y) => (x.handoffAt ?? "").localeCompare(y.handoffAt ?? ""));
+      const wait = (x: typeof rows[number]) => x.teamReplyAt ? formatDuration((new Date(x.teamReplyAt).getTime() - new Date(x.handoffAt!).getTime()) / 1000) : "—";
+      return { count: rows.length, title: "Conversas passadas para a recepção", body: <Body quality={q}
+        summary={`${plural(rows.length, "conversa atendida pelo agente teve", "conversas atendidas pelo agente tiveram")} transferência registrada no mês. A espera vai da primeira transferência até a primeira resposta de uma pessoa, em tempo corrido; sem resposta até o fim do mês, conta como ainda sem resposta.`}
+        composition={rows.map((x) => x.teamReplyAt ? "Respondida pela recepção" : "Sem resposta no fim do mês")} {...cut("conversations", e.conversations.length)}>
+        {rows.length ? <DataTable caption="Conversas transferidas" head={["Conversa", "Transferida em", "Resposta da recepção", "Espera"]} headerAlign="left" columnAlign={["left", "left", "left", "left"]}
+          rows={rows.map((x) => ({ id: x.conversationId, cells: [<Short key="c" id={x.conversationId} href />, when(x.handoffAt ?? null), x.teamReplyAt ? when(x.teamReplyAt) : "Sem resposta", wait(x)] }))} /> : empty("Nenhuma conversa foi passada para a recepção no mês.")}
+      </Body> };
+    }
+    case "availability": {
+      const v = a.availability;
+      if (!v) return null;
+      return { count: v.incidents.length, title: "Disponibilidade do agente", body: <Body quality={q}
+        summary={`Agente no ar em ${v.percent.toLocaleString("pt-BR")}% do período medido (desde ${when(v.measuredFrom)}): ${formatDuration(v.downSeconds)} fora do ar de ${formatDuration(v.coveredSeconds)}. Conta a queda da conexão do WhatsApp confirmada pelo provedor, do momento em que o monitoramento a viu até a volta.`}>
+        {v.incidents.length ? <DataTable caption="Quedas do mês" head={["Início", "Fim", "Duração", "Contatos afetados"]} headerAlign="left" columnAlign={["left", "left", "left", "left"]}
+          rows={v.incidents.map((x) => ({ id: x.startedAt, cells: [when(x.startedAt), x.endedAt ? when(x.endedAt) : "Seguia fora do ar", formatDuration(x.seconds), String(x.contacts)] }))} /> : empty("Nenhuma queda registrada no período medido.")}
+      </Body> };
+    }
     case "assumedHours":
       return { title: "Horas devolvidas à equipe", body: <Body quality={q}
         summary={`${hoursPremise(r)}. Os registros de mensagens e áudios estão em "Mensagens de texto respondidas pelo agente" e "Áudios ouvidos pelo agente".`} /> };
@@ -205,6 +229,8 @@ function entry(r: MonthlyReport, e: MonthlyEvidence, key: QualityKey): Entry | n
     case "roi":
       return { title: "ROI estimado", body: <Body quality={q}
         summary={`(receita ${a.revenueCents === null ? "pendente" : formatBRL(a.revenueCents)} + economia ${a.savingsCents === null ? "pendente" : formatBRL(a.savingsCents)} − mensalidade ${a.investmentCents === null ? "pendente" : formatBRL(a.investmentCents)}) ÷ mensalidade = ${a.roiPercent === null ? "pendente" : `${a.roiPercent.toLocaleString("pt-BR")}%`}.`} /> };
+    default:
+      return null;
   }
 }
 

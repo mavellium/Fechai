@@ -1,10 +1,11 @@
 import { createProvider, getUsableChain, resolveSecret, isAiError, type LlmMessage } from "@/modules/ai";
 import { recordUsage } from "@/modules/ai/usage";
 import type { MonthlyReport } from "./monthly";
+import { financialEnabled } from "./monthly-config";
 import { editableMonthlyMetrics, applyMonthlyOverrides } from "./monthly-overrides";
 import { monthlyAiFieldContract, parseMonthlyAiResponse, applyMonthlyAiChanges, type MonthlyAiRequest, type MonthlyAiResponse } from "./monthly-ai";
 import type { MonthlyAgentSource } from "./monthly-import";
-import { guardMonthlyAnalysis, parseMonthlyAnalysis, type MonthlyAnalysis } from "./monthly-analysis";
+import { guardMonthlyAnalysis, parseMonthlyAnalysis, type MonthlyAnalysis, type MonthlyAnalysisGuard } from "./monthly-analysis";
 import type { MonthlyAiConsulted, MonthlyAiToolbox, MonthlyReviewRow } from "./monthly-ai-tools";
 
 /** Voltas de consulta antes de a IA ser obrigada a responder, e consultas por volta. */
@@ -19,12 +20,15 @@ export function monthlyAiMessages(report: MonthlyReport, request: MonthlyAiReque
     partialMonth: report.partial, partialTracking: !current.trackingComplete,
     draft: request.draft,
     current: editableMonthlyMetrics(current), previous: editableMonthlyMetrics(previous),
-    estimated: { revenueCents: current.revenueCents, savingsCents: current.savingsCents, roiPercent: current.roiPercent },
+    // Retorno estimado é opcional: desligado, os valores não existem (não são "pendentes").
+    financialEnabled: financialEnabled(request.draft.assumptions),
+    ...(financialEnabled(request.draft.assumptions) ? { estimated: { revenueCents: current.revenueCents, savingsCents: current.savingsCents, roiPercent: current.roiPercent } } : {}),
     missing: current.missing, previousConfigured: report.previousConfigured,
     registeredInvestment: { cents: report.assumptions.investmentCents, source: report.investmentSource },
     agents: agents.map((a) => ({ name: a.name, schedule: a.schedule })),
   };
   return [{ role: "system", content: `Você ajuda a Mavellium a preparar o relatório mensal de ROI do Fechai. Responda em português, com clareza e exemplos curtos.
+O relatório mede o que o Fechai controla: atendimento, agendamento e comparecimento; a métrica âncora é avaliações agendadas e realizadas. Receita, economia e ROI são um bloco OPCIONAL (context.financialEnabled): desligado, não é pendência, não trate ticket, conversão ou custo do atendente como algo que falta, e não proponha preenchê-los sem o administrador pedir para ativar o retorno estimado.
 Explique os campos, a origem dos indicadores, as pendências e quais informações pedir à clínica. Pode propor preenchimentos com dados cadastrados ou fornecidos pelo administrador na conversa.
 REGRA: receita = avaliações REALIZADAS de contatos cuja PRIMEIRA chegada foi FORA do expediente humano × conversão avaliação→tratamento × ticket, por procedimento. Economia = horas devolvidas × custo/hora do atendente. Horas devolvidas = (minutos de áudio ouvidos × 60 + (mensagens de texto + áudios respondidos pelo agente) × segundos por mensagem) ÷ 3600 quando assumptions.secondsPerMessage está preenchido; vazio, usa conversas sem resposta humana × minutos por conversa ÷ 60; assumedHours corrigido manualmente substitui os dois. ROI = (receita + economia − investimento) ÷ investimento. Os valores são estimados. Receita/economia/ROI são calculados pelo sistema e não são campos editáveis.
 Dinheiro em centavos: R$ 2.500,00 = 250000. Conversão em basis points: 30% = 3000. Tempos de primeira resposta, tempo por mensagem e maior áudio em segundos; áudio ouvido em minutos. O caso do mês é escrito pela Mavellium a partir da conversa e não passa por você: não redija nem sugira casos de pacientes. Expediente: sete dias, domingo=0, intervalos em minutos (09:00=540). Ticket NÃO é valor por lead. Carga mensal não pode ser inventada a partir do expediente semanal.
@@ -64,7 +68,7 @@ export async function answerMonthlyAi(messages: LlmMessage[], draft: MonthlyAiRe
 }
 
 /** Rascunho da análise do mês (etapa 4 do fechamento), com as travas aplicadas. */
-export async function draftMonthlyAnalysis(messages: LlmMessage[], guard: { limitations: number; hasFacts: boolean }): Promise<MonthlyAnalysis & { providerLabel: string }> {
+export async function draftMonthlyAnalysis(messages: LlmMessage[], guard: MonthlyAnalysisGuard): Promise<MonthlyAnalysis & { providerLabel: string }> {
   return completeMonthlyAi(messages, (content) => guardMonthlyAnalysis(parseMonthlyAnalysis(content), guard));
 }
 
