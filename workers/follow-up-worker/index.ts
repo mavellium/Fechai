@@ -6,6 +6,7 @@ import { scanWhatsappHealth } from "../../src/modules/whatsapp/health";
 import { scanBroadcasts } from "../../src/modules/broadcasts/worker";
 import { touchBroadcastWorker } from "../../src/modules/broadcasts/health";
 import { scanKnowledgeGaps } from "../../src/modules/knowledge-gaps/notify";
+import { scanClinicorpSync } from "../../src/modules/scheduling/clinicorp-sync";
 
 // Worker de mensagens no tempo. Follow-up/lembretes rodam na cadência comercial
 // configurada; a saúde do WhatsApp tem um job próprio, mais rápido:
@@ -49,6 +50,11 @@ async function main() {
   const healthQueue = new Queue(HEALTH_QUEUE, { connection });
   const clinicorpReminderQueue = new Queue(CLINICORP_REMINDER_QUEUE, { connection });
   const knowledgeGapQueue = new Queue(KNOWLEDGE_GAP_QUEUE, { connection });
+  const clinicorpSyncQueue = new Queue("clinicorp-appointment-sync", { connection });
+  await clinicorpSyncQueue.setGlobalConcurrency(1);
+  await clinicorpSyncQueue.upsertJobScheduler("clinicorp-sync-scheduler", { every: 30_000 }, { name: "clinicorp-sync" });
+  const clinicorpSyncWorker = new Worker("clinicorp-appointment-sync", async () => scanClinicorpSync(), { connection, concurrency: 1 });
+  clinicorpSyncWorker.on("failed", (job, err) => console.error(`[clinicorp envio] job ${job?.id} falhou`, err));
   const broadcastQueue = new Queue("whatsapp-broadcasts", { connection });
   await broadcastQueue.setGlobalConcurrency(1);
   await broadcastQueue.upsertJobScheduler(

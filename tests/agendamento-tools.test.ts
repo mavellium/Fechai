@@ -6,10 +6,13 @@ const db = vi.hoisted(() => ({
   conversation: { update: vi.fn(), updateMany: vi.fn() },
   lead: { findFirst: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
 }));
-const mirrors = vi.hoisted(() => ({ googlePush: vi.fn(), googleDelete: vi.fn(), clinicorpPush: vi.fn(), clinicorpCancel: vi.fn(), clinicorpConflict: vi.fn(), clinicorpBusy: vi.fn() }));
+const mirrors = vi.hoisted(() => ({ googlePush: vi.fn(), googleDelete: vi.fn(), clinicorpPush: vi.fn(), clinicorpCancel: vi.fn(), clinicorpConflict: vi.fn(), clinicorpBusy: vi.fn(), clinicorpPending: vi.fn() }));
 vi.mock("@/lib/prisma", () => ({ prisma: db }));
 vi.mock("@/modules/scheduling/google", () => ({ pushEventToGoogle: mirrors.googlePush, deleteEventFromGoogle: mirrors.googleDelete }));
-vi.mock("@/modules/scheduling/clinicorp", () => ({ pushAppointmentToClinicorp: mirrors.clinicorpPush, cancelAppointmentInClinicorp: mirrors.clinicorpCancel, hasClinicorpConflict: mirrors.clinicorpConflict, listClinicorpBusyBlocks: mirrors.clinicorpBusy }));
+vi.mock("@/modules/scheduling/clinicorp", () => ({ pushAppointmentToClinicorp: mirrors.clinicorpPush, cancelAppointmentInClinicorp: mirrors.clinicorpCancel, hasClinicorpConflict: mirrors.clinicorpConflict, listClinicorpBusyBlocks: mirrors.clinicorpBusy, clinicorpConfirmationPending: mirrors.clinicorpPending }));
+vi.mock("@/modules/scheduling/clinicorp-sync", () => ({
+  syncAppointmentToClinicorp: (tenantId: string, _id: string, input: unknown) => mirrors.clinicorpPush(tenantId, input),
+}));
 vi.mock("@/modules/agent-engine/handoff", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/modules/agent-engine/handoff")>()),
   notifyHandoffGroup: vi.fn(),
@@ -47,6 +50,7 @@ beforeEach(() => {
   mirrors.clinicorpPush.mockResolvedValue({ status: "synced", appointmentId: "456" });
   mirrors.clinicorpConflict.mockResolvedValue(false);
   mirrors.clinicorpBusy.mockResolvedValue([]);
+  mirrors.clinicorpPending.mockResolvedValue(false);
 });
 afterEach(() => vi.useRealTimers());
 
@@ -213,13 +217,14 @@ describe("reagendamento", () => {
   });
   it("não desfaz reagendamento local quando o novo espelho falha", async () => {
     mirrors.clinicorpPush.mockResolvedValue({ status: "failed", error: "indisponível" });
-    expect(await reschedule()).toContain("Reagendado no fechai");
+    expect(await reschedule()).toContain("Ainda não consegui confirmar");
+    expect((ctx as ToolContext).replyOverride).toContain("precisa ser conferida");
     expect(db.appointment.updateMany).toHaveBeenCalled();
   });
   it("não duplica espelhos se a remoção anterior falhar e preserva seus IDs", async () => {
     mirrors.googleDelete.mockResolvedValue(false);
     mirrors.clinicorpCancel.mockResolvedValue(false);
-    expect(await reschedule()).toContain("Reagendado no fechai");
+    expect(await reschedule()).toContain("Ainda não consegui confirmar");
     expect(mirrors.googlePush).not.toHaveBeenCalled();
     expect(mirrors.clinicorpPush).not.toHaveBeenCalled();
     expect(db.appointment.updateMany).toHaveBeenLastCalledWith(expect.objectContaining({ data: { googleEventId: "google-antigo", clinicorpAppointmentId: "123" } }));
@@ -233,6 +238,39 @@ describe("reagendamento", () => {
 });
 
 describe("retorno de contato com consulta", () => {
+  it("não confirma nem repete uma reserva sem confirmação do Clinicorp", async () => {
+    mirrors.clinicorpPending.mockResolvedValue(true);
+    db.appointment.findFirst.mockResolvedValue({ ...appointment, clinicorpAppointmentId: null });
+    const turn: ToolContext = { ...ctx };
+    const result = await runToolHandler("schedule_meeting", turn, { date: "2026-09-17", time: "10:00", patientName: "Cliente" });
+    expect(result).toBe(turn.replyOverride);
+    expect(result).toContain("concluindo automaticamente");
+    expect(db.appointment.create).not.toHaveBeenCalled();
+    expect(mirrors.clinicorpPush).not.toHaveBeenCalled();
+  });
+
+  it("identifica reserva pendente no contexto de um próximo turno", async () => {
+    mirrors.clinicorpPending.mockResolvedValue(true);
+    db.appointment.findMany.mockResolvedValue([{ ...appointment, clinicorpAppointmentId: null }]);
+    expect(await leadAppointmentsContext(ctx, cfg)).toContain("Registro automático no Clinicorp em andamento");
+  });
+
+  it("encerra o turno com resposta fiel quando a criação no Clinicorp falha", async () => {
+    db.appointment.findMany.mockResolvedValue([]);
+    db.appointment.findFirst.mockResolvedValue(null);
+    db.appointment.create.mockResolvedValue({ id: "nova-consulta" });
+    db.appointment.update.mockResolvedValue({});
+    db.lead.findUnique.mockResolvedValue({ name: "Paciente", phone: "5511999999999" });
+    db.lead.update.mockResolvedValue({});
+    mirrors.clinicorpPush.mockResolvedValue({ status: "failed", automatic: true, error: "Sem identificador" });
+    const turn: ToolContext = { ...ctx };
+    const result = await runToolHandler("schedule_meeting", turn, { date: "2026-09-17", time: "14:00", patientName: "Cliente" });
+    expect(result).toBe(turn.replyOverride);
+    expect(result).toContain("concluindo automaticamente");
+    expect(result).not.toContain("confirmada");
+    expect(db.appointment.create).toHaveBeenCalledOnce();
+  });
+
   it("consulta o contato na conta, sem depender do histórico da conversa", async () => {
     expect(await leadAppointmentsContext(ctx, cfg)).toContain(appointment.id);
     expect(db.appointment.findMany).toHaveBeenCalledWith({ where: { tenantId: ctx.tenantId, leadId: ctx.leadId, status: "scheduled", startsAt: { gte: expect.any(Date) } }, orderBy: { startsAt: "asc" } });

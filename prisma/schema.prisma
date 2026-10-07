@@ -987,6 +987,7 @@ model Appointment {
   /// Guardado como String porque o id de lá é um inteiro de 64 bits (ex.:
   /// 4791226171916288) — fora do alcance seguro do Number do JS.
   clinicorpAppointmentId String?
+  clinicorpSync          ClinicorpAppointmentSync?
   /// Antecedências (em minutos) dos lembretes que JÁ foram enviados para esta
   /// consulta. Fica aqui, e não em `Conversation` como `followUpSentAt`,
   /// porque é lembrete POR CONSULTA: o mesmo paciente marca de novo no mês
@@ -1014,6 +1015,29 @@ model Appointment {
   /// disparos ainda faltam é decidido em memória (`remindersSent` é uma
   /// lista, que um índice não ajudaria a filtrar).
   @@index([status, startsAt])
+}
+
+/// Envio durável ao Clinicorp. A consulta é preservada durante falhas externas;
+/// cada nova tentativa relê a agenda antes de criar para evitar duplicação.
+model ClinicorpAppointmentSync {
+  id             String      @id @default(cuid())
+  appointmentId  String      @unique
+  appointment    Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  tenantId       String
+  payload        Json
+  target         Json
+  state          String      @default("queued") // queued | processing | retry | synced | canceled | conflict
+  attempts       Int         @default(0)
+  nextAttemptAt  DateTime    @default(now())
+  lockedUntil    DateTime?
+  lockToken      String?
+  lastError      String?
+  externalId     String?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  @@index([state, nextAttemptAt])
+  @@index([tenantId])
 }
 
 /// Quais integrações de calendário a conta habilitou em /integracoes.

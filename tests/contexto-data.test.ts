@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const db = vi.hoisted(() => ({
   appointment: { findMany: vi.fn() },
+  calendarFeatures: { findUnique: vi.fn(async () => null) },
   message: { findMany: vi.fn() },
 }));
 const ai = vi.hoisted(() => ({ complete: vi.fn(), usage: vi.fn() }));

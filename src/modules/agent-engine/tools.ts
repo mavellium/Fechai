@@ -12,6 +12,7 @@ import {
 } from "@/modules/scheduling/repository";
 import { formatInZone, parseLocalDateTime } from "@/modules/scheduling/time";
 import { parseKind } from "@/modules/scheduling/dimensions";
+import { clinicorpConfirmationPending } from "@/modules/scheduling/clinicorp";
 import { DISQUALIFY_REASONS, parseReason } from "./disqualify";
 import { notifyHandoffGroup, handoffToolDescription, type HandoffConfig } from "./handoff";
 import { ACTION_BY_KEY, type ActionKey } from "./actions";
@@ -340,11 +341,19 @@ const TOOLS: Record<ActionKey, ToolDef> = {
       const own = await findOwnAppointment(ctx.tenantId, ctx.conversationId, startsAt, endsAt);
       if (own) {
         const when = formatInZone(own.startsAt, cfg.timezone);
+        if (!own.clinicorpAppointmentId && await clinicorpConfirmationPending(ctx.tenantId)) {
+          ctx.replyOverride = `Estou concluindo automaticamente o registro da sua consulta para ${when} na agenda da clínica. O horário está reservado; você não precisa pedir outro agendamento.`;
+          return ctx.replyOverride;
+        }
         return `Esse horário já está confirmado para ${when}${cfg.location ? ` (${cfg.location})` : ""}. Não é necessário marcar de novo — apenas confirme com o contato.`;
       }
 
       const upcoming = await listUpcomingLeadAppointments(ctx.tenantId, ctx.leadId);
       if (upcoming.length && args.additionalAppointment !== true) {
+        if (upcoming.some((a) => !a.clinicorpAppointmentId) && await clinicorpConfirmationPending(ctx.tenantId)) {
+          ctx.replyOverride = "Estou concluindo automaticamente o registro do horário reservado na agenda da clínica. Você não precisa pedir outro agendamento.";
+          return ctx.replyOverride;
+        }
         return `O contato já tem consulta marcada: ${upcoming.map((a) => `${a.id}: ${formatInZone(a.startsAt, cfg.timezone)}`).join("; ")}. Não crie outra para confirmar ou reagendar. Para trocar, use reschedule_meeting se habilitado; caso contrário, ofereça atendimento humano. Só marque outra consulta se o contato pedir explicitamente uma consulta adicional, mantendo a anterior.`;
       }
 
@@ -384,7 +393,10 @@ const TOOLS: Record<ActionKey, ToolDef> = {
           : "";
       if (appointment.clinicorpSync.status === "failed") {
         if (appointment.clinicorpSync.reason === "conflict") return offerAlternativeSlots(ctx, cfg, startsAt, duration.minutes);
-        return `Agendado no fechai para ${when}${kind}${cfg.location ? ` (${cfg.location})` : ""}. O envio ao Clinicorp não foi confirmado. O horário continua reservado; não marque novamente nem afirme que já aparece no Clinicorp.`;
+        ctx.replyOverride = appointment.clinicorpSync.automatic
+          ? `Estou concluindo automaticamente o registro da sua consulta para ${when} na agenda da clínica. O horário está reservado; você não precisa pedir outro agendamento.`
+          : `Ainda não consegui concluir o registro da sua consulta para ${when} na agenda da clínica. Preservei o horário e vou precisar confirmar o envio antes de dizer que está concluído.`;
+        return ctx.replyOverride;
       }
       return `Agendado para ${when}${kind}${cfg.location ? ` (${cfg.location})` : ""}. Confirme esse horário com o contato.`;
     },

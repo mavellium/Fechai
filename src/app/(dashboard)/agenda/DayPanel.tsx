@@ -250,7 +250,9 @@ export function DayPanel({
                             />
                             {appointment.clinicorpAppointmentId
                               ? "Clinicorp enviado"
-                              : "Pendente Clinicorp"}
+                              : appointment.clinicorpSync && ["queued", "processing", "retry"].includes(appointment.clinicorpSync.state)
+                                ? "Enviando ao Clinicorp"
+                                : "Envio ao Clinicorp não confirmado"}
                           </span>
                         )}
                       </div>

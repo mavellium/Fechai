@@ -158,6 +158,9 @@ export async function scanAndSendReminders(now: Date = new Date()) {
       // Pela conta, não pelo `agentId`: ver `loadAccountScheduleConfigs`.
       tenantId: { in: [...configByTenant.keys()] },
       status: "scheduled",
+      // Não envie uma confirmação por WhatsApp enquanto a criação externa
+      // ainda estiver sendo concluída ou tiver sido recusada.
+      AND: [{ OR: [{ clinicorpSync: null }, { clinicorpSync: { state: "synced" }, clinicorpAppointmentId: { not: null } }] }],
       startsAt: { gte: now },
       // Conversa de teste não recebe lembrete: o sandbox usa telefone
       // sintético, mesma regra do follow-up e do grupo de handoff.

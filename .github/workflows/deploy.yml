@@ -112,6 +112,6 @@ jobs:
             git pull --ff-only origin main
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
             chmod +x deploy.sh
-            APP_IMAGE="$APP_IMAGE" ./deploy.sh all
+            DEPLOY_DB_PUSH=1 APP_IMAGE="$APP_IMAGE" ./deploy.sh all
             docker logout ghcr.io
 

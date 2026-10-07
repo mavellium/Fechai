@@ -11,6 +11,7 @@ import {
 } from "./clinicorp";
 import { dayKeyInZone, monthRangeUtc, parseLocalDateTime, partsInZone, zonedTimeToUtc } from "./time";
 import { canConfirm, canMarkAttendance, type AppointmentKind, type Attendance } from "./dimensions";
+import { syncAppointmentToClinicorp } from "./clinicorp-sync";
 
 /**
  * Leitura e escrita da agenda. Toda query filtra por tenantId (regra do
@@ -223,7 +224,7 @@ export async function createAppointment(input: CreateAppointmentInput) {
 
   // Uma recusa explícita por conflito é diferente de uma falha do espelho:
   // essa tentativa não pode ficar como consulta marcada nem ir para o Google.
-  const clinicorpSync = await pushAppointmentToClinicorp(input.tenantId, {
+  const clinicorpSync = await syncAppointmentToClinicorp(input.tenantId, appointment.id, {
     title: input.title,
     patientName: input.patientName,
     notes: input.notes,
@@ -466,7 +467,7 @@ export async function listMonthAppointments(
   const rows = await prisma.appointment.findMany({
     where: { tenantId, startsAt: { gte: start, lt: end } },
     orderBy: { startsAt: "asc" },
-    include: withLead,
+    include: { ...withLead, clinicorpSync: { select: { state: true } } },
   });
 
   const byDay = new Map<string, typeof rows>();

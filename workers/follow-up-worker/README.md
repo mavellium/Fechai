@@ -11,11 +11,20 @@ relógio, não por uma resposta do contato:
 | **follow-up** | silêncio do lead sem consulta atual/futura | tenants com a ação `follow_up` ativa |
 | **lembretes** | consultas chegando | tenants com `schedule_meeting` ativa **e** lembrete configurado |
 | **lembretes do Clinicorp** | consultas marcadas direto no Clinicorp | os mesmos, com Clinicorp ligado e canal permitido (ver abaixo) |
+| **envio ao Clinicorp** | consulta local sem criação externa confirmada | contas ativas com o espelho ligado |
 | **perguntas sem resposta** | pergunta nova na fila / hora do resumo | a equipe da conta (e-mail, grupo) e a Mavellium — ver [`src/modules/knowledge-gaps/README.md`](../../src/modules/knowledge-gaps/README.md) |
 
 Cada varredura tem sua própria fila: follow-up roda a cada 15 minutos e
 lembretes a cada minuto por padrão. Assim um lembrete configurado para 23h
 não espera o próximo ciclo do follow-up. As falhas de uma fila não param a outra.
+
+A fila `clinicorp-appointment-sync` roda a cada 30 s, com concorrência global 1.
+Os envios e claims ficam no banco (`ClinicorpAppointmentSync`), não no Redis:
+reiniciar os processos não perde uma tentativa. O núcleo é
+`src/modules/scheduling/clinicorp-sync.ts`; cada retry confere a agenda sem cache
+antes de criar. Também recupera consultas futuras que ficaram sem envio antes
+da fila existir. Não manda mensagens ao paciente. Lembretes locais aguardam o
+envio concluir. Exige `db push` + client gerado nos processos web e worker.
 
 ## Arquivos
 

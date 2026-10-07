@@ -136,6 +136,9 @@ export async function createManualAppointment(
     if (appointment.clinicorpSync.reason === "conflict") {
       return { ok: false, error: "O Clinicorp recusou esse horário porque já está ocupado. Nenhuma nova consulta foi confirmada. Escolha outro horário." };
     }
+    if (appointment.clinicorpSync.automatic) return {
+      ok: true, info: "Horário reservado. O registro no Clinicorp está sendo concluído automaticamente.",
+    };
     return { ok: true, info: "Compromisso salvo no fechai.",
       warning: `O envio ao Clinicorp não foi confirmado. ${appointment.clinicorpSync.error} Não crie outro compromisso: confira a agenda da clínica e a integração.` };
   }

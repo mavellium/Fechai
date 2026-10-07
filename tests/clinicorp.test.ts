@@ -10,9 +10,16 @@ const db = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/prisma", () => ({ prisma: db }));
 vi.mock("@/modules/scheduling/google", () => ({ pushEventToGoogle: vi.fn(async () => null) }));
+// Estes testes exercitam o contrato HTTP; a fila durável tem sua suíte própria.
+vi.mock("@/modules/scheduling/clinicorp-sync", () => ({
+  syncAppointmentToClinicorp: async (tenantId: string, _id: string, input: unknown) => {
+    const transport = await import("@/modules/scheduling/clinicorp");
+    return transport.pushAppointmentToClinicorp(tenantId, input as import("@/modules/scheduling/clinicorp").ClinicorpEventInput);
+  },
+}));
 
 import {
-  cancelAppointmentInClinicorp, clearClinicorpAgendaCache, getClinicorpStatus, hasClinicorpConflict, listClinicorpAgenda,
+  cancelAppointmentInClinicorp, clearClinicorpAgendaCache, clinicorpConfirmationPending, getClinicorpStatus, hasClinicorpConflict, listClinicorpAgenda,
   listClinicorpCategories, listClinicorpProfessionals, listClinicorpBusyBlocks, pushAppointmentToClinicorp,
   saveClinicorpCredentials, testClinicorpConnection, verifyClinicorpCredentials,
 } from "@/modules/scheduling/clinicorp";
@@ -23,6 +30,7 @@ const event = {
   title: "Teste", startsAt: new Date("2026-09-14T19:30:00Z"), endsAt: new Date("2026-09-14T19:45:00Z"),
   timeZone: "America/Sao_Paulo", lead: { name: "Paciente de teste", phone: "+55 (11) 99999-0000" },
 };
+const testLead = { name: "Chat de teste", phone: "sandbox:cmf9x2k7p0001", isTest: true };
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status });
 let integration: Record<string, unknown>;
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -47,7 +55,7 @@ beforeEach(() => {
   db.lead.findUnique.mockResolvedValue(event.lead);
   fetchMock = vi.fn(async (url: URL) => {
     if (url.pathname.endsWith("/list_categories")) return json([{ id: 1234567890125, Description: "Avaliação" }]);
-    if (url.pathname.endsWith("/patient/get")) return json({ PatientId: 333333333333, Status: "ACTIVE" });
+    if (url.pathname.endsWith("/patient/get")) return json({ PatientId: 333333333333, Status: "ACTIVE", Name: url.searchParams.get("Name") ?? "Paciente de teste" });
     if (url.pathname.endsWith("/business/list")) return json([{ id: 4791226171916288, Name: "Clínica teste" }]);
     return json([{ Status: "CREATED", id: 987654321 }]);
   });
@@ -57,6 +65,65 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
 describe("envio de agendamentos ao Clinicorp", () => {
+  const externalRow = { id: 987654321, date: "2026-09-14T00:00:00.000Z", AtomicDate: "2026-09-14", fromTime: "16:30", toTime: "16:45", Clinic_BusinessId: 4791226171916288, Dentist_PersonId: 222222222222, PatientName: "Paciente de teste", MobilePhone: "11999990000" };
+
+  it("reconcilia criação aceita sem ID e reconhece a referência na próxima tentativa sem novo POST", async () => {
+    const original = fetchMock.getMockImplementation()!;
+    let posted = false;
+    fetchMock.mockImplementation(async (url: URL, init: RequestInit) => {
+      if (url.pathname.endsWith("/appointment/list")) return json(posted ? [{ ...externalRow, Notes: "[fechai:envio-1]" }] : []);
+      if (url.pathname.endsWith("/create_appointment_by_api")) {
+        expect(JSON.parse(String(init.body)).Procedures).toContain("[fechai:envio-1]");
+        posted = true; return new Response("", { status: 200 });
+      }
+      return original(url);
+    });
+    const tracked = { ...event, referenceId: "envio-1" };
+    expect(await pushAppointmentToClinicorp("tenant-1", tracked)).toEqual({ status: "synced", appointmentId: "987654321" });
+    expect(await pushAppointmentToClinicorp("tenant-1", tracked)).toEqual({ status: "synced", appointmentId: "987654321" });
+    expect(fetchMock.mock.calls.filter(([url]) => url.pathname.endsWith("/create_appointment_by_api"))).toHaveLength(1);
+  });
+
+  it("reconhece pessoa, telefone, profissional e horário exatos quando a agenda não devolve as notas", async () => {
+    fetchMock.mockImplementation(async () => json([externalRow]));
+    expect(await pushAppointmentToClinicorp("tenant-1", { ...event, referenceId: "envio-1" })).toEqual({ status: "synced", appointmentId: "987654321" });
+    expect(fetchMock.mock.calls.every(([url]) => url.pathname.endsWith("/appointment/list"))).toBe(true);
+  });
+
+  it("não repete uma criação quando a releitura está indisponível ou ambígua", async () => {
+    fetchMock.mockImplementation(async () => json({ message: "Offline" }, 503));
+    expect(await pushAppointmentToClinicorp("tenant-1", { ...event, referenceId: "envio-1" })).toMatchObject({ status: "failed" });
+    fetchMock.mockImplementation(async () => json([externalRow, { ...externalRow, id: 987654322 }]));
+    expect(await pushAppointmentToClinicorp("tenant-1", { ...event, referenceId: "envio-1" })).toMatchObject({ status: "failed" });
+    expect(fetchMock.mock.calls.some(([url]) => url.pathname.endsWith("/create_appointment_by_api"))).toBe(false);
+  });
+
+  it("conserva o assinante original da fila mesmo se a conexão for trocada", async () => {
+    expect(await pushAppointmentToClinicorp("tenant-1", { ...event, referenceId: "envio-1", target: { subscriberId: "outro", businessId: String(integration.businessId), dentistId: null, categoryDescription: null } })).toMatchObject({ status: "failed" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("não trata credencial ilegível como integração opcional desligada", async () => {
+    integration.apiToken = "ilegível";
+    expect(await pushAppointmentToClinicorp("tenant-1", event)).toMatchObject({ status: "failed" });
+    expect(await clinicorpConfirmationPending("tenant-1")).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("não confirma o espelho quando habilitado sem conexão", async () => {
+    db.clinicorpIntegration.findUnique.mockResolvedValue(null);
+    expect(await pushAppointmentToClinicorp("tenant-1", event)).toMatchObject({ status: "failed" });
+    expect(await clinicorpConfirmationPending("tenant-1")).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("permite confirmação local quando o usuário desligou o espelho", async () => {
+    integration.syncEnabled = false;
+    expect(await pushAppointmentToClinicorp("tenant-1", event)).toEqual({ status: "skipped" });
+    expect(await clinicorpConfirmationPending("tenant-1")).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("envia segunda dia 14 às 16:30 por 15 minutos, ao profissional e à categoria cadastrados", async () => {
     expect(await pushAppointmentToClinicorp("tenant-1", event)).toEqual({ status: "synced", appointmentId: "987654321" });
     const [url, init] = fetchMock.mock.calls.find(([url]) => url.pathname.endsWith("/create_appointment_by_api"))! as unknown as [URL, RequestInit];
@@ -470,21 +537,21 @@ describe("recusa explícita de horário ocupado (relato da Paula)", () => {
 // chat de teste. O teste precisa marcar em todas as integrações, mas o telefone
 // dele é sintético ("sandbox:<agente>").
 describe("agendamento do chat de teste", () => {
-  const testLead = { name: "Chat de teste", phone: "sandbox:cmf9x2k7p0001", isTest: true };
   const body = () => {
     const [, init] = fetchMock.mock.calls.find(([url]) => url.pathname.endsWith("/create_appointment_by_api"))! as unknown as [URL, RequestInit];
     return JSON.parse(String(init.body));
   };
 
-  it("vai ao Clinicorp sem telefone, sem cadastro de paciente e identificado como teste", async () => {
+  it("vincula o paciente exclusivo de teste, sem inventar telefone", async () => {
     db.lead.findUnique.mockResolvedValue(testLead);
     const result = await createAppointment({ tenantId: "tenant-1", leadId: "lead-teste", title: event.title,
       startsAt: event.startsAt, durationMinutes: 15, source: "agent", timezone: event.timeZone });
 
     expect(result.clinicorpSync).toEqual({ status: "synced", appointmentId: "987654321" });
-    expect(fetchMock.mock.calls.some(([url]) => url.pathname.includes("/patient/"))).toBe(false);
+    expect(fetchMock.mock.calls.some(([url]) => url.pathname.endsWith("/patient/get") && url.searchParams.get("Name") === "TESTE fechai (chat de teste do agente)")).toBe(true);
+    expect(fetchMock.mock.calls.some(([url]) => url.pathname.endsWith("/patient/create"))).toBe(false);
     expect(body()).not.toHaveProperty("MobilePhone");
-    expect(body()).not.toHaveProperty("Patient_PersonId");
+    expect(body().Patient_PersonId).toBe(333333333333);
     expect(body().PatientName).toContain("TESTE");
     expect(body().Procedures).toContain("chat de teste");
     expect(body()).not.toHaveProperty("Notes");
@@ -519,6 +586,33 @@ describe("aviso de falha com o motivo", () => {
       : json({ message: "Profissional sem agenda neste horário" }, 400));
     expect(await pushAppointmentToClinicorp("tenant-1", event)).toMatchObject({ error: expect.stringContaining("Profissional sem agenda neste horário") });
     expect(lastError()).toContain('erro 400: "Profissional sem agenda neste horário"');
+  });
+
+  it("cria uma única vez o cadastro sem telefone e confere o id antes de enviar", async () => {
+    const original = fetchMock.getMockImplementation()!;
+    let lookups = 0;
+    fetchMock.mockImplementation(async (url: URL, init?: RequestInit) => {
+      if (url.pathname.endsWith("/patient/get")) return json(++lookups === 1 ? null : { PatientId: 88, Name: "TESTE fechai (chat de teste do agente)", Status: "ACTIVE" });
+      if (url.pathname.endsWith("/patient/create")) return json({ Name: "TESTE fechai (chat de teste do agente)" });
+      if (url.pathname.endsWith("/create_appointment_by_api") && !JSON.parse(String(init?.body)).Patient_PersonId) return json([]);
+      return original(url, init);
+    });
+    expect(await pushAppointmentToClinicorp("tenant-1", { ...event, lead: testLead })).toMatchObject({ status: "synced" });
+    const creates = fetchMock.mock.calls.filter(([url]) => url.pathname.endsWith("/patient/create"));
+    expect(creates).toHaveLength(1);
+    const patient = JSON.parse(String(creates[0][1]?.body));
+    expect(patient.Name).toBe("TESTE fechai (chat de teste do agente)");
+    expect(patient).not.toHaveProperty("MobilePhone");
+    expect(patient).not.toHaveProperty("IgnoreSameName");
+    const [, booked] = fetchMock.mock.calls.find(([url]) => url.pathname.endsWith("/create_appointment_by_api"))!;
+    expect(JSON.parse(String(booked?.body)).Patient_PersonId).toBe(88);
+  });
+
+  it.each([json({ Name: "Paciente real", PatientId: 88 }), json(null, 500), json([{ PatientId: 88 }, { PatientId: 99 }])])("não cria cadastro ou horário quando a busca do teste é ambígua ou falha", async (response) => {
+    const original = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (url: URL, init?: RequestInit) => url.pathname.endsWith("/patient/get") ? response.clone() : original(url, init));
+    expect(await pushAppointmentToClinicorp("tenant-1", { ...event, lead: testLead })).toMatchObject({ status: "failed" });
+    expect(fetchMock.mock.calls.some(([url]) => url.pathname.endsWith("/patient/create") || url.pathname.endsWith("/create_appointment_by_api"))).toBe(false);
   });
 
   it.each([200, 204])("explica resposta HTTP %i vazia e mantém uma única reserva local", async (status) => {

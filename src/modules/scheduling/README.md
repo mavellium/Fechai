@@ -445,10 +445,12 @@ Base: `https://api.clinicorp.com/rest/v1`. Quase todo endpoint pede
   instante UTC cru jogaria horários da manhã no Brasil para o dia anterior.
 - **Chat de teste marca em todas as integrações**, como um contato real — é assim
   que o dono vê o fluxo inteiro. Só muda o paciente: o telefone do sandbox é
-  sintético (`sandbox:<agente>`), então o envio vai **sem telefone e sem
-  cadastro de paciente**, com `PatientName` "TESTE fechai" e nota dizendo que
-  pode excluir em `Procedures`. Exigir telefone gravava "Vincule um contato com telefone" no
-  card; usar os dígitos do id criava paciente com celular inventado.
+  sintético (`sandbox:<agente>`), então o envio vai **sem telefone**, vinculado
+  ao cadastro exclusivo "TESTE fechai (chat de teste do agente)". A integração
+  busca esse nome exato, cria se a ausência foi confirmada e relê o id antes de
+  marcar. Busca ambígua ou falha interrompe o envio. Nunca usa os dígitos do id
+  como telefone, o nome simulado como paciente real ou `IgnoreSameName` para
+  criar outro cadastro de teste. A nota do horário identifica o teste em `Procedures`.
 - **`IgnoreSameName: "X"` ao criar paciente.** Sem isso o Clinicorp recusa quando
   já existe alguém com o mesmo nome — e "João Silva" repetido é rotina numa base
   de pacientes. O telefone é o que de fato distingue, e ele já foi consultado
@@ -469,8 +471,10 @@ Base: `https://api.clinicorp.com/rest/v1`. Quase todo endpoint pede
 - **HTTP bem-sucedido sem confirmação nunca vira envio confirmado.** O painel
   preserva o motivo informado pela API ou avisa sobre corpo vazio. O console
   registra apenas código HTTP, estrutura da resposta e presença dos campos de
-  paciente enviados, sem corpo, headers ou valores de dados pessoais. Não há
-  reenvio automático para esse resultado incerto.
+  paciente enviados, sem corpo, headers ou valores de dados pessoais. A fila
+  automática relê a agenda sem cache antes de qualquer nova criação: reconhece
+  a referência `[fechai:<id do envio>]` em Notes/Procedures, ou a identidade e
+  o horário/profissional exatos. Leitura indisponível ou ambígua não permite POST.
 - **Falha na consulta de disponibilidade devolve `null`.** Com a checagem
   habilitada, uma falha, credencial ilegível ou resposta incompleta não prova que
   o horário esteja livre. Nenhuma reserva nova é confirmada até conseguir
@@ -497,10 +501,27 @@ Base: `https://api.clinicorp.com/rest/v1`. Quase todo endpoint pede
   `failed` com motivo ou `skipped` quando desligado/sem conexão. HTTP 200 vazio,
   objeto de erro e resposta sem id válido **não são confirmação de criação**.
   Só uma criação confirmada atualiza `lastSyncAt` e limpa o erro de envio.
-- `createAppointment` conserva o compromisso local e devolve esse resultado.
-  A criação manual mostra aviso de falha; a ferramenta do agente não afirma
-  que o horário já aparece no Clinicorp. A agenda indica o envio por compromisso
-  usando `clinicorpAppointmentId`, inclusive quando outro envio posterior deu certo.
+- `createAppointment` persiste `ClinicorpAppointmentSync` antes da chamada HTTP
+  e tenta enviar imediatamente. Falhas temporárias ficam em `retry` com próxima
+  tentativa em 2 min, sem limite de tentativas; o worker varre a cada 30 s e
+  também recupera consultas futuras antigas sem id externo. Claim condicional,
+  token e lease de 3 min protegem web/worker concorrentes e reinícios. Clínica e
+  assinante ficam congelados no envio; trocar conexão não redireciona dados.
+- A criação manual e o agente informam que o registro está sendo concluído
+  automaticamente quando a fila foi persistida (`automatic: true`). A agenda
+  mostra "Enviando ao Clinicorp" durante o processamento e "Clinicorp enviado"
+  só com `clinicorpAppointmentId`. `replyOverride` impede confirmação falsa.
+  Pedir confirmação novamente não cria outra reserva. A recuperação também
+  reconhece uma consulta externa criada sem resposta ou antes de salvar o ID.
+- Cancelar ou mudar o horário de uma tentativa incerta exige conferir e limpar
+  seu possível registro antigo antes de encerrar o envio. Nunca recria consulta
+  cancelada. Uma versão terminal pode ser substituída pela versão reagendada
+  sem ID; um envio incerto nunca tem payload ou destino sobrescritos. Lembretes
+  do fechai aguardam a fila concluir o envio. Conflito no retry cancela a reserva
+  local e seu espelho Google; o contato pode escolher outro horário.
+- Schema novo: `ClinicorpAppointmentSync`. Aplicar `prisma db push` e gerar o
+  client na imagem usada por web e worker. O deploy aplica o schema antes da
+  troca, e a imagem compartilha o mesmo client gerado entre os dois processos.
 - A recusa explícita "horário ocupado" retorna `failed` com `reason: "conflict"`.
   Uma tentativa nova é cancelada localmente, sem promover o lead a agendado nem
   enviar ao Google. Ao reagendar, o horário original é reposto e seus espelhos

@@ -5,6 +5,7 @@ import { dayKeyInZone, formatInZone, parseLocalDateTime, partsInZone, timeInZone
 import type { ToolContext } from "./tools";
 import { relativeDayLabel } from "./time-context";
 import { describeRanges, getWeeklyAvailability } from "@/modules/scheduling/weekly-availability";
+import { clinicorpConfirmationPending } from "@/modules/scheduling/clinicorp";
 
 const DEFAULT_AVAILABILITY_SEARCH_DAYS = 14;
 const MAX_AVAILABILITY_SEARCH_DAYS = 14;
@@ -103,13 +104,14 @@ export async function leadAppointmentsContext(
 ): Promise<string> {
   const appointments = await listUpcomingLeadAppointments(ctx.tenantId, ctx.leadId);
   if (!appointments.length) return "Nenhuma consulta futura deste contato na agenda do fechai.";
+  const checkSync = appointments.some((a) => !a.clinicorpAppointmentId) && await clinicorpConfirmationPending(ctx.tenantId);
   // Só IDs e horários: títulos/notas livres não viram instruções de sistema.
   // O dia relativo ("é HOJE") vem calculado: com só a data absoluta, o agente
   // repetiu o "amanhã" do lembrete da véspera na manhã da consulta.
   return [
     "Consultas futuras deste contato na agenda do fechai:",
     ...appointments.map((a) =>
-      `- ID ${a.id}: ${formatInZone(a.startsAt, cfg.timezone)} (${Math.round((a.endsAt.getTime() - a.startsAt.getTime()) / 60_000)} min) — é ${relativeDayLabel(a.startsAt, now, cfg.timezone).toUpperCase()}, às ${timeInZone(a.startsAt, cfg.timezone)}.`,
+      `- ID ${a.id}: ${formatInZone(a.startsAt, cfg.timezone)} (${Math.round((a.endsAt.getTime() - a.startsAt.getTime()) / 60_000)} min) — é ${relativeDayLabel(a.startsAt, now, cfg.timezone).toUpperCase()}, às ${timeInZone(a.startsAt, cfg.timezone)}.${checkSync && !a.clinicorpAppointmentId ? " Registro automático no Clinicorp em andamento. Não afirme que já foi concluído nem crie outra reserva." : ""}`,
     ),
     `- Ao mencionar uma dessas consultas, use o dia indicado aqui ("hoje", "amanhã" ou a data), mesmo que uma mensagem anterior da conversa diga outra coisa.`,
   ].join("\n");
@@ -254,7 +256,13 @@ export async function runSchedulingTool(name: string, ctx: ToolContext, args: Re
   const startsAt = typeof args.date === "string" && typeof args.time === "string"
     ? parseLocalDateTime(args.date, args.time, cfg.timezone) : null;
   if (!startsAt) return "Nova data/hora inválida. O horário original continua reservado.";
-  if (startsAt.getTime() === appointment.startsAt.getTime()) return `A consulta já está marcada para ${previous}. Nenhuma alteração necessária.`;
+  if (startsAt.getTime() === appointment.startsAt.getTime()) {
+    if (!appointment.clinicorpAppointmentId && await clinicorpConfirmationPending(ctx.tenantId)) {
+      ctx.replyOverride = `A reserva para ${previous} ainda precisa ser conferida na agenda da clínica antes da confirmação. Não fiz outra reserva.`;
+      return ctx.replyOverride;
+    }
+    return `A consulta já está marcada para ${previous}. Nenhuma alteração necessária.`;
+  }
   if (startsAt.getTime() < Date.now() + cfg.minNoticeHours * 3_600_000) return "O novo horário já passou ou não respeita a antecedência mínima. O horário original continua reservado.";
   const durationMinutes = (appointment.endsAt.getTime() - appointment.startsAt.getTime()) / 60_000;
   if (!isWithinBusinessHours(startsAt, { ...cfg, durationMinutes })) return "O novo horário fica fora do expediente ou atravessa uma pausa. O horário original continua reservado. Combine outro horário.";
@@ -264,7 +272,8 @@ export async function runSchedulingTool(name: string, ctx: ToolContext, args: Re
   const when = formatInZone(startsAt, cfg.timezone);
   if (result.status === "unchanged") return `A consulta já está marcada para ${when}. Nenhuma alteração necessária.`;
   if (result.status === "rescheduled" && result.clinicorpSync.status === "failed") {
-    return `Reagendado no fechai para ${when}. O envio ao Clinicorp não foi confirmado; não reagende novamente nem afirme que já aparece no Clinicorp.`;
+    ctx.replyOverride = `Ainda não consegui confirmar a mudança da sua consulta para ${when} na agenda da clínica. A reserva precisa ser conferida pela equipe antes da confirmação.`;
+    return ctx.replyOverride;
   }
   return `Consulta reagendada para ${when}${cfg.location ? ` (${cfg.location})` : ""}. O horário anterior foi liberado.`;
 }
