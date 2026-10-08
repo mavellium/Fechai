@@ -9,6 +9,38 @@ const tenantId = "cmtu5iycd005wnl0kqciz6w6j";
 const agentId = "cmtu5iyd6005znl0khctc3n3y";
 const title = "Teste Integração Fechai";
 
+// Observa somente os campos do registro sintético. A consulta continua passando
+// por readClinicorpReport/getIntegration, com credenciais decifradas pelo módulo.
+// Status de comparecimento incompleto não impede conferir Canceled/Deleted.
+async function externalState(id: string, day: string) {
+  const original = globalThis.fetch;
+  let state: { canceled: boolean; deleted: boolean; observation: boolean } | null = null;
+  let agendaHttp: number | null = null;
+  globalThis.fetch = async (...args: Parameters<typeof fetch>): Promise<Response> => {
+    const response = await original(...args);
+    const input = args[0];
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.hostname === "api.clinicorp.com" && url.pathname.endsWith("/appointment/list")) {
+      agendaHttp = response.status;
+      if (response.ok) {
+        const body: unknown = await response.clone().json().catch(() => null);
+        if (Array.isArray(body)) {
+          const row = body.find(r => r && typeof r === "object" && String(r.id) === id);
+          if (row) state = { canceled: row.Canceled === "X", deleted: row.Deleted === "X",
+            observation: typeof row.Notes === "string" && row.Notes.includes("Cancelado em") };
+        }
+      }
+    }
+    return response;
+  };
+  try {
+    const report = await readClinicorpReport(tenantId, day, day);
+    console.log(JSON.stringify({ diagnostic: { agendaHttp, reportAvailable: report.available,
+      reportError: report.error, syntheticRecordFound: Boolean(state) } }));
+    return state as { canceled: boolean; deleted: boolean; observation: boolean } | null;
+  } finally { globalThis.fetch = original; }
+}
+
 async function main() {
   assert.equal(process.env.FECHAI_CANCEL_SMOKE, "CONFIRMAR_TESTE_SINTETICO", "Confirmação explícita do teste ausente");
   const tenant = await prisma.tenant.findFirst({ where: { id: tenantId, status: "active" }, select: { id: true } });
@@ -26,9 +58,9 @@ async function main() {
   const cfg = await getScheduleConfig(agentId);
   const timezone = cfg?.timezone ?? "America/Sao_Paulo";
   const day = dayKeyInZone(before.startsAt, timezone);
-  const prior = await readClinicorpReport(tenantId, day, day);
-  assert.equal(prior.available, true, "Clinicorp não pôde ser consultado antes do teste");
-  assert.ok(prior.appointments.some(a => a.id === before.clinicorpAppointmentId), "Consulta externa não localizada; nenhuma alteração feita");
+  const prior = await externalState(before.clinicorpAppointmentId, day);
+  assert.ok(prior, "Consulta externa não localizada; nenhuma alteração feita");
+  if (before.status === "scheduled") assert.ok(!prior.canceled && !prior.deleted, "Consulta externa já cancelada/excluída; nenhuma alteração feita");
 
   const canceled = await cancelAppointment(tenantId, before.id, before.leadId ?? undefined, {
     timezone, source: "human", reason: "Teste autorizado de cancelamento; consulta sintética, sem paciente real.",
@@ -49,9 +81,7 @@ async function main() {
   assert.equal(stillBusy, 0, "Consulta cancelada ainda ocupa vaga local");
   const repeated = await cancelAppointment(tenantId, after.id, before.leadId ?? undefined, { timezone });
   assert.equal(repeated?.notes, after.notes, "Repetição duplicou ou alterou observações");
-  const remote = await readClinicorpReport(tenantId, day, day);
-  assert.equal(remote.available, true, "Clinicorp não pôde ser conferido após o teste");
-  const external = remote.appointments.find(a => a.id === after.clinicorpAppointmentId);
+  const external = await externalState(after.clinicorpAppointmentId, day);
   assert.ok(external, "Registro externo não localizado mesmo incluindo cancelados/excluídos");
   const agenda = await listClinicorpAgenda(tenantId, day, day, timezone, { fresh: true });
   assert.equal(agenda.status, "ok", "Leitura de agenda externa indisponível");
@@ -59,13 +89,13 @@ async function main() {
   console.log(JSON.stringify({
     local: { preserved: true, canceled: true, observation: true, priorNotesPreserved: true,
       originalTimePreserved: true, visibleInAgendaQuery: true, occupiesLocalSlot: false, repeatedWithoutDuplicate: true },
-    clinicorp: { idPreserved: true, canceledOrDeleted: external.canceled, visibleInCanceledAgendaRead: Boolean(visibleExternal),
-      canceledInAgendaRead: visibleExternal?.canceled ?? null, observationWrittenInClinicorp: false },
+    clinicorp: { idPreserved: true, canceled: external.canceled, deleted: external.deleted, visibleInCanceledAgendaRead: Boolean(visibleExternal),
+      canceledInAgendaRead: visibleExternal?.canceled ?? null, observationWrittenInClinicorp: external.observation },
     limitations: ["Observação gravada no Fechai; API pública não oferece atualização de observações existentes no Clinicorp.",
-      "Leitura de cancelamento inclui excluídos; não comprova visibilidade na grade nativa do Clinicorp.",
+      "Leitura da API não comprova visibilidade na grade nativa do Clinicorp.",
       "Teste executado no servidor, sem validação visual nem conversa com LLM."],
   }));
-  assert.equal(external.canceled, true, "Clinicorp não confirmou cancelamento ou exclusão do registro de teste");
+  assert.ok(external.canceled || external.deleted, "Clinicorp não confirmou cancelamento ou exclusão do registro de teste");
 }
 main().catch((error: unknown) => {
   if (error instanceof Error && error.name === "AssertionError") console.error(error.message.split("\n")[0]);
