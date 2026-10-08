@@ -2,6 +2,21 @@
 
 Uma linha por milestone concluído (mais recente no topo).
 
+## Bitrix24: CRM e agendamentos por conta — 2026-10-08
+
+Conexão em **Integrações → CRM**, com webhook próprio cifrado. Envio Fechai →
+Bitrix24 Cloud: contatos, leads (negócios no CRM simples) e reuniões no calendário
+do responsável. Remarcação atualiza; cancelamento mantém registro e observações.
+Fila durável, isolamento por tenant/destino e conferência de criações incertas.
+Sem importação ou leitura de vagas.
+
+**Schema:** BitrixIntegration, BitrixSyncJob, Lead.updatedAt e índices;
+`db push` + `generate` aplicados em produção, imagem compartilhada por web/worker.
+**Validação:** 1.582 testes, build e smoke PostgreSQL com REST simulado passaram.
+Envio ao portal real depende de webhook cadastrado pelo cliente.
+Contexto: [bitrix](../.claude/context/bitrix/_index.md);
+contratos e limites: `src/modules/bitrix/README.md`.
+
 ## Relatório mensal: modelo revisado (todos os leads, tudo que é mensurável) — 2026-10-01
 
 Decisões do Vinícius (30/09). Regras em `src/app/(dashboard)/relatorios/README.md`

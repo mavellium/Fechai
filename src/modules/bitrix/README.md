@@ -1,5 +1,7 @@
 # Bitrix24 (por tenant)
 
+Contexto compacto: [índice](../../../.claude/context/bitrix/_index.md).
+
 Conexão em **Integrações → CRM**, sem liberação específica do superadmin.
 A integração envia **Fechai → Bitrix24**. Não importa contatos, horários ocupados,
 comparecimento ou alterações de lá. A agenda do Fechai continua sendo a fonte da

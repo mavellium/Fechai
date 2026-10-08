@@ -4,6 +4,8 @@
 
 Leia o `_index.md` antes do código-fonte.
 
+- [bitrix](context/bitrix/_index.md) — integração por conta: contatos, leads/negócios, reuniões e fila (`src/modules/bitrix/`)
+
 - [toast](context/toast/_index.md) — notificações de salvamento (`src/components/ui/toast/`)
 - [scheduling](context/scheduling/_index.md) — agenda, integrações e público dinâmico dos lembretes
 - [agent-engine](context/agent-engine/_index.md) — turno da IA, montagem do prompt, tools, datas relativas (`src/modules/agent-engine/`)
