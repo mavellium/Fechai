@@ -1,0 +1,39 @@
+name: Teste manual de cancelamento sintético
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Compartilha o lock de publicação: diagnóstico nunca troca código durante deploy.
+concurrency:
+  group: fechai-production
+  cancel-in-progress: false
+
+jobs:
+  teste:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Testar somente a consulta sintética existente
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST_IP }}
+          username: ${{ secrets.HOST_USERNAME }}
+          key: ${{ secrets.HOST_SSH_KEY }}
+          port: 22
+          command_timeout: 5m
+          script: |
+            set -eu
+            cd /var/www/Fechai
+            exec 9>/tmp/fechai-deploy.lock
+            flock -n 9
+            test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+            worker_id=$(docker compose ps -q worker)
+            test -n "$worker_id"
+            image=$(docker inspect --format '{{.Config.Image}}' "$worker_id")
+            test "${image##*:}" = "${{ github.sha }}"
+            docker cp scripts/smoke-cancelamento.ts "$worker_id:/tmp/fechai-smoke-cancelamento.ts"
+            trap 'docker exec "$worker_id" rm -f /tmp/fechai-smoke-cancelamento.ts' EXIT
+            docker exec -e FECHAI_CANCEL_SMOKE=CONFIRMAR_TESTE_SINTETICO "$worker_id" ./node_modules/.bin/tsx --tsconfig /app/tsconfig.json /tmp/fechai-smoke-cancelamento.ts
