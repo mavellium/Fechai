@@ -1,6 +1,8 @@
 // `AtSign` e não um ícone de marca: o lucide removeu os logos de terceiros, e
 // inventar um SVG do Instagram aqui criaria um ícone fora do conjunto.
 import Link from "next/link";
+import { BitrixCard } from "./BitrixCard";
+import { getBitrixStatus } from "@/modules/bitrix/integration";
 import { AtSign, Globe, MessageCircle, ShieldCheck } from "lucide-react";
 import { requireTenant } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
@@ -35,10 +37,11 @@ const STATUS_LABEL: Record<string, { label: string; tone: "success" | "warn" | "
   connected: { label: "Conectado", tone: "success" },
 };
 
-/** As duas famílias de integração da tela. `canais` é o padrão. */
+/** As famílias de integração da tela. `canais` é o padrão. */
 const TABS = [
   { key: "canais", label: "Canais" },
   { key: "calendarios", label: "Calendários" },
+  { key: "crm", label: "CRM" },
 ] as const;
 
 export default async function IntegracoesPage({
@@ -94,6 +97,8 @@ export default async function IntegracoesPage({
           getClinicorpStatus(tenantId),
         ])
       : null;
+
+  const bitrix = tab === "crm" ? await getBitrixStatus(tenantId) : null;
 
   const [features, googleRow, clinicorpRow] = calendars ?? [null, null, null];
 
@@ -230,6 +235,8 @@ export default async function IntegracoesPage({
           />
         </section>
       )}
+
+      {tab === "crm" && <BitrixCard state={bitrix} available={isEncryptionConfigured()} />}
 
       {tab === "canais" && (
         <>

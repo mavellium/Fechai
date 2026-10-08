@@ -26,6 +26,13 @@ antes de criar. Também recupera consultas futuras que ficaram sem envio antes
 da fila existir. Não manda mensagens ao paciente. Lembretes locais aguardam o
 envio concluir. Exige `db push` + client gerado nos processos web e worker.
 
+A fila `bitrix-crm-sync` roda a cada 30 s, com concorrência global 1 e fila durável
+em `BitrixSyncJob`. Envia contatos, leads/negócios e reuniões de cada conta ao seu
+portal Bitrix24. Não manda mensagens ao paciente nem participa da reserva local.
+Leia [`src/modules/bitrix/README.md`](../../src/modules/bitrix/README.md) para as
+regras de reconexão, incerteza e cancelamento. Schema novo exige `db push` e client
+gerado tanto no web quanto no worker.
+
 ## Arquivos
 
 A página **Disparos** usa também este processo, em uma fila independente

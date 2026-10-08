@@ -137,6 +137,8 @@ model Tenant {
   feedbacks        Feedback[]
   appointments     Appointment[]
   calendar         CalendarIntegration?
+  bitrix           BitrixIntegration?
+  bitrixSyncJobs   BitrixSyncJob[]
   clinicorp        ClinicorpIntegration?
   clinicorpReminders ClinicorpReminder[]
   calendarFeatures CalendarFeatures?
@@ -798,6 +800,7 @@ model Lead {
   /// `isTest: false` — antes o sandbox inflava o número de leads da conta.
   isTest    Boolean  @default(false)
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   /// Quando o agente concluiu que este contato não é cliente em potencial
   /// (tool `disqualify_lead`). Distinto de `status: "lost"`, que é "era
@@ -814,6 +817,7 @@ model Lead {
   conversation Conversation?
   appointments Appointment[]
 
+  @@index([tenantId, updatedAt, id])
   @@index([tenantId])
   @@index([tenantId, isTest])
   /// Suporta a contagem por período da triagem (relatórios) sem varrer a tabela.
@@ -1009,6 +1013,7 @@ model Appointment {
   updatedAt DateTime @updatedAt
 
   @@index([tenantId, startsAt])
+  @@index([tenantId, updatedAt, id])
   @@index([leadId])
   @@index([agentId])
   /// Varredura do worker de lembrete: consultas marcadas, pelo começo. Quais
@@ -1665,4 +1670,57 @@ model WhatsappBlockedNumber {
 
   @@unique([tenantId, phone])
   @@index([tenantId])
+}
+
+/// Conexão independente por conta. A URL inteira é uma credencial cifrada.
+model BitrixIntegration {
+  tenantId          String    @id
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  webhook           String?
+  portalHost        String
+  connectionKey     String
+  revision          String
+  enabled           Boolean   @default(true)
+  syncLeads         Boolean   @default(true)
+  syncAppointments  Boolean   @default(true)
+  crmMode           Int
+  responsibleId     String
+  connectedAt       DateTime  @default(now())
+  leadCursor        DateTime  @default("1970-01-01T00:00:00.000Z")
+  leadAfter         String    @default("")
+  appointmentCursor DateTime  @default("1970-01-01T00:00:00.000Z")
+  appointmentAfter  String    @default("")
+  lastSyncAt        DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+}
+
+/// Referências externas, fila e claim duráveis; nunca redirecionar um envio
+/// antigo a outro portal. `uncertain` impede repetir uma criação sem resposta.
+model BitrixSyncJob {
+  id             String    @id @default(cuid())
+  tenantId       String
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  connectionKey  String
+  kind           String // lead | appointment
+  entityId       String
+  payload        Json
+  fingerprint    String
+  state          String    @default("queued") // queued | processing | retry | synced | skipped
+  attempts       Int       @default(0)
+  nextAttemptAt  DateTime  @default(now())
+  lockedUntil    DateTime?
+  lockToken      String?
+  lastError      String?
+  contactId      String?
+  contactManaged Boolean   @default(false)
+  crmId          String?
+  crmEntityType  Int?
+  activityId     String?
+  uncertain      String? // contact | crm | activity (só reconciliação, sem novo POST)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([tenantId, connectionKey, kind, entityId])
+  @@index([tenantId, connectionKey, state, nextAttemptAt])
 }

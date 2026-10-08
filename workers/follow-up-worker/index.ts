@@ -6,6 +6,7 @@ import { scanWhatsappHealth } from "../../src/modules/whatsapp/health";
 import { scanBroadcasts } from "../../src/modules/broadcasts/worker";
 import { touchBroadcastWorker } from "../../src/modules/broadcasts/health";
 import { scanKnowledgeGaps } from "../../src/modules/knowledge-gaps/notify";
+import { scanBitrixSync } from "../../src/modules/bitrix/worker";
 import { scanClinicorpSync } from "../../src/modules/scheduling/clinicorp-sync";
 
 // Worker de mensagens no tempo. Follow-up/lembretes rodam na cadência comercial
@@ -55,6 +56,11 @@ async function main() {
   await clinicorpSyncQueue.upsertJobScheduler("clinicorp-sync-scheduler", { every: 30_000 }, { name: "clinicorp-sync" });
   const clinicorpSyncWorker = new Worker("clinicorp-appointment-sync", async () => scanClinicorpSync(), { connection, concurrency: 1 });
   clinicorpSyncWorker.on("failed", (job, err) => console.error(`[clinicorp envio] job ${job?.id} falhou`, err));
+  const bitrixQueue = new Queue("bitrix-crm-sync", { connection });
+  await bitrixQueue.setGlobalConcurrency(1);
+  await bitrixQueue.upsertJobScheduler("bitrix-sync-scheduler", { every: 30_000 }, { name: "bitrix-sync" });
+  const bitrixWorker = new Worker("bitrix-crm-sync", async () => scanBitrixSync(), { connection, concurrency: 1 });
+  bitrixWorker.on("failed", () => console.error("[bitrix] A fila será retomada na próxima varredura."));
   const broadcastQueue = new Queue("whatsapp-broadcasts", { connection });
   await broadcastQueue.setGlobalConcurrency(1);
   await broadcastQueue.upsertJobScheduler(
