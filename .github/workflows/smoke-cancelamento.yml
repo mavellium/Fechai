@@ -35,5 +35,5 @@ jobs:
             image=$(docker inspect --format '{{.Config.Image}}' "$worker_id")
             test "${image##*:}" = "${{ github.sha }}"
             docker cp scripts/smoke-cancelamento.ts "$worker_id:/tmp/fechai-smoke-cancelamento.ts"
-            trap 'docker exec "$worker_id" rm -f /tmp/fechai-smoke-cancelamento.ts' EXIT
+            trap 'docker exec --user root "$worker_id" rm -f /tmp/fechai-smoke-cancelamento.ts' EXIT
             docker exec -e FECHAI_CANCEL_SMOKE=CONFIRMAR_TESTE_SINTETICO "$worker_id" ./node_modules/.bin/tsx --tsconfig /app/tsconfig.json /tmp/fechai-smoke-cancelamento.ts
