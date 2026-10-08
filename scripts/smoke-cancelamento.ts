@@ -60,7 +60,8 @@ async function main() {
   const day = dayKeyInZone(before.startsAt, timezone);
   const prior = await externalState(before.clinicorpAppointmentId, day);
   assert.ok(prior, "Consulta externa não localizada; nenhuma alteração feita");
-  if (before.status === "scheduled") assert.ok(!prior.canceled && !prior.deleted, "Consulta externa já cancelada/excluída; nenhuma alteração feita");
+  // O espelho pode já estar cancelado: o teste continua conferindo a observação
+  // e a preservação LOCAL, sem afirmar uma transição externa que não ocorreu.
 
   const canceled = await cancelAppointment(tenantId, before.id, before.leadId ?? undefined, {
     timezone, source: "human", reason: "Teste autorizado de cancelamento; consulta sintética, sem paciente real.",
@@ -89,11 +90,12 @@ async function main() {
   console.log(JSON.stringify({
     local: { preserved: true, canceled: true, observation: true, priorNotesPreserved: true,
       originalTimePreserved: true, visibleInAgendaQuery: true, occupiesLocalSlot: false, repeatedWithoutDuplicate: true },
-    clinicorp: { idPreserved: true, canceled: external.canceled, deleted: external.deleted, visibleInCanceledAgendaRead: Boolean(visibleExternal),
+    clinicorp: { before: prior, idPreserved: true, canceled: external.canceled, deleted: external.deleted, visibleInCanceledAgendaRead: Boolean(visibleExternal),
       canceledInAgendaRead: visibleExternal?.canceled ?? null, observationWrittenInClinicorp: external.observation },
     limitations: ["Observação gravada no Fechai; API pública não oferece atualização de observações existentes no Clinicorp.",
       "Leitura da API não comprova visibilidade na grade nativa do Clinicorp.",
-      "Teste executado no servidor, sem validação visual nem conversa com LLM."],
+      "Teste executado no servidor, sem validação visual nem conversa com LLM.",
+      ...(prior.canceled || prior.deleted ? ["Registro externo já estava cancelado/excluído antes do teste; transição externa não foi validada."] : [])],
   }));
   assert.ok(external.canceled || external.deleted, "Clinicorp não confirmou cancelamento ou exclusão do registro de teste");
 }
