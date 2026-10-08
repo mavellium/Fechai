@@ -646,8 +646,10 @@ dias vazios que estavam cheios lá. Decisões e alternativas descartadas:
 - **O que o fechai espelhou aparece uma vez só**, como o nosso compromisso: a
   tela descarta a linha do Clinicorp cujo `id` está em
   `Appointment.clinicorpAppointmentId` de algum compromisso do mês.
-- **Só consultas de pacientes ativas**: sem `includeAssigns` (almoço e bloqueio
-  não são consultas) e sem desmarcadas/excluídas.
+- **Consultas ativas e canceladas**: sem `includeAssigns` (almoço e bloqueio
+  não são consultas), com `includeCanceled=X`. Desmarcadas permanecem visíveis
+  com indicação de cancelamento; excluídas não são exibidas. Lembretes e
+  disponibilidade continuam usando somente as consultas ativas.
 - **A clínica inteira, mesmo com `dentistId`.** O filtro por profissional
   existe para a disponibilidade do agente; na tela a pessoa quer ver a agenda
   que tem lá.
@@ -810,3 +812,30 @@ Outras regras:
 
 Schema novo: `ClinicorpReminder` — `db push` + `generate` nos dois processos.
 Regressões: `tests/clinicorp-lembrete.test.ts`.
+
+
+### Cancelamento preservado nas observações (07/10/2026)
+
+`cancelAppointment` mantém ID e horário e acrescenta às observações a data/hora
+no fuso da conta e a origem (agente/painel). Motivo só entra quando informado
+explicitamente; nunca é exigido nem inferido. O texto anterior é preservado.
+Status e observação são gravados juntos, com comparação das notas anteriores
+para não sobrescrever uma edição concorrente; repetir não duplica o registro.
+
+A agenda externa pede `includeCanceled=X` e mostra desmarcados (`Canceled=X`)
+com identificação de cancelamento. Excluídos (`Deleted=X`) continuam separados
+e não são reintroduzidos como cancelados. A versão do pulso inclui o estado de
+cancelamento. **Exibição não é disponibilidade:** conflito continua ignorando
+cancelados e o trabalhador externo também os exclui explicitamente dos
+lembretes. O cancelamento externo invalida o cache de leitura.
+
+**Limite da integração:** esta observação é persistida no Fechai. A API pública
+consultada não oferece edição das observações de uma consulta já existente no
+Clinicorp. O envio de cancelamento continua usando `cancel_appointment`; não
+promete preservação na grade nativa do Clinicorp. Falha devolvida pela API é
+comunicada ao painel/agente, sem afirmar conclusão externa. HTTP aceito não é
+uma conferência da grade remota. A fila durável de criação não é uma fila de
+cancelamento de consultas já sincronizadas.
+
+Regressões: `agendamento-tools.test.ts`, `clinicorp.test.ts`,
+`clinicorp-lembrete.test.ts` e `agenda-pulse.test.ts`.

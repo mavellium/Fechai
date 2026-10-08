@@ -222,7 +222,7 @@ export function DayPanel({
                       )}
 
                       {appointment.notes && (
-                        <p className="mt-1.5 rounded-control border border-white/5 bg-black/20 px-2.5 py-1 text-xs leading-relaxed text-white/70">
+                        <p className="mt-1.5 whitespace-pre-line rounded-control border border-white/5 bg-black/20 px-2.5 py-1 text-xs leading-relaxed text-white/70">
                           {appointment.notes}
                         </p>
                       )}

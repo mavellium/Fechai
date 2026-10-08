@@ -153,10 +153,15 @@ export async function cancelAppointmentAction(id: string): Promise<Result> {
   if (attendanceOf(current) !== "unknown") {
     return { ok: false, error: "Esta consulta já tem comparecimento marcado. Desfaça a marcação antes de cancelar." };
   }
-  const canceled = await cancelAppointment(tenantId, id);
+  const agentId = await primaryAgentId(tenantId);
+  const cfg = agentId ? await getScheduleConfig(agentId) : null;
+  const canceled = await cancelAppointment(tenantId, id, undefined, { timezone: cfg?.timezone, source: "human" });
   if (!canceled) return { ok: false, error: "Compromisso não encontrado." };
   revalidateAgenda();
-  return { ok: true, info: "Compromisso cancelado." };
+  return { ok: true, info: "Compromisso cancelado e mantido na agenda do Fechai com a observação.",
+    ...("clinicorpCancellationAccepted" in canceled && !canceled.clinicorpCancellationAccepted
+      ? { warning: "O Clinicorp não confirmou o cancelamento. Confira a agenda da clínica." } : {}),
+  };
 }
 
 function markError(result: MarkResult, notAllowed: string): Result | null {

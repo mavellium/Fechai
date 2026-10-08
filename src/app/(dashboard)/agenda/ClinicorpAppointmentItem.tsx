@@ -38,6 +38,7 @@ export function ClinicorpAppointmentItem({
               {item.endsAt && `–${timeInZone(item.endsAt, timezone)}`}
             </span>
             <span className="truncate text-sm font-semibold text-white">{item.patientName}</span>
+            {item.canceled && <span className="font-mono text-xs font-semibold text-danger">Cancelado</span>}
             <span className="ml-1 font-mono text-micro font-medium uppercase tracking-wider text-white/55">
               • no Clinicorp
             </span>
@@ -60,9 +61,10 @@ export function ClinicorpAppointmentItem({
             </div>
           )}
 
-          {item.notes && (
-            <p className="mt-1.5 line-clamp-3 rounded-control border border-white/5 bg-black/20 px-2.5 py-1 text-xs leading-relaxed text-white/70">
+          {(item.notes || item.canceled) && (
+            <p className="mt-1.5 whitespace-pre-line rounded-control border border-white/5 bg-black/20 px-2.5 py-1 text-xs leading-relaxed text-white/70">
               {item.notes}
+              {item.canceled && `${item.notes ? "\n" : ""}Consulta cancelada no Clinicorp.`}
             </p>
           )}
 
@@ -74,7 +76,7 @@ export function ClinicorpAppointmentItem({
           )}
 
           <p className="mt-1.5 text-xs text-white/45">
-            Marcada direto no Clinicorp. Para alterar ou cancelar, use o Clinicorp.
+            {item.canceled ? "Cancelada no Clinicorp. Horário liberado; sem novos lembretes." : "Marcada direto no Clinicorp. Para alterar ou cancelar, use o Clinicorp."}
           </p>
         </div>
       </div>

@@ -399,7 +399,7 @@ describe("agenda do Clinicorp na /agenda", () => {
     agenda([]);
     expect(await list()).toEqual({ status: "ok", items: [], skipped: 0, fetchedAt: expect.any(Number) });
     const [url] = fetchMock.mock.calls.find(([url]) => url.pathname.endsWith("/appointment/list"))! as unknown as [URL];
-    expect(Object.fromEntries(url.searchParams)).toMatchObject({ from: "2026-09-01", to: "2026-09-30", businessId: "4791226171916288" });
+    expect(Object.fromEntries(url.searchParams)).toMatchObject({ from: "2026-09-01", to: "2026-09-30", businessId: "4791226171916288", includeCanceled: "X" });
     expect(url.searchParams.has("includeAssigns")).toBe(false);
     expect(db.clinicorpIntegration.update).not.toHaveBeenCalled();
   });
@@ -420,18 +420,20 @@ describe("agenda do Clinicorp na /agenda", () => {
     ]);
   });
 
-  it("traz só consultas de pacientes ativas, com profissional e sem inventar fim", async () => {
+  it("preserva consultas canceladas para exibição, com profissional e sem inventar fim", async () => {
     agenda([
       { id: 4791226171916288, ItemType: "APPOINTMENT", AtomicDate: 20260929, fromTime: "17:45", toTime: "18:00",
         PatientName: "Maria", MobilePhone: "11999990000", Dentist_PersonId: 222222222222, Notes: "Retorno" },
       { id: 5, ItemType: "ASSIGN", AtomicDate: 20260929, fromTime: "12:00", toTime: "13:00", Name: "Almoço" },
       { id: 6, AtomicDate: 20260929, fromTime: "14:00", toTime: "14:30", Canceled: "X" },
+      { id: 8, AtomicDate: 20260929, fromTime: "14:30", Deleted: "X", Canceled: "X" },
       { id: 7, AtomicDate: 20260929, fromTime: "15:00", toTime: "inválido", PatientName: "Sem fim" },
     ]);
     const result = await list();
     if (result.status !== "ok") throw new Error(result.status);
     expect(result.items).toEqual([
-      expect.objectContaining({ id: "7", patientName: "Sem fim", endsAt: null }),
+      expect.objectContaining({ id: "6", canceled: true }),
+      expect.objectContaining({ id: "7", canceled: false, patientName: "Sem fim", endsAt: null }),
       expect.objectContaining({ id: "4791226171916288", patientName: "Maria", phone: "11999990000",
         professional: "Dra. Ana", notes: "Retorno", endsAt: new Date("2026-09-29T21:00:00.000Z") }),
     ]);

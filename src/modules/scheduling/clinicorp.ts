@@ -776,6 +776,7 @@ export async function cancelAppointmentInClinicorp(
       await recordOutcome(tenantId, `Cancelamento do agendamento ${clinicorpAppointmentId} no Clinicorp não foi confirmado; ele pode continuar na agenda da clínica. ${res.error}`);
       return false;
     }
+    clearClinicorpAgendaCache(tenantId);
     return true;
   } catch (err) {
     console.error("[clinicorp] cancelar agendamento falhou", err);
@@ -880,6 +881,8 @@ export type ClinicorpAgendaItem = {
   /** Metadados explícitos, quando presentes na resposta de /appointment/list. */
   categoryId?: string | null;
   category?: string | null;
+  /** Cancelada continua visível, mas não ocupa vaga nem recebe lembrete. */
+  canceled?: boolean;
 };
 
 /** Rótulo da tela para consulta sem nome — nunca vai numa mensagem ao paciente. */
@@ -1049,7 +1052,7 @@ async function fetchAgenda(
   try {
     const [agenda, names] = await Promise.all([
       call<unknown>(integration, "/appointment/list", {
-        query: { from, to, businessId: integration.businessId ?? undefined },
+        query: { from, to, businessId: integration.businessId ?? undefined, includeCanceled: "X" },
         timeoutMs: AGENDA_TIMEOUT_MS,
       }),
       // Só dá nome ao profissional; se falhar, as consultas aparecem sem ele.
@@ -1067,7 +1070,7 @@ async function fetchAgenda(
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) { skipped++; continue; }
       const r = raw as Record<string, unknown>;
       if (r.ItemType && r.ItemType !== "APPOINTMENT") continue;
-      if (r.Canceled === "X" || r.Deleted === "X") continue;
+      if (r.Deleted === "X") continue;
 
       const id = typeof r.id === "string" && /^\d+$/.test(r.id) ? r.id
         : typeof r.id === "number" && Number.isInteger(r.id) && r.id > 0 ? String(r.id) : null;
@@ -1088,6 +1091,7 @@ async function fetchAgenda(
           : typeof r.CategoryId === "number" && Number.isSafeInteger(r.CategoryId) && r.CategoryId > 0
             ? String(r.CategoryId) : null,
         category: text(r.CategoryDescription),
+        canceled: r.Canceled === "X",
       });
     }
     items.sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime());

@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { CalendarCheck, Check, UserX, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConfirmButton } from "@/components/ui/confirm-dialog";
+import { useToast } from "@/components/ui/toast/toast-provider";
 import { useSaveFeedback } from "@/components/ui/toast/use-save-feedback";
 import type { Attendance } from "@/modules/scheduling/dimensions";
 import { cancelAppointmentAction, setAttendanceAction, setConfirmedAction } from "./actions";
@@ -35,11 +36,15 @@ export function AppointmentActions({
   canMarkAttendance: boolean;
 }) {
   const router = useRouter();
+  const toast = useToast();
   const save = useSaveFeedback({ entity: "agendamento" });
 
   async function run(task: () => ReturnType<typeof setAttendanceAction>) {
     const res = await save.run(task);
     if (res.ok) router.refresh();
+    if ("warning" in res && typeof res.warning === "string") {
+      toast.show({ kind: "warning", title: "Confira o cancelamento no Clinicorp", description: res.warning });
+    }
   }
 
   const mark = (value: Attendance) => () => run(() => setAttendanceAction(id, attendance === value ? "unknown" : value));

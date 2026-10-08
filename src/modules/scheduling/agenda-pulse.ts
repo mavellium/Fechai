@@ -55,7 +55,7 @@ export function agendaVersion(
       `skipped:${clinicorp.skipped}`,
       ...clinicorp.items
         .map((i) =>
-          [i.id, i.startsAt.getTime(), i.endsAt?.getTime() ?? "", i.patientName, i.professional ?? "", i.phone ?? "", i.notes ?? ""].join("\u0001"),
+          [i.id, i.startsAt.getTime(), i.endsAt?.getTime() ?? "", i.patientName, i.professional ?? "", i.phone ?? "", i.notes ?? "", Boolean(i.canceled)].join("\u0001"),
         )
         .sort(),
     );

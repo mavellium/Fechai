@@ -166,6 +166,28 @@ describe("permissões dentro de Agendar horário", () => {
 });
 
 describe("cancelamento", () => {
+  it("preserva observações anteriores e registra apenas o motivo informado", async () => {
+    db.appointment.findFirst.mockResolvedValue({ ...appointment, notes: "Avaliação de implante. Não apagar." });
+    await cancel({ reason: "Não posso ir por causa do trabalho" });
+    const change = db.appointment.updateMany.mock.calls[0][0];
+    expect(change.data.notes).toBe("Avaliação de implante. Não apagar.\n\nCancelado em 16/09/2026 às 09:00 (America/Sao_Paulo) pelo agente. Motivo informado: Não posso ir por causa do trabalho");
+    expect(change.data).not.toHaveProperty("startsAt");
+    expect(change.data).not.toHaveProperty("endsAt");
+    expect(change.where.notes).toBe("Avaliação de implante. Não apagar.");
+  });
+  it("não inventa motivo nem confirma conclusão externa quando o Clinicorp falha", async () => {
+    mirrors.clinicorpCancel.mockResolvedValue(false);
+    const reply = await cancel();
+    expect(reply).toContain("Clinicorp não confirmou");
+    expect(reply).not.toContain("Cancelamento feito");
+    expect(db.appointment.updateMany.mock.calls[0][0].data.notes).not.toContain("Motivo");
+  });
+  it("não chama espelhos quando a consulta ou suas observações mudam durante o cancelamento", async () => {
+    db.appointment.updateMany.mockResolvedValue({ count: 0 });
+    expect(await cancel()).toContain("mudou");
+    expect(mirrors.clinicorpCancel).not.toHaveBeenCalled();
+    expect(mirrors.googleDelete).not.toHaveBeenCalled();
+  });
   it.each([false, undefined, "true"])("não cancela sem confirmação explícita (%s)", async (confirmed) => {
     expect(await cancel({ confirmed })).toContain("Nenhuma alteração");
     expect(db.appointment.updateMany).not.toHaveBeenCalled();
@@ -173,7 +195,7 @@ describe("cancelamento", () => {
   });
   it("cancela a consulta identificada e remove seus espelhos", async () => {
     expect(await cancel()).toContain("Cancelamento feito");
-    expect(db.appointment.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ tenantId: ctx.tenantId, leadId: ctx.leadId, id: appointment.id, status: "scheduled" }), data: { status: "canceled" } }));
+    expect(db.appointment.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ tenantId: ctx.tenantId, leadId: ctx.leadId, id: appointment.id, status: "scheduled" }), data: { status: "canceled", notes: expect.stringContaining("Cancelado em 16/09/2026 às 09:00 (America/Sao_Paulo) pelo agente.") } }));
     expect(mirrors.googleDelete).toHaveBeenCalledWith(ctx.tenantId, "google-antigo");
     expect(mirrors.clinicorpCancel).toHaveBeenCalledWith(ctx.tenantId, "123");
   });

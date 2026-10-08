@@ -165,7 +165,7 @@ async function remindTenant(tenantId: string, cfg: ScheduleConfig, channels: Cha
   );
   // Clinicorp fora ou desligado: sem a agenda de agora, nada sai.
   if (agenda.status !== "ok") return counts;
-  const upcoming = agenda.items.filter((item) => item.startsAt > now);
+  const upcoming = agenda.items.filter((item) => !item.canceled && item.startsAt > now);
   counts.scanned = upcoming.length;
   if (upcoming.length === 0) return counts;
 

@@ -21,6 +21,11 @@ const local = { count: 2, lastUpdate: new Date("2026-09-28T12:00:00Z") };
 beforeEach(() => vi.clearAllMocks());
 
 describe("versão da agenda ao vivo", () => {
+  it("atualiza o mesmo cartão quando a consulta é cancelada no Clinicorp", () => {
+    const original = item("1", "12:00");
+    expect(agendaVersion(local, ok([{ ...original, canceled: true }])))
+      .not.toBe(agendaVersion(local, ok([original])));
+  });
   it("é a mesma para o mesmo conteúdo, em qualquer ordem — senão a tela se refaz em loop", () => {
     expect(agendaVersion(local, ok([item("1", "12:00"), item("2", "12:00")])))
       .toBe(agendaVersion(local, ok([item("2", "12:00"), item("1", "12:00")])));

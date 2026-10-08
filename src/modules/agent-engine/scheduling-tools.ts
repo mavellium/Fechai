@@ -72,6 +72,7 @@ export const SCHEDULING_TOOLS: LlmToolSchema[] = [
       properties: {
         appointmentId: { type: "string", description: "ID retornado pela consulta de agendamentos" },
         confirmed: { type: "boolean", description: "True somente após o cliente responder claramente à pergunta de confirmação do cancelamento." },
+        reason: { type: "string", description: "Motivo somente quando o contato informou explicitamente. Não invente nem exija motivo para cancelar." },
       },
       required: ["appointmentId", "confirmed"],
     },
@@ -246,11 +247,17 @@ export async function runSchedulingTool(name: string, ctx: ToolContext, args: Re
   if (name === "cancel_meeting" && appointment.status === "canceled") return "Essa consulta já está cancelada. Não é necessário cancelar novamente.";
   if (appointment.status !== "scheduled" || appointment.startsAt <= new Date()) return "Essa consulta não está disponível para alteração. Consulte os próximos horários do contato.";
   const previous = formatInZone(appointment.startsAt, cfg.timezone);
-  if (args.confirmed !== true) return `Nenhuma alteração foi feita. Confirme com o cliente a ${name === "cancel_meeting" ? "exclusão" : "troca"} da consulta de ${previous} e espere a resposta clara antes de chamar novamente com confirmed=true.`;
+  if (args.confirmed !== true) return `Nenhuma alteração foi feita. Confirme com o cliente ${name === "cancel_meeting" ? "o cancelamento" : "a troca"} da consulta de ${previous} e espere a resposta clara antes de chamar novamente com confirmed=true.`;
 
   if (name === "cancel_meeting") {
-    const canceled = await cancelAppointment(ctx.tenantId, appointment.id, ctx.leadId);
-    return canceled ? `Cancelamento feito para ${previous}. Encerre com gentileza e se coloque à disposição.` : "A consulta mudou enquanto conversávamos. Consulte novamente antes de confirmar o cancelamento.";
+    const canceled = await cancelAppointment(ctx.tenantId, appointment.id, ctx.leadId, {
+      timezone: cfg.timezone, source: "agent", reason: typeof args.reason === "string" ? args.reason : undefined,
+    });
+    if (!canceled) return "A consulta mudou enquanto conversávamos. Consulte novamente antes de confirmar o cancelamento.";
+    if ("clinicorpCancellationAccepted" in canceled && !canceled.clinicorpCancellationAccepted) {
+      return `Cancelamento registrado no Fechai para ${previous}, preservando a consulta e suas observações. O Clinicorp não confirmou a alteração. Não afirme que foi concluída na agenda da clínica; informe que precisa ser conferida pela equipe.`;
+    }
+    return `Cancelamento feito para ${previous}. A consulta permanece no histórico do Fechai com a observação de cancelamento. Encerre com gentileza e se coloque à disposição.`;
   }
 
   const startsAt = typeof args.date === "string" && typeof args.time === "string"

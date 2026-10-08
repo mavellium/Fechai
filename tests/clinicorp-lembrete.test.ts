@@ -85,6 +85,16 @@ beforeEach(() => {
   provider("meta");
 });
 
+describe("cancelados preservados na agenda", () => {
+  it("não envia lembrete nem cria controle de envio para consulta cancelada", async () => {
+    clinicorp.listClinicorpAgenda.mockResolvedValue({ status: "ok", items: [consulta({ canceled: true })] });
+    expect(await scanAndSendClinicorpReminders(AGORA)).toMatchObject({ sent: 0, scanned: 0 });
+    expect(meta.sendBroadcastTemplate).not.toHaveBeenCalled();
+    expect(evolution.sendMessage).not.toHaveBeenCalled();
+    expect(db.clinicorpReminder.upsert).not.toHaveBeenCalled();
+  });
+});
+
 describe("somente avaliações do Clinicorp", () => {
   beforeEach(() => {
     config.reminderAudience = "selected_types";

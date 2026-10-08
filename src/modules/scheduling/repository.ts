@@ -9,7 +9,7 @@ import {
   listClinicorpBusyBlocks,
   pushAppointmentToClinicorp,
 } from "./clinicorp";
-import { dayKeyInZone, monthRangeUtc, parseLocalDateTime, partsInZone, zonedTimeToUtc } from "./time";
+import { dayKeyInZone, monthRangeUtc, parseLocalDateTime, partsInZone, timeInZone, zonedTimeToUtc } from "./time";
 import { canConfirm, canMarkAttendance, type AppointmentKind, type Attendance } from "./dimensions";
 import { syncAppointmentToClinicorp } from "./clinicorp-sync";
 
@@ -269,26 +269,35 @@ export async function createAppointment(input: CreateAppointmentInput) {
   return { ...appointment, reminderOverride: null, googleEventId, clinicorpAppointmentId, clinicorpSync };
 }
 
-export async function cancelAppointment(tenantId: string, id: string, leadId?: string) {
+export async function cancelAppointment(tenantId: string, id: string, leadId?: string, options: {
+  timezone?: string; reason?: string; source?: "agent" | "human";
+} = {}) {
   const appointment = await prisma.appointment.findFirst({ where: { id, tenantId, ...(leadId ? { leadId } : {}) } });
   if (!appointment) return null;
   if (appointment.status === "canceled") return appointment;
   if (appointment.status !== "scheduled") return null;
 
+  const now = new Date();
+  const timezone = options.timezone ?? parseScheduleConfig(null).timezone;
+  const date = dayKeyInZone(now, timezone).split("-").reverse().join("/");
+  const reason = options.reason?.trim().replace(/\s+/g, " ").slice(0, 500);
+  const observation = `Cancelado em ${date} às ${timeInZone(now, timezone)} (${timezone}) pelo ${options.source === "agent" ? "agente" : "painel"}.${reason ? ` Motivo informado: ${reason}` : ""}`;
+  const notes = [appointment.notes, observation].filter(Boolean).join("\n\n");
   const changed = await prisma.appointment.updateMany({
-    where: { id, tenantId, status: "scheduled", startsAt: appointment.startsAt, endsAt: appointment.endsAt, ...(leadId ? { leadId } : {}) },
-    data: { status: "canceled" },
+    // Não sobrescreve observações editadas entre a leitura e o clique.
+    where: { id, tenantId, status: "scheduled", notes: appointment.notes, startsAt: appointment.startsAt, endsAt: appointment.endsAt, ...(leadId ? { leadId } : {}) },
+    data: { status: "canceled", notes },
   });
   if (!changed.count) return null;
-  await Promise.all([
+  const [, clinicorpCancellationAccepted] = await Promise.all([
     appointment.googleEventId
       ? deleteEventFromGoogle(tenantId, appointment.googleEventId)
       : Promise.resolve(),
     appointment.clinicorpAppointmentId
       ? cancelAppointmentInClinicorp(tenantId, appointment.clinicorpAppointmentId)
-      : Promise.resolve(),
+      : Promise.resolve(true),
   ]);
-  return appointment;
+  return { ...appointment, status: "canceled", notes, clinicorpCancellationAccepted };
 }
 
 /** Consultas futuras do contato, inclusive as combinadas em outra conversa. */
