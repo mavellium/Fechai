@@ -271,3 +271,33 @@ esperou a janela de envio.
 - Não envia follow-up para números bloqueados. Não preenche `followUpSentAt`
   nesses casos porque a tela e o relatório tratam a data como envio real.
 - Não roda dentro do Next — é um processo à parte (deploy no Railway/Fly.io).
+
+## Confirmações do Clinicorp pelo QR — 09/10/2026
+
+Exceção específica à regra de primeiro contato: `clinicorpQrEnabled`, desligada
+por padrão, permite confirmações das categorias explicitamente escolhidas, com
+IDs resolvidos no Clinicorp (`clinicorpReminderCategoryIds`) e declaração da
+clínica registrada em `clinicorpQrConsentAt`. Configura-se em Agentes → Agendar
+horário, junto dos lembretes. Não libera Disparos ou follow-up de desconhecidos.
+Quem já está na Meta continua na Meta; falta de canal não troca de número.
+
+`ReminderDispatch` identifica tenant + origem + horário + antecedência. Consulta
+espelhada usa `clinicorp:<id>` também na fila local. Claim condicional precede o
+POST; `sending` abandonado vira `unknown`, nunca novo envio automático. Só o
+aceite com ID grava `sent`; `ReminderReceipt` concilia entrega/leitura assinada,
+inclusive antes do commit, sem regressão e sem reenvio por falha de entrega.
+
+A agenda mostra o status e dois comandos com sessão/tenant ativo: **Enviar
+confirmação agora** e **Já enviei pelo WhatsApp**. Ambos consomem o mesmo momento
+da fila. Mensagem manual fora do painel precisa desse registro explícito; não
+se deduz confirmação por texto. Consulta direta continua sem edição clínica no
+Fechai. Categoria não identificada, cancelamento, mudança de configuração,
+telefone inválido, pedido para parar, teste ou canal desconectado impedem envio.
+
+**Teste:** “Adicionar confirmação à conversa de teste” usa o texto salvo,
+`isTest` e telefone `sandbox:<agentId>`; sem WhatsApp nem consulta real. Workflow
+manual `verify-clinicorp-confirmations.yml` verifica SQL com chaves sintéticas,
+lê a agenda sem expor pacientes e testa a resposta no sandbox. A consulta
+sintética é removida; mensagens ficam para revisão. Entrega real exige número
+controlado e callback. Schema aditivo: `ReminderDispatch`/`ReminderReceipt`,
+`db push` e client gerado na imagem compartilhada web/worker.

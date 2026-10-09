@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const db = vi.hoisted(() => ({
   agent: { findFirst: vi.fn() },
   appointment: { aggregate: vi.fn() },
+  reminderDispatch: { aggregate: vi.fn() },
 }));
 const clinicorp = vi.hoisted(() => ({ listClinicorpAgenda: vi.fn() }));
 vi.mock("@/lib/prisma", () => ({ prisma: db }));
@@ -18,7 +19,7 @@ const item = (id: string, hour: string, patientName = "Paciente"): ClinicorpAgen
 const ok = (items: ClinicorpAgendaItem[]): ClinicorpAgenda => ({ status: "ok", items, skipped: 0, fetchedAt: Math.random() });
 const local = { count: 2, lastUpdate: new Date("2026-09-28T12:00:00Z") };
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => { vi.clearAllMocks(); db.reminderDispatch.aggregate.mockResolvedValue({ _max: { updatedAt: null } }); });
 
 describe("versão da agenda ao vivo", () => {
   it("atualiza o mesmo cartão quando a consulta é cancelada no Clinicorp", () => {
@@ -63,7 +64,7 @@ describe("pulso da agenda", () => {
     expect(db.appointment.aggregate).toHaveBeenCalledWith(expect.objectContaining({
       where: { tenantId: "tenant-1", startsAt: { gte: new Date("2026-09-01T03:00:00Z"), lt: new Date("2026-10-01T03:00:00Z") } },
     }));
-    expect(pulse.version).toBe(agendaVersion(local, ok([item("1", "12:00")])));
+    expect(pulse.version).toBe(agendaVersion({ ...local, reminderUpdate: null }, ok([item("1", "12:00")])));
     expect(pulse.checkedAt).toMatch(/^\d{2}:\d{2}:\d{2}$/);
   });
 

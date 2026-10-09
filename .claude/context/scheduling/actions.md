@@ -8,3 +8,7 @@
 - `rescheduleAppointment(input)`: troca horário e espelhos; mantém paciente/tipo.
 
 UI: ReminderAudienceSettings oferece todos/seleção múltipla, categorias e nome manual. Carregar não seleciona nem altera duração; vale ao salvar. ScheduleSettings usa useActionState.
+
+- `appointmentConfirmationAction`: produto/sessão/conta ativa, consulta fresca; enviar agora ou manual, mesma intenção automática; toast.
+- `testConfirmationMessage`: produto/sessão → `prepareConfirmationTest`, agente da conta/ativo, texto salvo no sandbox; sem envio.
+- `claimReminder`/`finishReminder`: posse condicional antes do POST; unknown não autoriza repetição. `markReminderManual` não toma envio em curso.

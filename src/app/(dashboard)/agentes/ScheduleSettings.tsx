@@ -1,6 +1,8 @@
 "use client";
 
 import { startTransition, useActionState, useRef, useState } from "react";
+import { useSaveFeedback } from "@/components/ui/toast/use-save-feedback";
+import { testConfirmationMessage } from "../agenda/confirmation-test-action";
 import { useActionToast } from "@/components/ui/toast";
 import type { ScheduleConfig } from "@/modules/scheduling/config";
 import {
@@ -87,11 +89,14 @@ export function ScheduleSettings({
   const [reminderEnabled, setReminderEnabled] = useState(config.reminderEnabled);
   const [reminderAudience, setReminderAudience] = useState(config.reminderAudience);
   const [reminderTypes, setReminderTypes] = useState(config.reminderTypes);
+  const [clinicorpQrEnabled, setClinicorpQrEnabled] = useState(config.clinicorpQrEnabled);
+  const [clinicorpQrConsent, setClinicorpQrConsent] = useState(Boolean(config.clinicorpQrConsentAt));
   const [reminders, setReminders] = useState<ReminderDraft[]>(() => toDrafts(config.reminders));
   const [metaTemplate, setMetaTemplate] = useState<MetaReminderTemplate | null>(config.metaReminderTemplate ?? null);
   const [blockedDates, setBlockedDates] = useState(() => config.blockedDates);
 
   const formRef = useRef<HTMLFormElement>(null);
+  const confirmationTest = useSaveFeedback({ entity: "mensagem de teste", gender: "f" });
 
   /**
    * Traz as categorias de agendamento do Clinicorp como nomes de variação.
@@ -366,28 +371,26 @@ export function ScheduleSettings({
             onAudienceChange={setReminderAudience} onTypesChange={setReminderTypes}
             loadTypes={clinicorpConnected ? loadClinicorpReminderTypesAction : undefined} disabled={pending}
           />
+          <Button type="button" size="sm" variant="outline" loading={confirmationTest.saving} onClick={() => confirmationTest.run(() => testConfirmationMessage(agentId))}>Adicionar confirmação à conversa de teste</Button>
           <ReminderList
             value={reminders}
             onChange={setReminders}
             location={config.location}
             idPrefix="agente"
           />
-          {/* Só com Clinicorp: hoje é de lá que vêm as consultas de quem nunca
-              conversou com o número. Pela Meta, com template; pelo Evolution,
-              primeiro contato não sai — a tela diz isso em vez de calar. */}
-          {clinicorpConnected && (metaReminders ? (
-            <div className="mt-4">
-              <MetaReminderTemplatePicker value={metaTemplate} onChange={setMetaTemplate}
-                location={config.location} disabled={pending} />
-            </div>
-          ) : (
-            <p className="mt-4 rounded-control border border-white/10 px-3 py-2 text-sm text-white/60">
-              Consultas marcadas direto no Clinicorp recebem estes lembretes só quando o paciente já
-              conversou com seu número. O primeiro contato sai apenas pela API oficial da Meta, com
-              template aprovado — pelo WhatsApp comum, mensagem para número desconhecido é o que mais
-              leva ao bloqueio do número da clínica.
-            </p>
-          ))}
+          {clinicorpConnected && <div className="mt-4 space-y-3 rounded-control border border-white/10 p-3">
+            <label className="flex items-start gap-2 text-sm text-white/85">
+              <input type="checkbox" checked={clinicorpQrEnabled} onChange={(event) => setClinicorpQrEnabled(event.target.checked)} className="mt-1 accent-iris" />
+              Confirmar pacientes do Clinicorp pelo WhatsApp conectado por QR, mesmo sem conversa anterior no Fechai
+            </label>
+            <p className="text-sm text-white/60">Escolha os tipos autorizados acima. A confirmação usa a categoria cadastrada no Clinicorp e o número conectado por QR. Contatos que falam pela Meta continuam nesse canal.</p>
+            {clinicorpQrEnabled && <label className="flex items-start gap-2 text-sm text-white/75">
+              <input type="checkbox" checked={clinicorpQrConsent} onChange={(event) => setClinicorpQrConsent(event.target.checked)} className="mt-1 accent-iris" />
+              Os pacientes dos tipos escolhidos autorizaram receber confirmações desta clínica pelo WhatsApp.
+            </label>}
+            {metaReminders && <MetaReminderTemplatePicker value={metaTemplate} onChange={setMetaTemplate} location={config.location} disabled={pending} />}
+          </div>}
+
         </div>
       </fieldset>
 
@@ -396,6 +399,8 @@ export function ScheduleSettings({
       <input type="hidden" name="reminderAudience" value={reminderAudience} />
       <input type="hidden" name="reminderTypes" value={JSON.stringify(reminderTypes)} />
       <input type="hidden" name="reminders" value={JSON.stringify(fromDrafts(reminders))} />
+      <input type="hidden" name="clinicorpQrEnabled" value={String(clinicorpQrEnabled)} />
+      <input type="hidden" name="clinicorpQrConsent" value={String(clinicorpQrConsent)} />
       <input type="hidden" name="metaReminderTemplate" value={metaTemplate ? JSON.stringify(metaTemplate) : ""} />
 
 

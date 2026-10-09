@@ -1,3 +1,6 @@
+import { prisma } from "@/lib/prisma";
+import { parseEvolutionReminderReceipts } from "@/modules/whatsapp/reminder-receipts";
+import { recordReminderReceipt } from "@/modules/scheduling/reminder-dispatch";
 import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { getWhatsAppProvider } from "@/modules/whatsapp";
@@ -27,6 +30,11 @@ export async function POST(req: Request) {
   }
 
   const payload = await req.json().catch(() => null);
+  const receipts = parseEvolutionReminderReceipts(payload);
+  for (const receipt of receipts) {
+    const instance = await prisma.whatsappInstance.findFirst({ where: { externalId: receipt.instanceExternalId, provider: "evolution" }, select: { tenantId: true } });
+    if (instance) await recordReminderReceipt(instance.tenantId, "evolution", receipt.messageId, receipt.status, new Date());
+  }
   const provider = getWhatsAppProvider("evolution");
   const incoming = provider.parseWebhook(payload);
   if (!incoming) return NextResponse.json({ ignored: true });

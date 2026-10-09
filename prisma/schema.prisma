@@ -141,6 +141,8 @@ model Tenant {
   bitrixSyncJobs   BitrixSyncJob[]
   clinicorp        ClinicorpIntegration?
   clinicorpReminders ClinicorpReminder[]
+  reminderDispatches ReminderDispatch[]
+  reminderReceipts ReminderReceipt[]
   calendarFeatures CalendarFeatures?
   leadValues       TenantLeadValue[]
   attendanceCosts  TenantAttendanceCost[]
@@ -1723,4 +1725,45 @@ model BitrixSyncJob {
 
   @@unique([tenantId, connectionKey, kind, entityId])
   @@index([tenantId, connectionKey, state, nextAttemptAt])
+}
+
+/// Intenção única compartilhada entre lembrete automático e manual.
+model ReminderDispatch {
+  id String @id @default(cuid())
+  tenantId String
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sourceKey String
+  startsAt DateTime
+  minutesBefore Int
+  state String @default("queued")
+  reason String?
+  provider String?
+  messageId String?
+  conversationId String?
+  token String?
+  claimedAt DateTime?
+  acceptedAt DateTime?
+  manualBy String?
+  deliveryStatus String?
+  deliveryAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([tenantId, sourceKey, startsAt, minutesBefore])
+  @@index([tenantId, startsAt])
+  @@index([tenantId, provider, messageId])
+  @@index([state, claimedAt])
+}
+
+/// Recibo pode chegar antes da resposta do POST. Nunca autoriza reenvio.
+model ReminderReceipt {
+  id String @id @default(cuid())
+  tenantId String
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  provider String
+  messageId String
+  status String
+  occurredAt DateTime
+  createdAt DateTime @default(now())
+  @@unique([tenantId, provider, messageId, status])
+  @@index([createdAt])
 }

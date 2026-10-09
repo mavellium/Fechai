@@ -46,10 +46,11 @@ export async function warmNeighborMonths(tenantId: string, year: number, month: 
  * horário podem vir trocadas de uma leitura para outra sem nada ter mudado.
  */
 export function agendaVersion(
-  local: { count: number; lastUpdate: Date | null },
+  local: { count: number; lastUpdate: Date | null; reminderUpdate?: Date | null },
   clinicorp: ClinicorpAgenda,
 ): string {
   const parts = [`fechai:${local.count}:${local.lastUpdate?.getTime() ?? 0}`, `clinicorp:${clinicorp.status}`];
+  if ("reminderUpdate" in local) parts.push(`confirmations:${local.reminderUpdate?.getTime() ?? 0}`);
   if (clinicorp.status === "ok") {
     parts.push(
       `skipped:${clinicorp.skipped}`,
@@ -87,7 +88,7 @@ export async function readAgendaPulse(
   const timezone = await agendaTimezone(tenantId);
   const { start, end } = monthRangeUtc(year, month, timezone);
   const { from, to } = monthDays(year, month);
-  const [local, clinicorp] = await Promise.all([
+  const [local, clinicorp, confirmations] = await Promise.all([
     // Mesmo filtro de `listMonthAppointments`.
     prisma.appointment.aggregate({
       where: { tenantId, startsAt: { gte: start, lt: end } },
@@ -95,9 +96,10 @@ export async function readAgendaPulse(
       _max: { updatedAt: true },
     }),
     listClinicorpAgenda(tenantId, from, to, timezone, { fresh: true }),
+    prisma.reminderDispatch.aggregate({ where: { tenantId, startsAt: { gte: start, lt: end } }, _max: { updatedAt: true } }),
   ]);
   return {
-    version: agendaVersion({ count: local._count._all, lastUpdate: local._max.updatedAt }, clinicorp),
+    version: agendaVersion({ count: local._count._all, lastUpdate: local._max.updatedAt, reminderUpdate: confirmations._max.updatedAt }, clinicorp),
     checkedAt: clockInZone(new Date(), timezone),
   };
 }

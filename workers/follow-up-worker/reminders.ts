@@ -1,3 +1,4 @@
+import { blockReminder, claimReminder, finishReminder, reminderAlreadyHandled, reminderSource, markReminderManual } from "../../src/modules/scheduling/reminder-dispatch";
 import { recordMessageContext } from "../../src/modules/reports/contact-context-events";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../../src/lib/prisma";
@@ -100,7 +101,7 @@ export async function loadAccountScheduleConfigs(): Promise<Map<string, Schedule
   // ação própria), e só age com a ação LIGADA — mesma regra de
   // `getActiveHandoffConfig`: config salva com a ação desligada não atua.
   const enabled = await prisma.tenantAction.findMany({
-    where: { key: "schedule_meeting", enabled: true },
+    where: { key: "schedule_meeting", enabled: true, tenant: { status: "active" } },
     select: { tenantId: true, agentId: true, config: true },
   });
   if (enabled.length === 0) return new Map();
@@ -136,8 +137,9 @@ export function remindersFor(
   return cfg.reminderEnabled ? cfg.reminders : [];
 }
 
-export async function scanAndSendReminders(now: Date = new Date()) {
-  const configByTenant = await loadAccountScheduleConfigs();
+export async function scanAndSendReminders(now: Date = new Date(), target?: { tenantId: string; id: string; operation: "send" | "manual"; userId: string }) {
+  const loaded = await loadAccountScheduleConfigs();
+  const configByTenant = target ? new Map([...loaded].filter(([id]) => id === target.tenantId)) : loaded;
   if (configByTenant.size === 0) return { scanned: 0, sent: 0 };
 
   // Teto da busca: a maior antecedência configurada. Sem ele, a varredura
@@ -157,6 +159,7 @@ export async function scanAndSendReminders(now: Date = new Date()) {
     where: {
       // Pela conta, não pelo `agentId`: ver `loadAccountScheduleConfigs`.
       tenantId: { in: [...configByTenant.keys()] },
+      ...(target ? { id: target.id } : {}),
       status: "scheduled",
       // Não envie uma confirmação por WhatsApp enquanto a criação externa
       // ainda estiver sendo concluída ou tiver sido recusada.
@@ -165,12 +168,12 @@ export async function scanAndSendReminders(now: Date = new Date()) {
       // Conversa de teste não recebe lembrete: o sandbox usa telefone
       // sintético, mesma regra do follow-up e do grupo de handoff.
       lead: { isTest: false },
-      OR: [
+      ...(target ? {} : { OR: [
         { startsAt: { lte: new Date(now.getTime() + maxLeadMinutes * 60_000) } },
         // Consulta com lembretes próprios: a antecedência dela pode ser maior
         // que qualquer uma do agente, então não cabe no teto acima.
         { reminderOverride: { not: Prisma.DbNull } },
-      ],
+      ] }),
     },
     include: {
       // A consulta marcada à mão não guarda `conversationId`: o canal do
@@ -186,6 +189,7 @@ export async function scanAndSendReminders(now: Date = new Date()) {
   // Fechar (em vez de ignorar) é o que impede reavaliá-las em todo ciclo.
   const overdue = await prisma.appointment.findMany({
     where: {
+      ...(target ? { id: target.id } : {}),
       tenantId: { in: [...configByTenant.keys()] },
       status: "scheduled",
       startsAt: { lt: now },
@@ -212,15 +216,26 @@ export async function scanAndSendReminders(now: Date = new Date()) {
     const rules = remindersFor(appt, cfg);
     if (rules.length === 0) continue;
 
-    const due = dueReminders(appt, rules, now, cfg.timezone);
+    const dueNow = dueReminders(target ? { ...appt, remindersSent: [] } : appt, rules, now, cfg.timezone);
+    const due = target && !dueNow.length ? rules : dueNow;
     if (due.length === 0) continue;
 
     // Vários disparos vencidos de uma vez (worker parado, ou dois lembretes
     // muito próximos): manda só o MAIS PRÓXIMO da consulta e fecha os outros.
     // Três mensagens seguidas dizendo "é daqui a uma semana / é amanhã / é em
     // duas horas" chegariam juntas, todas desatualizadas menos a última.
-    const [toSend] = [...due].sort((a, b) => a.minutesBefore - b.minutesBefore);
-    const closing = due.map((r) => r.minutesBefore);
+    const [toSend] = [...due].sort((a, b) => target && !dueNow.length ? b.minutesBefore - a.minutesBefore : a.minutesBefore - b.minutesBefore);
+    if (target && appt.remindersSent.includes(toSend.minutesBefore)) continue;
+    const closing = target && !dueNow.length ? [toSend.minutesBefore] : due.map((r) => r.minutesBefore);
+    const dispatchKey = { tenantId: appt.tenantId, sourceKey: reminderSource(appt.id, appt.clinicorpAppointmentId), startsAt: appt.startsAt, minutesBefore: toSend.minutesBefore };
+    const handled = await reminderAlreadyHandled(dispatchKey);
+    if (handled) { await markSent(appt.id, appt.remindersSent, closing, handled.acceptedAt); continue; }
+    if (target?.operation === "manual") {
+      if (await markReminderManual(dispatchKey, target.userId)) await markSent(appt.id, appt.remindersSent, closing, null);
+      continue;
+    }
+
+
 
     if (!appt.lead?.phone) {
       await markSent(appt.id, appt.remindersSent, closing, null);
@@ -249,8 +264,25 @@ export async function scanAndSendReminders(now: Date = new Date()) {
       continue;
     }
 
+    if (!appt.lead?.phone) { await blockReminder(dispatchKey, "Cadastre um telefone válido para o contato."); continue; }
+    const claim = await claimReminder(dispatchKey);
+    if (!claim) continue;
+    const currentConfig = (await loadAccountScheduleConfigs()).get(appt.tenantId);
+    const currentAppointment = await prisma.appointment.findFirst({
+      where: { id: appt.id, tenantId: appt.tenantId, status: "scheduled", startsAt: appt.startsAt,
+        lead: { isTest: false }, AND: [{ OR: [{ clinicorpSync: null }, { clinicorpSync: { state: "synced" }, clinicorpAppointmentId: { not: null } }] }] },
+      include: { lead: true },
+    });
+    if (!currentConfig || JSON.stringify(currentConfig) !== JSON.stringify(cfg) || !currentAppointment ||
+        currentAppointment.lead?.phone !== appt.lead.phone || currentAppointment.clinicorpAppointmentId !== appt.clinicorpAppointmentId ||
+        JSON.stringify(currentAppointment.reminderOverride) !== JSON.stringify(appt.reminderOverride) ||
+        currentAppointment.serviceType !== appt.serviceType || await isPhoneBlocked(appt.tenantId, appt.lead.phone)) {
+      await finishReminder(claim, "blocked", { reason: "A configuração ou a consulta mudou. Confira os dados antes do envio." });
+      continue;
+    }
     let keyId: string | null = null;
     let delivered = false;
+    let sentProvider: string | undefined;
     {
       // Pelo número em que o paciente escreveu: com as duas conexões, a dele
       // fora do ar espera (o disparo não é consumido), não troca de número.
@@ -264,16 +296,23 @@ export async function scanAndSendReminders(now: Date = new Date()) {
           if (provider.isConfigured()) {
             keyId = await provider.sendMessage(instance.externalId, appt.lead.phone, text);
             delivered = true;
+            sentProvider = instance.provider;
           }
         } catch (err) {
-          console.error("[lembrete] falha ao enviar", appt.id, err);
+          console.error("[lembrete] envio não confirmado", appt.id, err);
+          await finishReminder(claim, "unknown", { provider: instance.provider, reason: "O WhatsApp não confirmou o envio. Confira antes de tentar novamente." });
         }
       }
     }
 
     // Uma falha temporária de conexão não pode consumir o lembrete. Enquanto
     // a consulta ainda não começou, a próxima varredura tenta novamente.
-    if (!delivered) continue;
+    if (!delivered) {
+      await finishReminder(claim, "blocked", { reason: "O canal do paciente está desconectado ou não foi configurado." });
+      continue;
+    }
+    if (!keyId) { await finishReminder(claim, "unknown", { provider: sentProvider, reason: "O WhatsApp respondeu sem identificar a mensagem. Confira o envio." }); continue; }
+    await finishReminder(claim, "sent", { provider: sentProvider, messageId: keyId, conversationId: appt.conversationId ?? undefined, acceptedAt: now });
 
     // A mensagem entra na conversa como fala do agente. É isso que faz a
     // resposta do paciente ("não vou poder") cair no `runAgentTurn` normal,

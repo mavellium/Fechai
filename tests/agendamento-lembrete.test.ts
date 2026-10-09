@@ -19,7 +19,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const db = vi.hoisted(() => ({
   tenantAction: { findMany: vi.fn() },
   agent: { findMany: vi.fn() },
-  appointment: { findMany: vi.fn(), update: vi.fn() },
+  appointment: { findMany: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
   whatsappInstance: { findMany: vi.fn() },
   whatsappBlockedNumber: { findUnique: vi.fn() },
   message: { create: vi.fn() },
@@ -34,6 +34,12 @@ const provider = vi.hoisted(() => ({
 
 vi.mock("../src/lib/prisma", () => ({ prisma: db }));
 vi.mock("../src/modules/whatsapp", () => ({ getWhatsAppProvider: () => provider }));
+
+vi.mock("@/modules/scheduling/reminder-dispatch", () => ({
+  blockReminder: vi.fn(), claimReminder: vi.fn(async () => ({ id: "dispatch", token: "token", tenantId: "tenant-1" })),
+  finishReminder: vi.fn(), markReminderManual: vi.fn(async () => true), reminderAlreadyHandled: vi.fn(async () => null),
+  reminderSource: (id: string, remote?: string) => remote ? `clinicorp:${remote}` : `appointment:${id}`,
+}));
 
 import {
   DEFAULT_REMINDER_MINUTES,
@@ -396,6 +402,7 @@ describe("Quais disparos estão vencidos (dueReminders)", () => {
 describe("Varredura (scanAndSendReminders)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    db.appointment.findFirst.mockImplementation(async (args: { where: { id: string } }) => (await db.appointment.findMany({ where: {} })).find((a: { id: string }) => a.id === args.where.id) ?? null);
     db.appointment.update.mockResolvedValue({});
     db.message.create.mockResolvedValue({});
     provider.isConfigured.mockReturnValue(true);
@@ -726,6 +733,7 @@ describe("Lembretes com as duas conexões (QR e Meta)", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    db.appointment.findFirst.mockImplementation(async (args: { where: { id: string } }) => (await db.appointment.findMany({ where: {} })).find((a: { id: string }) => a.id === args.where.id) ?? null);
     db.appointment.update.mockResolvedValue({});
     db.message.create.mockResolvedValue({});
     db.whatsappBlockedNumber.findUnique.mockResolvedValue(null);

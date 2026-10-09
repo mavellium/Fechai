@@ -116,7 +116,7 @@ describe("Webhook da instância", () => {
           enabled: true,
           url: WEBHOOK,
           headers: { "X-Webhook-Secret": SEGREDO },
-          events: ["MESSAGES_UPSERT", "CONNECTION_UPDATE", "QRCODE_UPDATED"],
+          events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "CONNECTION_UPDATE", "QRCODE_UPDATED"],
         }),
         text: async () => "",
       } as unknown as Response;

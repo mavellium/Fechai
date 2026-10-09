@@ -1,3 +1,4 @@
+import { recordReminderReceipt } from "@/modules/scheduling/reminder-dispatch";
 import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
@@ -100,6 +101,7 @@ export async function POST(
   for (const receipt of receipts) {
     try {
       await receiveBroadcastReceipt(tenantId, receipt);
+      await recordReminderReceipt(tenantId, "meta", receipt.messageId, receipt.status, receipt.occurredAt);
     } catch {
       failed = true;
     }

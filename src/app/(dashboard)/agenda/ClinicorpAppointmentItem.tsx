@@ -1,3 +1,5 @@
+import { AppointmentConfirmation } from "./AppointmentConfirmation";
+import type { ReminderStatus } from "@/modules/scheduling/reminder-status";
 import { BellRing, Phone, User } from "lucide-react";
 import type { ClinicorpAgendaItem } from "@/modules/scheduling/clinicorp";
 import { formatInZone, timeInZone } from "@/modules/scheduling/time";
@@ -13,9 +15,13 @@ export function ClinicorpAppointmentItem({
   item,
   timezone,
   reminderSentAt = null,
+  confirmationStatus,
+  confirmationsEnabled = false,
 }: {
   item: ClinicorpAgendaItem;
   timezone: string;
+  confirmationStatus?: ReminderStatus | null;
+  confirmationsEnabled?: boolean;
   /** Último lembrete que saiu para esta consulta (`ClinicorpReminder`). */
   reminderSentAt?: Date | null;
 }) {
@@ -75,6 +81,7 @@ export function ClinicorpAppointmentItem({
             </p>
           )}
 
+          {confirmationsEnabled && <AppointmentConfirmation id={item.id} source="clinicorp" startsAt={item.startsAt.toISOString()} status={confirmationStatus} disabled={Boolean(item.canceled || item.startsAt <= new Date())} />}
           <p className="mt-1.5 text-xs text-white/45">
             {item.canceled ? "Cancelada no Clinicorp. Horário liberado; sem novos lembretes." : "Marcada direto no Clinicorp. Para alterar ou cancelar, use o Clinicorp."}
           </p>

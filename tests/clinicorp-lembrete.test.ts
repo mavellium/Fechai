@@ -10,9 +10,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const db = vi.hoisted(() => ({
   tenantAction: { findMany: vi.fn() },
+  reminderReceipt: { deleteMany: vi.fn() },
   agent: { findMany: vi.fn() },
   whatsappInstance: { findMany: vi.fn() },
-  clinicorpReminder: { deleteMany: vi.fn(), findMany: vi.fn(), upsert: vi.fn() },
+  clinicorpReminder: { deleteMany: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), upsert: vi.fn() },
   appointment: { findMany: vi.fn() },
   lead: { findFirst: vi.fn() },
   message: { create: vi.fn() },
@@ -34,7 +35,14 @@ vi.mock("@/modules/whatsapp/meta-config", () => ({
 vi.mock("@/modules/whatsapp/blocklist", () => blocklist);
 vi.mock("@/modules/agent-engine/conversation", () => conversations);
 
-import { clinicorpWhatsappPhone, scanAndSendClinicorpReminders } from "../workers/follow-up-worker/clinicorp-reminders";
+vi.mock("@/modules/scheduling/reminder-dispatch", () => ({
+  blockReminder: vi.fn(), claimReminder: vi.fn(async () => ({ id: "dispatch", token: "token", tenantId: "tenant-1" })),
+  finishReminder: vi.fn(), markReminderManual: vi.fn(async () => true), reminderAlreadyHandled: vi.fn(async () => null),
+  reminderSource: (id: string, remote?: string) => remote ? `clinicorp:${remote}` : `appointment:${id}`,
+}));
+
+import { clinicorpWhatsappPhone, scanAndSendClinicorpReminders, sendClinicorpConfirmation } from "../workers/follow-up-worker/clinicorp-reminders";
+import { blockReminder, finishReminder } from "@/modules/scheduling/reminder-dispatch";
 import { parseScheduleConfig } from "@/modules/scheduling/config";
 import { validateMetaReminderTemplate, type MetaReminderTemplate } from "@/modules/scheduling/meta-reminder";
 
@@ -70,6 +78,7 @@ beforeEach(() => {
   db.agent.findMany.mockResolvedValue([{ id: "agente-1", tenantId: CONTA }]);
   db.clinicorpReminder.deleteMany.mockResolvedValue({ count: 0 });
   db.clinicorpReminder.findMany.mockResolvedValue([]);
+  db.clinicorpReminder.findUnique.mockImplementation(async () => (await db.clinicorpReminder.findMany()).find((r: { clinicorpAppointmentId: string }) => r.clinicorpAppointmentId === consulta().id) ?? null);
   db.clinicorpReminder.upsert.mockResolvedValue({});
   db.appointment.findMany.mockResolvedValue([]);
   db.lead.findFirst.mockResolvedValue(null);
@@ -190,17 +199,17 @@ describe("pela Meta", () => {
     expect(clinicorp.listClinicorpAgenda).toHaveBeenCalledWith(CONTA, "2026-09-28", expect.any(String), "America/Sao_Paulo", { fresh: true });
   });
 
-  it("sem template escolhido, não manda nada e nem lê o Clinicorp", async () => {
+  it("sem template escolhido, lê a agenda para mostrar o impedimento e não envia", async () => {
     delete config.metaReminderTemplate;
     await scanAndSendClinicorpReminders(AGORA);
-    expect(clinicorp.listClinicorpAgenda).not.toHaveBeenCalled();
+    expect(clinicorp.listClinicorpAgenda).toHaveBeenCalled();
     expect(meta.sendBroadcastTemplate).not.toHaveBeenCalled();
   });
 
   it("não reenvia quando a Meta não confirma: pode ter aceitado", async () => {
     meta.sendBroadcastTemplate.mockRejectedValue(new Error("A Meta não confirmou o resultado do envio."));
     await scanAndSendClinicorpReminders(AGORA);
-    expect(upserts()[0]).toMatchObject({ create: { remindersSent: [UM_DIA], reminderSentAt: null } });
+    expect(finishReminder).toHaveBeenCalledWith(expect.anything(), "unknown", expect.anything());
     expect(db.message.create).not.toHaveBeenCalled();
   });
 
@@ -208,7 +217,7 @@ describe("pela Meta", () => {
     clinicorp.listClinicorpAgenda.mockResolvedValue({ status: "ok", items: [consulta({ patientName: "Paciente sem nome" })], skipped: 0 });
     await scanAndSendClinicorpReminders(AGORA);
     expect(meta.sendBroadcastTemplate).not.toHaveBeenCalled();
-    expect(upserts()[0]).toMatchObject({ create: { remindersSent: [UM_DIA], reminderSentAt: null } });
+    expect(blockReminder).toHaveBeenCalled();
   });
 });
 
@@ -274,7 +283,7 @@ describe("regras de envio", () => {
     arrange();
     await scanAndSendClinicorpReminders(AGORA);
     expect(meta.sendBroadcastTemplate).not.toHaveBeenCalled();
-    expect(upserts()[0]).toMatchObject({ create: { reminderSentAt: null } });
+    expect(blockReminder).toHaveBeenCalled();
   });
 
   it("lembrete desligado, WhatsApp desconectado ou Clinicorp fora: nada sai", async () => {
@@ -376,7 +385,7 @@ describe("com as duas conexões (QR e Meta) de pé", () => {
     });
   });
 
-  it("conversa que já fala pelo QR não é tomada pelo template da Meta", async () => {
+  it("conversa do QR sem entrada não migra para Meta silenciosamente", async () => {
     // Paciente do QR sem `lastInboundAt` (nunca escreveu) vai pela Meta, mas a
     // conversa dele continua sendo do QR até ele responder por lá.
     db.lead.findFirst.mockResolvedValue(contato({ lastInboundAt: null }));
@@ -386,7 +395,65 @@ describe("com as duas conexões (QR e Meta) de pé", () => {
 
     await scanAndSendClinicorpReminders(AGORA);
 
-    expect(meta.sendBroadcastTemplate).toHaveBeenCalledOnce();
+    expect(meta.sendBroadcastTemplate).not.toHaveBeenCalled();
     expect(db.conversation.update).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("QR autorizado para avaliações externas", () => {
+  beforeEach(() => {
+    provider("evolution");
+    config.clinicorpQrEnabled = true;
+    config.clinicorpReminderCategoryIds = ["1"];
+    config.reminderAudience = "selected_types";
+    config.reminderTypes = ["Avaliação"];
+    clinicorp.listClinicorpAgenda.mockResolvedValue({ status: "ok", items: [consulta({ categoryId: "1" })], skipped: 0 });
+  });
+  it("envia pelo QR sem conversa anterior e cria contexto para a resposta", async () => {
+    expect(await scanAndSendClinicorpReminders(AGORA)).toMatchObject({ sent: 1 });
+    expect(evolution.sendMessage).toHaveBeenCalledOnce();
+    expect(meta.sendBroadcastTemplate).not.toHaveBeenCalled();
+    expect(conversations.getOrCreateConversation).toHaveBeenCalledWith(CONTA, "5514991406457", "Maria Souza");
+  });
+  it("não envia somente por descrição quando o marcador autorizado não está presente", async () => {
+    clinicorp.listClinicorpAgenda.mockResolvedValue({ status: "ok", items: [consulta({ category: "Avaliação" })] });
+    expect(await scanAndSendClinicorpReminders(AGORA)).toMatchObject({ sent: 0 });
+    expect(evolution.sendMessage).not.toHaveBeenCalled();
+  });
+  it("não envia a categoria de mesmo nome com outro id", async () => {
+    config.clinicorpReminderCategoryIds = ["99"];
+    expect(await scanAndSendClinicorpReminders(AGORA)).toMatchObject({ sent: 0 });
+    expect(evolution.sendMessage).not.toHaveBeenCalled();
+  });
+  it("contato que usa Meta não é transferido para QR mesmo com autorização", async () => {
+    db.lead.findFirst.mockResolvedValue({ phone: "5514991406457", conversation: { id: "c", lastInboundAt: null, whatsappProvider: "meta" } });
+    expect(await scanAndSendClinicorpReminders(AGORA)).toMatchObject({ sent: 0 });
+    expect(evolution.sendMessage).not.toHaveBeenCalled();
+  });
+  it("exclui testes mesmo que o telefone bata com o da agenda", async () => {
+    db.lead.findFirst.mockResolvedValue({ phone: "5514991406457", isTest: true });
+    expect(await scanAndSendClinicorpReminders(AGORA)).toMatchObject({ sent: 0 });
+    expect(evolution.sendMessage).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("conferência imediatamente antes do envio", () => {
+  it("não envia se a consulta foi cancelada depois da primeira leitura", async () => {
+    clinicorp.listClinicorpAgenda.mockResolvedValue({ status: "ok", items: [consulta({ canceled: true })] });
+    expect(await sendClinicorpConfirmation(CONTA, consulta(), parseScheduleConfig(config), { now: AGORA })).toMatchObject({ reason: "changed", sent: false });
+    expect(meta.sendBroadcastTemplate).not.toHaveBeenCalled();
+  });
+  it("não confirma o horário antigo após remarcação", async () => {
+    clinicorp.listClinicorpAgenda.mockResolvedValue({ status: "ok", items: [consulta({ startsAt: new Date("2026-09-29T14:00:00Z") })] });
+    expect(await sendClinicorpConfirmation(CONTA, consulta(), parseScheduleConfig(config), { now: AGORA })).toMatchObject({ reason: "changed" });
+    expect(meta.sendBroadcastTemplate).not.toHaveBeenCalled();
+  });
+  it("respeita lembrete desligado enquanto o envio estava na fila", async () => {
+    const original = parseScheduleConfig(config);
+    config.reminderEnabled = false;
+    expect(await sendClinicorpConfirmation(CONTA, consulta(), original, { now: AGORA })).toMatchObject({ reason: "changed" });
+    expect(meta.sendBroadcastTemplate).not.toHaveBeenCalled();
   });
 });

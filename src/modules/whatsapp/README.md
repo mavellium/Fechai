@@ -354,3 +354,17 @@ era a única coisa que resolveria.
 - Não decide a resposta — isso é do `agent-engine` (orquestrador).
 - Não persiste conversas/leads — quem grava é o orquestrador.
 - `onMessageReceived` é feito via webhook (`api/webhooks/whatsapp`), não por polling.
+
+
+## Confirmações QR autorizadas e recibos (09/10/2026)
+
+A exceção de primeiro contato é somente confirmação de consulta do Clinicorp,
+com `clinicorpQrEnabled` explícito, categorias por ID e declaração da clínica
+salva. Regras e limites em `scheduling/README.md`. Não troca canal Meta → QR,
+não inventa entrada do paciente e não inicia follow-up comercial.
+
+Evolution agora assina `MESSAGES_UPDATE`; o monitor `ensureWebhook` repara essa
+inscrição. `reminder-receipts.ts` normaliza ACKs; a rota autentica o segredo e
+resolve tenant pela instância Evolution. Meta usa assinatura HMAC e phone ID.
+`ReminderReceipt` guarda callback antecipado; `ReminderDispatch` só mostra
+entregue/lido com recibo. Timeout ou ausência de ID = desconhecido, sem repetição.

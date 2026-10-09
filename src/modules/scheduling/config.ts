@@ -70,6 +70,9 @@ export type ScheduleConfig = {
   reminderAudience: "all" | "selected_types";
   /** Nomes exatos dos tipos permitidos, independentes da duração. */
   reminderTypes: string[];
+  clinicorpQrEnabled: boolean;
+  clinicorpQrConsentAt?: string;
+  clinicorpReminderCategoryIds: string[];
   /**
    * Os lembretes, um por disparo. Uma clínica costuma querer mais de um
    * ("1 semana antes" para dar tempo de remarcar, "2 horas antes" para quem
@@ -84,7 +87,7 @@ export type ScheduleConfig = {
   /**
    * Template aprovado da Meta para lembrar quem **nunca conversou** com o
    * número (pacientes marcados direto no Clinicorp). Ausente = esses pacientes
-   * não recebem lembrete. Ver `meta-reminder.ts`.
+   * precisam da opção QR específica ou não recebem. Ver `meta-reminder.ts`.
    */
   metaReminderTemplate?: MetaReminderTemplate;
 };
@@ -222,6 +225,8 @@ export const DEFAULT_SCHEDULE_CONFIG: ScheduleConfig = {
   reminderEnabled: false,
   reminderAudience: "all",
   reminderTypes: [],
+  clinicorpQrEnabled: false,
+  clinicorpReminderCategoryIds: [],
   reminders: [{ minutesBefore: DEFAULT_REMINDER_MINUTES, template: DEFAULT_REMINDER_TEMPLATE }],
 };
 
@@ -429,6 +434,9 @@ export function parseScheduleConfig(raw: unknown): ScheduleConfig {
     reminderAudience: c.reminderAudience === undefined || c.reminderAudience === "all"
       ? "all" : "selected_types",
     reminderTypes: parseReminderTypes(c.reminderTypes),
+    clinicorpQrEnabled: c.clinicorpQrEnabled === true,
+    ...(typeof c.clinicorpQrConsentAt === "string" ? { clinicorpQrConsentAt: c.clinicorpQrConsentAt } : {}),
+    clinicorpReminderCategoryIds: Array.isArray(c.clinicorpReminderCategoryIds) ? [...new Set(c.clinicorpReminderCategoryIds.filter((id): id is string => typeof id === "string" && /^[1-9]\d*$/.test(id)))].slice(0, 100) : [],
     reminders: parseReminders(c),
     ...(metaReminderTemplate ? { metaReminderTemplate } : {}),
   };

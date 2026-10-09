@@ -1,0 +1,33 @@
+name: Verificar confirmacoes Clinicorp no sandbox
+on:
+  workflow_dispatch:
+    inputs:
+      tenant_id:
+        description: Conta autorizada para teste no chat de teste (nenhum envio a pacientes)
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: fechai-production
+  cancel-in-progress: false
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verificar banco e resposta do agente no sandbox
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          VERIFY_TENANT_ID: ${{ inputs.tenant_id }}
+        with:
+          host: ${{ secrets.HOST_IP }}
+          username: ${{ secrets.HOST_USERNAME }}
+          key: ${{ secrets.HOST_SSH_KEY }}
+          port: 22
+          envs: VERIFY_TENANT_ID
+          command_timeout: 5m
+          script: |
+            set -e
+            case "$VERIFY_TENANT_ID" in ''|*[!a-zA-Z0-9_-]*) exit 2;; esac
+            cd /var/www/Fechai
+            docker compose exec -T -e VERIFY_TENANT_ID="$VERIFY_TENANT_ID" worker npx tsx scripts/verify-clinicorp-confirmations.ts

@@ -39,6 +39,7 @@ Ver [CHANGELOG.md](./CHANGELOG.md) para o último milestone concluído.
 - Disparos pela Meta (`/disparos`, Excel/JSON, testes, agenda, entrega e resultados) → [passo a passo e operação](../src/modules/broadcasts/README.md)
 - Módulo scheduling (agenda, Google Agenda, Clinicorp, lembretes de consulta) → `src/modules/scheduling/README.md`
 - Agenda com o Clinicorp (consultas de lá na `/agenda`, ao vivo, troca de mês rápida, lembretes para esses pacientes) → [ADR-005](./decisions/ADR-005-agenda-clinicorp.md) + seções do README de scheduling
+- Plano das confirmações de avaliações do Clinicorp (relato da cliente, público, QR e duplicação) → [plano de 09/10/2026](./plans/2026-10-09-confirmacoes-avaliacoes-clinicorp.md)
 - Módulo reports → `src/modules/reports/README.md`
 - Relatório mensal v2: SDD original, fases e progresso da continuação → [SDD-relatorio-mensal-v2.md](./SDD-relatorio-mensal-v2.md)
 - ROI mensal (P-79): revisão administrativa, correções manuais, fórmulas, publicação no tenant e PDF → [contrato e operação](./P-79-relatorio-mensal-roi.md); [mapa da área de relatórios](../src/app/(dashboard)/relatorios/README.md)

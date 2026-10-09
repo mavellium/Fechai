@@ -9,3 +9,9 @@ Arquivos: config, clinicorp, tools, actions, UI, workers, testes, README.
 Razão: envio externo incluía outros tipos; lista inicial omitia Avaliação.
 
 Impacto: categorias automáticas e ordenadas; atualização manual; tipo desconhecido excluído; overrides respeitam público. Sem schema novo.
+
+### 2026-10-09 — Confirmações QR autorizadas
+
+Config/categorias, claim SQL, recibos, agenda manual/status e teste sandbox.
+Motivo: avaliações externas sem histórico e confirmação duplicada.
+Schema aditivo exige db push/client web+worker. PostgreSQL isolado validado.

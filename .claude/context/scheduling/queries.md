@@ -10,3 +10,7 @@
 - `getCalendarFeatures(tenantId)`: flags, desligadas na ausência/falha.
 
 Auditoria sem dados pessoais: tipo_excluido/tipo_desconhecido. Conferir categoria na resposta real antes de reativar: exemplo público não garante campos.
+
+- Página/pulso: ReminderDispatch por tenant/mês; updatedAt muda versão, status sem dado sensível.
+- Antes do POST: revalida configuração ativa, consulta/horário/categoria/telefone e conexão; mudou → blocked.
+- `reconcileReminderReceipt`: tenant/provider/messageId, maior status prevalece, callback antecipado guardado.

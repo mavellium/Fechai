@@ -1,3 +1,5 @@
+import { monthRangeUtc } from "@/modules/scheduling/time";
+import type { ReminderStatus } from "@/modules/scheduling/reminder-status";
 import { Suspense, type ReactNode } from "react";
 import Link from "next/link";
 import { after } from "next/server";
@@ -117,6 +119,14 @@ export default async function AgendaPage({
     ? listClinicorpAgenda(tenantId, from, to, config.timezone)
     : Promise.resolve({ status: "off" });
   const { rows: monthRows, byDay } = await listMonthAppointments(tenantId, year, month, config.timezone);
+  const confirmationRange = monthRangeUtc(year, month, config.timezone);
+  const confirmationRows = await prisma.reminderDispatch.findMany({ where: { tenantId,
+    startsAt: { gte: confirmationRange.start, lt: confirmationRange.end } },
+    orderBy: { updatedAt: "asc" }, select: { sourceKey: true, startsAt: true, state: true, reason: true, provider: true, deliveryStatus: true, acceptedAt: true, updatedAt: true } });
+  const confirmationStatuses = new Map<string, ReminderStatus>(confirmationRows.map((r) => [`${r.sourceKey}|${r.startsAt.getTime()}`, {
+    state: r.state, reason: r.reason, provider: r.provider, deliveryStatus: r.deliveryStatus, at: r.acceptedAt?.toISOString() ?? null,
+  }]));
+
 
   // Depois da resposta: o mês anterior e o seguinte ficam no cache, e o
   // clique em ‹ › não espera o Clinicorp.
@@ -187,6 +197,7 @@ export default async function AgendaPage({
   };
 
   const local = {
+    reminderUpdate: confirmationRows.reduce<Date | null>((max, row) => !max || row.updatedAt > max ? row.updatedAt : max, null),
     count: monthRows.length,
     lastUpdate: monthRows.reduce<Date | null>((max, row) => (!max || row.updatedAt > max ? row.updatedAt : max), null),
   };
@@ -273,6 +284,7 @@ export default async function AgendaPage({
             agentReminders={scheduleAction?.enabled && config.reminderEnabled ? config.reminders : []}
             location={config.location}
             reminderSentAt={reminderSentAt}
+            confirmationStatuses={confirmationStatuses}
             originByAppointment={originByAppointment}
             now={renderedDate}
             dialog={dialog}

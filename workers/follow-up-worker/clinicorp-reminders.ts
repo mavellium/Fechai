@@ -1,3 +1,4 @@
+import { blockReminder, claimReminder, finishReminder, markReminderManual, reminderAlreadyHandled, type ReminderKey } from "../../src/modules/scheduling/reminder-dispatch";
 import { recordMessageContext } from "../../src/modules/reports/contact-context-events";
 import { prisma } from "../../src/lib/prisma";
 import {
@@ -24,29 +25,11 @@ import {
 import { dueReminders, loadAccountScheduleConfigs } from "./reminders";
 
 /**
- * Lembretes das consultas marcadas **direto no Clinicorp** — as que aparecem na
- * `/agenda` sem serem um `Appointment` nosso (`listClinicorpAgenda`).
- *
- * Mesmas regras de tempo dos lembretes do fechai (`dueReminders`: antecedência,
- * horário fixo, só o mais próximo quando vários venceram juntos, nada depois do
- * início), com a lista de lembretes da conta. O que muda é **por onde sai**:
- *
- * - **Meta (API oficial)**: sempre com o template aprovado escolhido em
- *   Agentes › Agendar horário (`metaReminderTemplate`). O paciente do
- *   Clinicorp quase sempre nunca falou com o número, e fora da janela de 24h a
- *   Meta só aceita template. Sem template escolhido, a conta não envia.
- * - **Evolution**: só para quem **já conversou** com o número
- *   (`lastInboundAt`), com o texto do lembrete. Primeiro contato pelo Evolution
- *   é o que mais leva o WhatsApp a bloquear o número da clínica — e o bloqueio
- *   cala o atendimento de todos os pacientes. Esse disparo fica pendente, não é
- *   fechado: se a pessoa escrever antes da consulta, o lembrete ainda sai.
- * - **As duas conexões de pé**: a escolha é por paciente (`chooseChannel`). Quem
- *   já conversou pelo QR recebe por lá, no número que conhece; os demais, pela
- *   Meta com o template. Quem fala pela Meta nunca cai no QR.
- *
- * O que já saiu fica em `ClinicorpReminder` (por id do Clinicorp). O que o
- * próprio fechai espelhou lá (`Appointment.clinicorpAppointmentId`) é pulado:
- * quem lembra essa consulta é `scanAndSendReminders`.
+ * Confirmações das consultas diretas do Clinicorp. Mesmo calendário de regras
+ * da agenda local; consultas espelhadas usam a fila local e a mesma chave.
+ * QR sem histórico só com opt-in da conta e categoria explicitamente autorizada.
+ * Canal conhecido do paciente nunca muda. Claim precede POST; resultado incerto
+ * aguarda conferência e não autoriza uma segunda tentativa automática.
  */
 
 /** Guardar o que saiu por mais tempo que isso só enche a tabela. */
@@ -102,23 +85,20 @@ async function channelsFor(tenantId: string, cfg: ScheduleConfig): Promise<Chann
     if (connection) channels.meta = { kind: "meta", connection, template: cfg.metaReminderTemplate };
   }
 
-  return channels.evolution || channels.meta ? channels : null;
+  return channels;
 }
 
-/**
- * Por onde lembrar UM paciente. Quem já conversou pelo QR recebe por lá, com o
- * texto do lembrete: é o número que ele conhece. Todo o resto — quem nunca
- * falou com o número, ou fala pela Meta — só pela Meta, com o template
- * aprovado. Nunca primeiro contato pelo QR, e nunca trocar de número para quem
- * fala pela Meta: sem canal aqui o disparo fica pendente.
- */
-function chooseChannel(
+/** Preserva o canal do contato; primeiro QR exige a opção específica da conta. */
+export function chooseClinicorpReminderChannel(
   channels: Channels,
   conversation: { lastInboundAt: Date | null; whatsappProvider: string | null } | null | undefined,
+  allowQr = false,
 ): Channel | null {
-  if (channels.evolution && conversation?.lastInboundAt && conversation.whatsappProvider !== "meta") {
-    return channels.evolution;
+  if (conversation?.whatsappProvider === "meta") return channels.meta ?? null;
+  if (conversation?.whatsappProvider === "evolution") {
+    return conversation.lastInboundAt || allowQr ? channels.evolution ?? null : null;
   }
+  if (channels.evolution && (conversation?.lastInboundAt || allowQr)) return channels.evolution;
   return channels.meta ?? null;
 }
 
@@ -126,6 +106,7 @@ export async function scanAndSendClinicorpReminders(now: Date = new Date()) {
   const result = { tenants: 0, scanned: 0, sent: 0, firstContactSkipped: 0, typeSkipped: 0, unknownTypeSkipped: 0 };
   const configs = await loadAccountScheduleConfigs();
 
+  await prisma.reminderReceipt.deleteMany({ where: { createdAt: { lt: new Date(now.getTime() - KEEP_SENT_DAYS * 24 * 60 * 60_000) } } });
   await prisma.clinicorpReminder.deleteMany({
     where: { startsAt: { lt: new Date(now.getTime() - KEEP_SENT_DAYS * 24 * 60 * 60_000) } },
   });
@@ -152,175 +133,109 @@ export async function scanAndSendClinicorpReminders(now: Date = new Date()) {
 
 async function remindTenant(tenantId: string, cfg: ScheduleConfig, channels: Channels, now: Date) {
   const counts = { scanned: 0, sent: 0, firstContactSkipped: 0, typeSkipped: 0, unknownTypeSkipped: 0 };
-
-  // Do dia de hoje até o último dia em que algum lembrete pode vencer agora —
-  // mesmo teto de `scanAndSendReminders`, com um dia a mais para o horário fixo.
   const maxLead = Math.max(...cfg.reminders.map((r) => r.minutesBefore + (r.sendTime ? 1440 : 0)));
-  const agenda = await listClinicorpAgenda(
-    tenantId,
-    dayKeyInZone(now, cfg.timezone),
-    dayKeyInZone(new Date(now.getTime() + (maxLead + 1440) * 60_000), cfg.timezone),
-    cfg.timezone,
-    { fresh: true },
-  );
-  // Clinicorp fora ou desligado: sem a agenda de agora, nada sai.
+  const agenda = await listClinicorpAgenda(tenantId, dayKeyInZone(now, cfg.timezone),
+    dayKeyInZone(new Date(now.getTime() + (maxLead + 1440) * 60_000), cfg.timezone), cfg.timezone, { fresh: true });
   if (agenda.status !== "ok") return counts;
   const upcoming = agenda.items.filter((item) => !item.canceled && item.startsAt > now);
   counts.scanned = upcoming.length;
-  if (upcoming.length === 0) return counts;
-
-  // Categoria pelo id da consulta, nunca por notas ou pelo histórico do paciente.
-  // A lista pública do Clinicorp pode não trazer tipo: nesse caso não enviamos.
-  const categoryNames = new Map<string, string>();
-  if (cfg.reminderAudience === "selected_types" && upcoming.some((item) => item.categoryId)) {
-    const categories = await listClinicorpCategories(tenantId);
-    if (categories.ok) {
-      for (const category of categories.data) categoryNames.set(category.id, category.name);
-    }
-  }
-
-  const ids = upcoming.map((item) => item.id);
-  const [mirrored, rows] = await Promise.all([
-    prisma.appointment.findMany({
-      where: { tenantId, clinicorpAppointmentId: { in: ids } },
-      select: { clinicorpAppointmentId: true },
-    }),
-    prisma.clinicorpReminder.findMany({ where: { tenantId, clinicorpAppointmentId: { in: ids } } }),
-  ]);
-  const ours = new Set(mirrored.map((m) => m.clinicorpAppointmentId));
-  const sentById = new Map(rows.map((row) => [row.clinicorpAppointmentId, row]));
-
+  const mirrored = await prisma.appointment.findMany({ where: { tenantId, clinicorpAppointmentId: { in: upcoming.map((i) => i.id) } }, select: { clinicorpAppointmentId: true } });
+  const ours = new Set(mirrored.map((a) => a.clinicorpAppointmentId));
+  const categories = cfg.reminderAudience === "selected_types" && upcoming.some((i) => i.categoryId) ? await listClinicorpCategories(tenantId) : null;
   for (const item of upcoming) {
     if (ours.has(item.id)) continue;
-    const category = item.categoryId ? categoryNames.get(item.categoryId) : item.category;
-    if (!isReminderTypeAllowed(cfg, category)) {
-      counts.typeSkipped++;
-      if (!category?.trim()) counts.unknownTypeSkipped++;
-      continue;
-    }
-
-    // Remarcada no Clinicorp (mesmo id, outro horário): os disparos da data
-    // antiga não valem para a nova.
-    const row = sentById.get(item.id);
-    const moved = Boolean(row && row.startsAt.getTime() !== item.startsAt.getTime());
-    const already = row && !moved ? row.remindersSent : [];
-
-    const due = dueReminders({ status: "scheduled", startsAt: item.startsAt, remindersSent: already }, cfg.reminders, now, cfg.timezone);
-    if (due.length === 0) continue;
-    // Vários vencidos juntos: só o mais próximo da consulta, os outros fecham.
-    const [toSend] = [...due].sort((a, b) => a.minutesBefore - b.minutesBefore);
-    const close = (sentAt: Date | null) =>
-      markSent(tenantId, item, already, due.map((r) => r.minutesBefore), sentAt, moved);
-
-    const phone = clinicorpWhatsappPhone(item.phone);
-    if (!phone || (await isPhoneBlocked(tenantId, phone))) {
-      await close(null);
-      continue;
-    }
-
-    const known = await prisma.lead.findFirst({
-      where: { tenantId, isTest: false, phone: { in: broadcastPhoneVariants(phone) } },
-      select: {
-        phone: true,
-        conversation: {
-          select: { id: true, lastInboundAt: true, followUpReason: true, variables: true, whatsappProvider: true },
-        },
-      },
-    });
-    // Pediu para parar: vale para o lembrete como vale para Disparos.
-    if (known?.conversation?.followUpReason === "stop") {
-      await close(null);
-      continue;
-    }
-
-    const name = item.patientName === CLINICORP_UNNAMED_PATIENT ? "" : item.patientName;
-    const values = {
-      nome: name,
-      data: dateInZone(item.startsAt, cfg.timezone),
-      hora: timeInZone(item.startsAt, cfg.timezone),
-      local: cfg.location,
-    };
-
-    // Sem canal para ESTE paciente (nunca falou pelo QR e a Meta não está
-    // pronta, ou fala pela Meta e ela está fora): fica pendente, não fecha.
-    const channel = chooseChannel(channels, known?.conversation);
-    if (!channel) {
-      counts.firstContactSkipped++;
-      continue;
-    }
-
-    if (channel.kind === "evolution") {
-      const conversation = known?.conversation;
-      if (!known || !conversation?.lastInboundAt) {
-        counts.firstContactSkipped++;
-        continue;
-      }
-      const text = renderReminder(toSend.template, {
-        ...values,
-        extras: parseConversationVariables(conversation.variables),
-      });
-      if (!text) {
-        await close(null);
-        continue;
-      }
-      let keyId: string | null;
-      try {
-        keyId = await channel.provider.sendMessage(channel.externalId, known.phone, text);
-      } catch (err) {
-        // Mesma regra dos lembretes do fechai: falha do Evolution não consome
-        // o disparo, a próxima varredura tenta de novo.
-        console.error("[lembrete clinicorp] falha ao enviar", tenantId, item.id, err);
-        continue;
-      }
-      const savedMessage = await prisma.message.create({
-        data: { conversationId: conversation.id, role: "assistant", content: text, whatsappMessageId: keyId ?? undefined },
-      });
-      await recordMessageContext(tenantId, savedMessage?.id, "contact_reminder");
-      await close(now);
-      counts.sent++;
-      continue;
-    }
-
-    const parameters = metaReminderParameters(channel.template, values);
-    if (!parameters) {
-      // Parâmetro em branco (paciente sem nome no Clinicorp) a Meta recusaria.
-      await close(null);
-      continue;
-    }
-    let messageId: string;
-    try {
-      messageId = await channel.connection.provider.sendBroadcastTemplate(phone, channel.template, parameters);
-    } catch (err) {
-      // Nunca reenviar sozinho: numa falha de rede ou 5xx a Meta pode ter
-      // aceitado a mensagem (mesma regra do `unknown` dos Disparos). Fecha sem
-      // envio; recusa explícita também, senão tentaria a cada varredura.
-      console.error("[lembrete clinicorp] Meta não confirmou o envio", tenantId, item.id, err);
-      await close(null);
-      continue;
-    }
-    // A mensagem entra na conversa (criada agora, se preciso): é o que dá
-    // contexto ao agente quando o paciente responder "não vou poder".
-    try {
-      const { conversation } = await getOrCreateConversation(tenantId, known?.phone ?? phone, name || undefined);
-      // Paciente que só recebeu o template: se a equipe responder antes de ele
-      // escrever, tem que sair pela Meta — pelo QR seria primeiro contato.
-      await setConversationChannel(conversation, "meta", { onlyIfUnset: true });
-      const savedMessage = await prisma.message.create({
-        data: {
-          conversationId: conversation.id,
-          role: "assistant",
-          content: renderBroadcast(channel.template, parameters),
-          whatsappMessageId: messageId,
-        },
-      });
-      await recordMessageContext(tenantId, savedMessage?.id, "contact_reminder");
-    } catch (err) {
-      console.error("[lembrete clinicorp] enviado, mas não gravado na conversa", tenantId, item.id, err);
-    }
-    await close(now);
-    counts.sent++;
+    const category = item.categoryId ? categories?.ok ? categories.data.find((c) => c.id === item.categoryId)?.name : null : item.category;
+    const result = await sendClinicorpConfirmation(tenantId, item, cfg, { now, channels, category });
+    if (result.sent) counts.sent++;
+    if (result.reason === "channel") counts.firstContactSkipped++;
+    if (result.reason === "type") { counts.typeSkipped++; if (!category) counts.unknownTypeSkipped++; }
   }
   return counts;
+}
+
+/** Same path for the worker and the explicit per-appointment manual action. */
+export async function sendClinicorpConfirmation(tenantId: string, item: ClinicorpAgendaItem, cfg: ScheduleConfig,
+  options: { now?: Date; channels?: Channels; category?: string | null; operation?: "send" | "manual"; userId?: string } = {}) {
+  const now = options.now ?? new Date();
+  if (item.canceled || item.startsAt <= now || !cfg.reminderEnabled || !cfg.reminders.length) return { sent: false, reason: "inactive" };
+  const legacy = await prisma.clinicorpReminder.findUnique({ where: { tenantId_clinicorpAppointmentId: { tenantId, clinicorpAppointmentId: item.id } } });
+  const moved = Boolean(legacy && legacy.startsAt.getTime() !== item.startsAt.getTime());
+  const already = legacy && !moved ? legacy.remindersSent : [];
+  const due = dueReminders({ status: "scheduled", startsAt: item.startsAt, remindersSent: options.operation ? [] : already }, cfg.reminders, now, cfg.timezone);
+  // Manual sends may bring the next configured reminder forward. They consume that exact rule.
+  const rules = options.operation ? due.length ? due : cfg.reminders : due;
+  const toSend = [...rules].sort((a, b) => options.operation && !due.length ? b.minutesBefore - a.minutesBefore : a.minutesBefore - b.minutesBefore)[0];
+  if (!toSend) return { sent: false, reason: already.length ? "handled" : "waiting" };
+  if (already.includes(toSend.minutesBefore)) return { sent: false, reason: "handled" };
+  const closing = due.length ? due.map((r) => r.minutesBefore) : [toSend.minutesBefore];
+  const key: ReminderKey = { tenantId, sourceKey: `clinicorp:${item.id}`, startsAt: item.startsAt, minutesBefore: toSend.minutesBefore };
+  const fetched = options.category === undefined && item.categoryId ? await listClinicorpCategories(tenantId) : null;
+  const category = options.category !== undefined ? options.category : fetched ? fetched.ok ? fetched.data.find((c) => c.id === item.categoryId)?.name : null : item.category;
+  if (!isReminderTypeAllowed(cfg, category) || (cfg.clinicorpQrEnabled && (!item.categoryId || !cfg.clinicorpReminderCategoryIds.includes(item.categoryId)))) {
+    await blockReminder(key, "Esta consulta não tem uma categoria autorizada para confirmação.");
+    return { sent: false, reason: "type" };
+  }
+  if (await reminderAlreadyHandled(key)) return { sent: false, reason: "handled" };
+  const phone = clinicorpWhatsappPhone(item.phone);
+  if (!phone || await isPhoneBlocked(tenantId, phone)) { await blockReminder(key, "Telefone inválido ou contato bloqueado."); return { sent: false, reason: "phone" }; }
+  const known = await prisma.lead.findFirst({ where: { tenantId, phone: { in: broadcastPhoneVariants(phone) } },
+    select: { phone: true, isTest: true, conversation: { select: { id: true, lastInboundAt: true, followUpReason: true, variables: true, whatsappProvider: true } } } });
+  if (known?.isTest || known?.conversation?.followUpReason === "stop") {
+    await blockReminder(key, "Conversa de teste ou contato que pediu para parar."); return { sent: false, reason: "stop" };
+  }
+  if (options.operation === "manual") {
+    const recorded = await markReminderManual(key, options.userId ?? "");
+    if (!recorded) return { sent: false, reason: "busy" };
+    await markSent(tenantId, item, already, closing, null, moved);
+    return { sent: false, reason: "manual" };
+  }
+  const channels = options.channels ?? await channelsFor(tenantId, cfg);
+  const channel = channels && chooseClinicorpReminderChannel(channels, known?.conversation, cfg.clinicorpQrEnabled);
+  if (!channel) { await blockReminder(key, "Conecte o canal do paciente ou habilite as confirmações do Clinicorp pelo QR."); return { sent: false, reason: "channel" }; }
+  const name = item.patientName === CLINICORP_UNNAMED_PATIENT ? "" : item.patientName;
+  const values = { nome: name, data: dateInZone(item.startsAt, cfg.timezone), hora: timeInZone(item.startsAt, cfg.timezone), local: cfg.location };
+  const parameters = channel.kind === "meta" ? metaReminderParameters(channel.template, values) : null;
+  const text = channel.kind === "meta" ? parameters ? renderBroadcast(channel.template, parameters) : "" : renderReminder(toSend.template, {
+    ...values, extras: parseConversationVariables(known?.conversation?.variables) });
+  if (!text) { await blockReminder(key, "Preencha os dados exigidos pela mensagem de confirmação."); return { sent: false, reason: "text" }; }
+  const claim = await claimReminder(key);
+  if (!claim) return { sent: false, reason: "busy" };
+  // Check connection again after claim; never switch provider while an intent is owned.
+  const current = await listWhatsappChannels(tenantId);
+  if (!pickWhatsappChannel(current, channel.kind)) { await finishReminder(claim, "blocked", { reason: "O canal do paciente está desconectado." }); return { sent: false, reason: "channel" }; }
+  const latestConfig = (await loadAccountScheduleConfigs()).get(tenantId);
+  const day = dayKeyInZone(item.startsAt, cfg.timezone);
+  const freshAgenda = await listClinicorpAgenda(tenantId, day, day, cfg.timezone, { fresh: true });
+  const freshItem = freshAgenda.status === "ok" ? freshAgenda.items.find((a) => a.id === item.id) : null;
+  if (!latestConfig || JSON.stringify(latestConfig) !== JSON.stringify(cfg) || !freshItem || freshItem.canceled ||
+      freshItem.startsAt.getTime() !== item.startsAt.getTime() || freshItem.categoryId !== item.categoryId ||
+      freshItem.category !== item.category || clinicorpWhatsappPhone(freshItem.phone) !== phone || await isPhoneBlocked(tenantId, phone)) {
+    await finishReminder(claim, "blocked", { reason: "A configuração ou a consulta mudou. Confira os dados antes do envio." });
+    return { sent: false, reason: "changed" };
+  }
+  let messageId: string | null;
+  try {
+    messageId = channel.kind === "evolution" ? await channel.provider.sendMessage(channel.externalId, known?.phone ?? phone, text)
+      : await channel.connection.provider.sendBroadcastTemplate(phone, channel.template, parameters!);
+  } catch {
+    await finishReminder(claim, "unknown", { provider: channel.kind, reason: "O WhatsApp não confirmou o envio. Confira antes de tentar novamente." });
+    return { sent: false, reason: "unknown" };
+  }
+  if (!messageId) {
+    await finishReminder(claim, "unknown", { provider: channel.kind, reason: "O WhatsApp respondeu sem identificar a mensagem. Confira o envio." });
+    return { sent: false, reason: "unknown" };
+  }
+  // Save acknowledgement before optional conversation/history writes.
+  await finishReminder(claim, "sent", { provider: channel.kind, messageId, acceptedAt: now });
+  try {
+    const conversation = known?.conversation ?? (await getOrCreateConversation(tenantId, phone, name || undefined)).conversation;
+    await setConversationChannel(conversation, channel.kind, { onlyIfUnset: true });
+    const saved = await prisma.message.create({ data: { conversationId: conversation.id, role: "assistant", content: text, whatsappMessageId: messageId ?? undefined } });
+    await prisma.reminderDispatch.updateMany({ where: { id: claim.id, tenantId }, data: { conversationId: conversation.id } });
+    await recordMessageContext(tenantId, saved?.id, "contact_reminder");
+  } catch { console.error("[reminder] Envio aceito, mas histórico ainda não foi registrado."); }
+  await markSent(tenantId, item, already, closing, now, moved);
+  return { sent: true, reason: "sent" };
 }
 
 /**

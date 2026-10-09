@@ -1079,8 +1079,30 @@ export async function saveScheduleConfigAction(
   const metaTemplate = await readMetaReminderTemplate(formData, tenantId, agent.id, parsed.data.location);
   if (!metaTemplate.ok) return { ok: false, error: metaTemplate.error };
 
+  const existingReminderSettings = await prisma.tenantAction.findUnique({
+    where: { agentId_key: { agentId: agent.id, key: "schedule_meeting" } }, select: { config: true },
+  });
+  const previousReminderSettings = parseScheduleConfig(existingReminderSettings?.config);
+  const qrEnabled = formData.has("clinicorpQrEnabled") ? formData.get("clinicorpQrEnabled") === "true" : previousReminderSettings.clinicorpQrEnabled;
+  let qrCategoryIds = previousReminderSettings.clinicorpReminderCategoryIds;
+  if (qrEnabled) {
+    if (parsed.data.reminderAudience !== "selected_types" || !parsed.data.reminderTypes.length) {
+      return { ok: false, error: "Para confirmar pacientes do Clinicorp pelo QR, escolha os tipos de consulta autorizados." };
+    }
+    if (formData.has("clinicorpQrEnabled") && formData.get("clinicorpQrConsent") !== "true") {
+      return { ok: false, error: "Confirme que os pacientes dos tipos escolhidos autorizaram as confirmações pelo WhatsApp." };
+    }
+    const categories = await listClinicorpCategories(tenantId);
+    if (!categories.ok) return { ok: false, error: "Não foi possível conferir as categorias no Clinicorp. Tente novamente." };
+    const selected = new Set(parsed.data.reminderTypes.map(normalizeDurationLabel));
+    qrCategoryIds = categories.data.filter((c) => selected.has(normalizeDurationLabel(c.name))).map((c) => c.id);
+    if (!qrCategoryIds.length) return { ok: false, error: "Escolha uma categoria existente no Clinicorp para as confirmações pelo QR." };
+  }
   await saveScheduleConfig(tenantId, agent.id, {
     ...parsed.data,
+    clinicorpQrEnabled: qrEnabled,
+    clinicorpReminderCategoryIds: qrCategoryIds,
+    ...(qrEnabled ? { clinicorpQrConsentAt: previousReminderSettings.clinicorpQrConsentAt ?? new Date().toISOString() } : {}),
     ...(weeklyAvailability !== undefined ? { weeklyAvailability, breaks: [] } : {}),
     durations: filledDurations,
     workdays,

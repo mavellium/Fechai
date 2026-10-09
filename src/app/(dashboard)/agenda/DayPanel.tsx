@@ -1,3 +1,5 @@
+import { AppointmentConfirmation } from "./AppointmentConfirmation";
+import type { ReminderStatus } from "@/modules/scheduling/reminder-status";
 import type { ComponentProps } from "react";
 import Link from "next/link";
 import { CalendarX2, User } from "lucide-react";
@@ -53,6 +55,7 @@ export function DayPanel({
   agentReminders,
   location,
   reminderSentAt,
+  confirmationStatuses,
   originByAppointment,
   now,
   dialog,
@@ -69,12 +72,19 @@ export function DayPanel({
   location: string;
   /** "id|início" → quando o lembrete saiu (consultas do Clinicorp). */
   reminderSentAt: Map<string, Date>;
+  confirmationStatuses: Map<string, ReminderStatus>;
   /** Horário de origem por compromisso, calculado na leitura (`originHours`). */
   originByAppointment: Map<string, OriginHours>;
   /** Um relógio só para a lista inteira: o que é "passado" não muda no meio do desenho. */
   now: Date;
   dialog: Omit<ComponentProps<typeof NewAppointmentDialog>, "triggerLabel">;
 }) {
+  const dayStatuses = entries.map((entry) => {
+    const source = entry.kind === "clinicorp" ? `clinicorp:${entry.item.id}` : entry.appointment.clinicorpAppointmentId ? `clinicorp:${entry.appointment.clinicorpAppointmentId}` : `appointment:${entry.appointment.id}`;
+    return confirmationStatuses.get(`${source}|${entry.at.getTime()}`);
+  });
+  const handledCount = dayStatuses.filter((s) => s?.state === "sent" || s?.state === "manual").length;
+  const attentionCount = dayStatuses.filter((s) => s?.state === "unknown" || s?.state === "blocked" || s?.deliveryStatus === "failed").length;
   const clinicorpCount = entries.filter((e) => e.kind === "clinicorp").length;
 
   return (
@@ -117,6 +127,8 @@ export function DayPanel({
             />
           </div>
         ) : (
+          <>
+          {agentReminders.length > 0 && <p className="mb-3 text-xs text-white/60">Confirmações: {handledCount} tratadas · {attentionCount} exigem conferência. Os demais aguardam o horário ou a seleção de categoria.</p>}
           <ul className="space-y-3">
             {entries.map((entry) => {
               if (entry.kind === "clinicorp") {
@@ -125,6 +137,8 @@ export function DayPanel({
                     key={`clinicorp-${entry.item.id}`}
                     item={entry.item}
                     timezone={timezone}
+                    confirmationsEnabled={agentReminders.length > 0}
+                    confirmationStatus={confirmationStatuses.get(`clinicorp:${entry.item.id}|${entry.item.startsAt.getTime()}`)}
                     // Pelo horário também: remarcada lá, o envio da data antiga não vale.
                     reminderSentAt={reminderSentAt.get(`${entry.item.id}|${entry.item.startsAt.getTime()}`) ?? null}
                   />
@@ -268,6 +282,7 @@ export function DayPanel({
                         kind={kind}
                         procedure={appointment.procedure}
                       />
+                      {!past && (parseReminderOverride(appointment.reminderOverride) ?? agentReminders).length > 0 && <AppointmentConfirmation id={appointment.id} source="appointment" startsAt={appointment.startsAt.toISOString()} status={confirmationStatuses.get(`${appointment.clinicorpAppointmentId ? `clinicorp:${appointment.clinicorpAppointmentId}` : `appointment:${appointment.id}`}|${appointment.startsAt.getTime()}`)} />}
                       {!past && <AppointmentReminders
                         id={appointment.id}
                         title={appointment.title}
@@ -291,6 +306,7 @@ export function DayPanel({
               );
             })}
           </ul>
+          </>
         )}
       </div>
     </Card>

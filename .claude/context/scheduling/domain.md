@@ -7,6 +7,11 @@
 - `ClinicorpAgendaItem`: leitura externa, categoryId/category opcionais; não cria Appointment.
 - `ClinicorpReminder`: controle por tenant/id/horário; Meta incerta não repete.
 
-Tipos exatos sem caixa/acento: Avaliação ≠ Reavaliação. Sem tipo não envia na seleção restrita; notas não classificam. Evolution exige conversa anterior, Meta exige template.
+Tipos exatos sem caixa/acento: Avaliação ≠ Reavaliação. Sem tipo não envia na seleção restrita; notas não classificam. Evolution sem histórico exige opt-in específico; Meta exige template.
 
 `AvailabilityUnavailableError` impede reservar sem disponibilidade. IDs Clinicorp = strings; credenciais via getIntegration, nunca Prisma direto.
+
+`ReminderDispatch`: tenant/origem/horário/antecedência único; queued, blocked,
+sending, sent, manual, unknown, skipped. Token protege conclusão concorrente.
+`ReminderReceipt`: tenant/provedor/messageId/status único, avanço monotônico.
+QR opt-in: clinicorpQrEnabled (false), clinicorpReminderCategoryIds e consentAt.

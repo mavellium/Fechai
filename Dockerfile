@@ -76,6 +76,7 @@ COPY --from=builder --chown=app:nodejs /app/.next ./.next
 COPY --from=builder --chown=app:nodejs /app/prisma ./prisma
 COPY --from=builder --chown=app:nodejs /app/src ./src
 COPY --from=builder --chown=app:nodejs /app/workers ./workers
+COPY --from=builder --chown=app:nodejs /app/scripts ./scripts
 COPY --chown=app:nodejs docker/healthcheck-web.js ./docker/healthcheck-web.js
 COPY --chown=app:nodejs docker/healthcheck-worker.js ./docker/healthcheck-worker.js
 

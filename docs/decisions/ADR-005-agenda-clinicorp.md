@@ -58,7 +58,7 @@ lembretes da conta (`workers/follow-up-worker/clinicorp-reminders.ts`, a cada
 - **Meta**: só por template aprovado escolhido pela clínica
   (`ScheduleConfig.metaReminderTemplate`, congelado e conferido com a Meta ao
   salvar, como nos Disparos). Sem template, não envia.
-- **Evolution**: nunca primeiro contato. Só quem já conversou com o número.
+- **Evolution**: primeiro contato só com a opção específica aprovada em 09/10/2026 (ver revisão abaixo).
 
 O controle do que saiu fica numa tabela própria, `ClinicorpReminder` (id do
 Clinicorp + horário), porque a consulta não existe no nosso banco. Envio pela
@@ -85,3 +85,16 @@ ADR-003).
 - Regras detalhadas: `src/modules/scheduling/README.md` e
   `workers/follow-up-worker/README.md`. Regressões: `tests/clinicorp.test.ts`,
   `tests/agenda-pulse.test.ts`, `tests/clinicorp-lembrete.test.ts`.
+
+
+## Revisão aprovada — 09/10/2026
+
+Primeiro contato QR passa a ser permitido apenas por opção explícita da conta,
+para categorias de confirmação resolvidas por ID e autorização declarada pela
+clínica. O padrão segue desligado. Substitui a proibição absoluta acima neste
+único fluxo; não altera Disparos/follow-up ou canal já conhecido do paciente.
+
+A recepção registra confirmação manual na agenda para consumir a mesma intenção
+automática. Claim SQL antes do POST, estado incerto sem repetição e recibos
+monotônicos substituem `ClinicorpReminder` como garantia de envio; os campos
+legados continuam compatíveis. Teste no sandbox não comprova entrega real.

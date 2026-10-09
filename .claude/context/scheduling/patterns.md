@@ -19,3 +19,11 @@ if (!isReminderTypeAllowed(cfg, appt.serviceType)) continue;
 UI: SelectMenu multiple/array; preserve seleção ao carregar. Config em TenantAction; envio no worker.
 
 Validar público, tenant, categoria ausente e envio incerto; tsc, lint, Vitest.
+
+```ts
+const claim = await claimReminder(key);
+if (!claim) return { sent: false, reason: "busy" };
+```
+Salvar ID/aceite antes do histórico. Manual fora do painel requer “Já enviei”.
+SQL smoke: `scripts/smoke-reminder-ledger.ts` só localhost:5438/fechai_reminders_test.
+Workflow manual de verificação em produção: só chaves e consulta sintéticas + sandbox.

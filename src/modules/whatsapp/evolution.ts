@@ -75,7 +75,7 @@ export class EvolutionProvider implements WhatsAppProvider {
       // Só o que o app consome. A Evolution assume a lista INTEIRA de eventos
       // quando recebe um array vazio — e aí cada presença/typing de cada
       // contato vira uma request no nosso webhook.
-      events: ["MESSAGES_UPSERT", "CONNECTION_UPDATE", "QRCODE_UPDATED"],
+      events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "CONNECTION_UPDATE", "QRCODE_UPDATED"],
     };
   }
 
@@ -179,7 +179,7 @@ export class EvolutionProvider implements WhatsAppProvider {
   }
 
   async sendMessage(externalId: string, toPhone: string, text: string): Promise<string | null> {
-    const res = await fetch(`${this.baseUrl}/message/sendText/${externalId}`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/message/sendText/${externalId}`, {
       method: "POST",
       headers: this.headers(),
       body: JSON.stringify({ number: toPhone, text }),

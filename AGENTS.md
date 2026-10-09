@@ -129,3 +129,14 @@ Before touching affiliate/commission logic, read `src/modules/affiliates/README.
 **Animação de altura corta anel de foco.** O `overflow-hidden` que faz o campo de "Outro" entrar sem a lista saltar também corta o `ring-2`, que é desenhado para fora da borda. Na horizontal o par `-mx-1 px-1` resolve (padding devolve o espaço, margem negativa tira do fluxo) — não remova um sem o outro. Na vertical vai **só `pb-1`, sem `-mb`**: a margem negativa comeria 4px do `space-y-4` do passo e colaria o campo no bloco seguinte, que foi exatamente o bug. Compensar o eixo vertical parece simétrico e está errado.
 
 **"Outro" exige dizer qual.** Segmento e origem abrem um campo de texto quando a escolha é `OTHER_VALUE`, e ele é **obrigatório** — "outro" sozinho é uma gaveta que ninguém lê depois. O detalhe vai para `Tenant.businessSegmentOther`/`referralSourceOther` e só é gravado quando a opção é "outro" (texto pendurado num segmento nomeado nunca apareceria na tela). A regra é dupla: `validate()` no formulário e `superRefine` no schema da rota — o cliente não decide o que entra no banco.
+
+
+## Confirmações autorizadas do Clinicorp pelo QR (09/10/2026)
+
+Exceção aprovada à restrição de primeiro contato acima: só para confirmações de
+consultas do Clinicorp com `clinicorpQrEnabled` explícito, categorias autorizadas
+por ID e `clinicorpQrConsentAt` registrado ao salvar. Padrão desligado; não
+ampliar a exceção a Disparos ou follow-up. Canal Meta conhecido não vira QR.
+Leia `scheduling/README.md`: manual/automático compartilham `ReminderDispatch`,
+claim antes do POST; `unknown` nunca repete automaticamente. Só recibo autenticado
+comprova entrega. Teste no sandbox usa isTest e não comprova WhatsApp real.

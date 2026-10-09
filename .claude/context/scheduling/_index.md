@@ -18,3 +18,6 @@ Antes de usar:
 - Agenda local é a verdade; falha do espelho não apaga reserva.
 - Público escolhido vale nas duas filas, inclusive overrides.
 - Sem categoria identificada, público restrito não envia.
+
+Confirmações QR opt-in: `reminder-dispatch.ts` (claim/recibos), agenda manual e
+sandbox. Envio aceito ≠ entregue; incerto nunca repete. Ver README (09/10).
