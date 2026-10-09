@@ -8,10 +8,11 @@ QR opcional para categorias autorizadas por ID, confirmação manual na agenda,
 claim SQL comum às duas filas e recibos de entrega. Envio incerto não repete;
 envio aceito não é entrega comprovada. Botão adiciona a mensagem ao sandbox.
 Mensagem manual fora do painel exige “Já enviei pelo WhatsApp”.
-Schema aditivo: ReminderDispatch/ReminderReceipt; gerar client e aplicar db push
-na imagem compartilhada web/worker. PostgreSQL isolado validou concorrência,
-manual, timeout, reinício, remarcação e recibos fora de ordem. Publicação/teste
-posterior registrados no [plano](plans/2026-10-09-confirmacoes-avaliacoes-clinicorp.md).
+Schema aditivo: ReminderDispatch/ReminderReceipt; db push/client aplicados
+na imagem compartilhada web/worker. **1.619 testes**, lint/build e SQL isolado
+passaram. SQL real e resposta do agente no sandbox passaram após a publicação;
+nenhum WhatsApp real foi enviado. QR permanece desligado até declaração da clínica.
+Publicação/teste registrados no [plano](plans/2026-10-09-confirmacoes-avaliacoes-clinicorp.md).
 Contexto: [scheduling](../.claude/context/scheduling/_index.md).
 
 ## Bitrix24: CRM e agendamentos por conta — 2026-10-08

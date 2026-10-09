@@ -774,18 +774,12 @@ conversou com o número da clínica.
   vai em cada `{{n}}` (nome, data, hora, local); parâmetro vazio a Meta recusa,
   então `{{local}}` com o local em branco é recusado ao salvar, e paciente sem
   nome no Clinicorp fecha o disparo sem envio.
-- **Evolution**: **nunca primeiro contato.** Só quem já conversou com o número
-  (`Conversation.lastInboundAt`) recebe, com o texto do lembrete. Mensagem de
-  número desconhecido pelo Evolution é o que mais leva o WhatsApp a bloquear o
-  número — e o bloqueio cala a clínica com todos os pacientes. O disparo fica
-  **pendente** (não é fechado): se a pessoa escrever antes da consulta, sai.
-  A tela de lembretes diz isso para contas no Evolution com Clinicorp.
-- **As duas conexões de pé**: a escolha é **por paciente**
-  (`chooseChannel` em `clinicorp-reminders.ts`). Quem já conversou pelo QR recebe
-  o texto por lá — é o número que conhece; quem nunca falou, ou fala pela Meta
-  (`Conversation.whatsappProvider`), recebe o template pela Meta. Nunca primeiro
-  contato pelo QR e nunca troca de número: sem canal para aquele paciente, o
-  disparo fica pendente.
+- **Evolution**: histórico anterior permite o lembrete no canal conhecido.
+  Sem histórico, somente a opção explícita `clinicorpQrEnabled`, com categoria
+  autorizada por ID e declaração da clínica (ver revisão de 09/10 abaixo).
+- **Duas conexões**: preserva o canal conhecido. Contato da Meta não migra para
+  QR; QR desconectado não migra para Meta. Sem canal, bloqueia com motivo.
+  Resultado incerto nunca repete, independentemente do provedor.
 
 Outras regras:
 

@@ -15,3 +15,6 @@ Impacto: categorias automáticas e ordenadas; atualização manual; tipo desconh
 Config/categorias, claim SQL, recibos, agenda manual/status e teste sandbox.
 Motivo: avaliações externas sem histórico e confirmação duplicada.
 Schema aditivo exige db push/client web+worker. PostgreSQL isolado validado.
+
+Publicação d71d73c e teste posterior aprovados: 1.619 testes, SQL real, leitura
+Clinicorp e resposta salva no sandbox. Entrega real não testada; opt-in QR desligado.

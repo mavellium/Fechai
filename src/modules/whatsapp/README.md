@@ -152,13 +152,10 @@ mostra um aviso se o token não tiver permissão para fazer essa inscrição.
 - Texto livre obedece à janela de atendimento aberta pelo cliente. Fora dela a
   Meta exige template aprovado; follow-ups e lembretes em texto livre podem ser
   recusados. A tela avisa isso sem fingir paridade que a própria Meta não oferece.
-  A exceção são os **lembretes das consultas marcadas direto no Clinicorp**:
-  esses pacientes quase nunca falaram com o número, então saem sempre por
-  template aprovado (`ScheduleConfig.metaReminderTemplate`, via
-  `sendBroadcastTemplate`). Pelo Evolution eles **nunca** vão como primeiro
-  contato — só para quem já conversou —, porque mensagem de número
-  desconhecido é o que mais leva ao bloqueio. Ver
-  `workers/follow-up-worker/clinicorp-reminders.ts` e
+  Para consultas diretas do Clinicorp, Meta usa template aprovado. QR sem
+  histórico só pela opção específica da conta, com categoria por ID e
+  declaração da clínica (revisão de 09/10 abaixo). Nenhum desses caminhos
+  troca o canal conhecido do paciente. Ver
   [ADR-005](../../../docs/decisions/ADR-005-agenda-clinicorp.md).
 - Desconectar no fechai é local: não desregistra o telefone do WABA. O webhook
   passa a ignorar a linha e as credenciais ficam preservadas para reconexão.

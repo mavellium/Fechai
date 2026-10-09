@@ -157,18 +157,15 @@ minuto seriam 1.440 chamadas por dia por clínica. Mesmas regras de tempo de
 
 O canal é o que muda, porque esse paciente quase nunca falou com o número:
 
-- **Meta**: sempre o template aprovado de `metaReminderTemplate`. Sem template,
-  a conta nem lê o Clinicorp. Falha ou resultado incerto **não é repetido**
-  (a Meta pode ter aceitado) — fecha sem `reminderSentAt`.
-- **Evolution**: **nunca primeiro contato**. Só quem tem `lastInboundAt`
-  recebe, com o texto do lembrete; os outros ficam pendentes (se escreverem
-  antes da consulta, recebem). Falha de envio tenta de novo.
+- **Meta**: template aprovado de `metaReminderTemplate`, mantendo o canal.
+- **Evolution**: histórico anterior ou opção QR específica, categoria por ID e
+  declaração da clínica. Sem canal não envia, mas lê a agenda para registrar o
+  impedimento. Aceite com ID precede histórico; incerto nunca repete.
 
-Pula o que o fechai espelhou no Clinicorp (quem lembra é a varredura de cima),
-bloqueados, "pediu para parar" e telefone inválido. O controle fica em
-`ClinicorpReminder` (id do Clinicorp + horário; remarcar reabre os disparos).
-Regras completas em `src/modules/scheduling/README.md`. Regressões:
-`tests/clinicorp-lembrete.test.ts`.
+Pula consultas espelhadas (fila local), bloqueados, pedido para parar e testes.
+`ReminderDispatch` garante claim/duplicação; `ClinicorpReminder` mantém o legado.
+Regras completas em `src/modules/scheduling/README.md`; regressões em
+`tests/clinicorp-lembrete.test.ts` e `tests/reminder-dispatch.test.ts`.
 
 ## Como rodar
 

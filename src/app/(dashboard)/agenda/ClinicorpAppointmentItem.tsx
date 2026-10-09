@@ -7,9 +7,8 @@ import { formatInZone, timeInZone } from "@/modules/scheduling/time";
 /**
  * Consulta marcada direto no Clinicorp, na lista do dia.
  *
- * Só leitura, sem Lembretes/Concluir/Cancelar: ela não é um `Appointment` do
- * fechai (ver `listClinicorpAgenda`), então essas ações não teriam onde agir. A
- * origem vai escrita, não só na cor da faixa, para ninguém procurar o botão.
+ * A consulta clínica continua só leitura (não é Appointment nosso). Confirmações
+ * usam o registro local compartilhado com o worker; alterações clínicas são lá.
  */
 export function ClinicorpAppointmentItem({
   item,
@@ -81,7 +80,7 @@ export function ClinicorpAppointmentItem({
             </p>
           )}
 
-          {confirmationsEnabled && <AppointmentConfirmation id={item.id} source="clinicorp" startsAt={item.startsAt.toISOString()} status={confirmationStatus} disabled={Boolean(item.canceled || item.startsAt <= new Date())} />}
+          {confirmationsEnabled && <AppointmentConfirmation timezone={timezone} id={item.id} source="clinicorp" startsAt={item.startsAt.toISOString()} status={confirmationStatus} disabled={Boolean(item.canceled || item.startsAt <= new Date())} />}
           <p className="mt-1.5 text-xs text-white/45">
             {item.canceled ? "Cancelada no Clinicorp. Horário liberado; sem novos lembretes." : "Marcada direto no Clinicorp. Para alterar ou cancelar, use o Clinicorp."}
           </p>

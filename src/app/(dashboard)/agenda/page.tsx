@@ -124,7 +124,7 @@ export default async function AgendaPage({
     startsAt: { gte: confirmationRange.start, lt: confirmationRange.end } },
     orderBy: { updatedAt: "asc" }, select: { sourceKey: true, startsAt: true, state: true, reason: true, provider: true, deliveryStatus: true, acceptedAt: true, updatedAt: true } });
   const confirmationStatuses = new Map<string, ReminderStatus>(confirmationRows.map((r) => [`${r.sourceKey}|${r.startsAt.getTime()}`, {
-    state: r.state, reason: r.reason, provider: r.provider, deliveryStatus: r.deliveryStatus, at: r.acceptedAt?.toISOString() ?? null,
+    state: r.state, reason: r.reason, provider: r.provider, deliveryStatus: r.deliveryStatus, at: (r.acceptedAt ?? r.updatedAt).toISOString(),
   }]));
 
 

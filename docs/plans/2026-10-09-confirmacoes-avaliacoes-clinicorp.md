@@ -1,6 +1,6 @@
 # Plano: confirmação das avaliações do Clinicorp
 
-Data: 09/10/2026. Status: implementação aprovada em validação; publicação e teste posterior autorizados.
+Data: 09/10/2026. Status: implementado e publicado; sandbox validado. Ativação QR da conta depende da declaração da clínica.
 Base inspecionada: eb9562f. Escopo: confirmar no dia anterior avaliações marcadas
 pela recepção ou pelo agente, sem depender da configuração da Meta, e evitar
 sobreposição com a confirmação manual.
@@ -166,3 +166,27 @@ após implementação. Publicar e conferir web/worker e um ciclo real da fila.
   registrar após execução. Não ativar QR de todas as contas na migração.
 
 Verificações locais concluídas: **1.619 testes**, lint e build passaram.
+
+
+## Resultado após a publicação
+
+- Commit funcional `d71d73c`; [publicação](https://github.com/mavellium/Fechai/actions/runs/37943122010)
+  concluída: schema aplicado, client gerado, web e worker saudáveis.
+- [Teste na conta autorizada](https://github.com/mavellium/Fechai/actions/runs/37944702133/attempts/2)
+  passou às 11h33 de 09/10: SQL real validou posse concorrente, manual, timeout,
+  reinício, remarcação e recibos antecipados/monotônicos. Primeira tentativa não
+  executou por timeout de conexão SSH; repetição conectou e passou.
+- Leitura real do Clinicorp para 10/10: **13 consultas**; categoria **Avaliação**
+  resolvida como `6365429488680960`. Isso identifica a categoria pelo cadastro,
+  não comprova a cor visual nem conta todas as consultas como avaliações.
+- O texto salvo foi inserido na conversa de teste existente. O agente respondeu,
+  salvou a resposta (120 caracteres), sem ferramentas ou chamadas externas
+  bloqueadas. A consulta sintética foi removida; histórico de teste preservado.
+- Nenhum envio WhatsApp ou alteração Clinicorp foi feito pelo teste. Portanto,
+  entrega no celular e confirmação/cancelamento gravados no Clinicorp **não**
+  foram comprovados. O aceite do teste substitui apenas a conferência da mensagem
+  e da resposta, conforme escolha do usuário.
+- A opção QR estava **desligada** na conta, sem declaração/categorias novas
+  gravadas. Não se inventou autorização dos pacientes. Ativar em Agentes →
+  Agendar horário → Lembretes: selecionar Avaliação, habilitar confirmação pelo
+  QR e registrar que a clínica já tem autorização, depois salvar.

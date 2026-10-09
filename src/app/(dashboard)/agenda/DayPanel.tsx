@@ -282,7 +282,7 @@ export function DayPanel({
                         kind={kind}
                         procedure={appointment.procedure}
                       />
-                      {!past && (parseReminderOverride(appointment.reminderOverride) ?? agentReminders).length > 0 && <AppointmentConfirmation id={appointment.id} source="appointment" startsAt={appointment.startsAt.toISOString()} status={confirmationStatuses.get(`${appointment.clinicorpAppointmentId ? `clinicorp:${appointment.clinicorpAppointmentId}` : `appointment:${appointment.id}`}|${appointment.startsAt.getTime()}`)} />}
+                      {!past && (parseReminderOverride(appointment.reminderOverride) ?? agentReminders).length > 0 && <AppointmentConfirmation timezone={timezone} id={appointment.id} source="appointment" startsAt={appointment.startsAt.toISOString()} status={confirmationStatuses.get(`${appointment.clinicorpAppointmentId ? `clinicorp:${appointment.clinicorpAppointmentId}` : `appointment:${appointment.id}`}|${appointment.startsAt.getTime()}`)} />}
                       {!past && <AppointmentReminders
                         id={appointment.id}
                         title={appointment.title}
