@@ -1,6 +1,6 @@
 # Scheduling — padrões
 
-Leitura de configuração (`repository.ts`):
+Config em repository.ts:
 ```ts
 const action = await prisma.tenantAction.findUnique({
   where: { agentId_key: { agentId, key: "schedule_meeting" } },
@@ -8,22 +8,15 @@ const action = await prisma.tenantAction.findUnique({
 });
 return parseScheduleConfig(action?.config);
 ```
-
-Filtro antes de enviar, inclusive override (`workers/follow-up-worker/reminders.ts`):
+Aceite em agentes/actions.ts (após validar ownership):
 ```ts
-if (!isReminderTypeAllowed(cfg, appt.serviceType)) continue;
+const consent = validateQrRiskConsent(formData);
+if (!consent.ok) return consent;
 ```
-
-`resolveScheduleServiceType` registra tipo; `resolveDuration` calcula minutos.
-
-UI: SelectMenu multiple/array; preserve seleção ao carregar. Config em TenantAction; envio no worker.
-
-Validar público, tenant, categoria ausente e envio incerto; tsc, lint, Vitest.
-
-```ts
-const claim = await claimReminder(key);
-if (!claim) return { sent: false, reason: "busy" };
-```
-Salvar ID/aceite antes do histórico. Manual fora do painel requer “Já enviei”.
-SQL smoke: `scripts/smoke-reminder-ledger.ts` só localhost:5438/fechai_reminders_test.
-Workflow manual de verificação em produção: só chaves e consulta sintéticas + sandbox.
+Não confiar em ator/data do formulário. Prova e flag no mesmo save; nenhum
+aceite por teste real da clínica. Modal inline FormFeedback + useActionState.
+Filtro isReminderTypeAllowed vale inclusive override. Claim antes do POST;
+unknown não repete. Manual fora do painel requer “Já enviei”. SQL smoke só
+localhost:5438/fechai_reminders_test. Workflow verifica chaves sintéticas e
+sandbox. Tests qr-risk-terms/weekly-availability-action/clinicorp-lembrete; UI
+isolada desktop/mobile; lint/tsc/build.

@@ -365,3 +365,12 @@ inscrição. `reminder-receipts.ts` normaliza ACKs; a rota autentica o segredo e
 resolve tenant pela instância Evolution. Meta usa assinatura HMAC e phone ID.
 `ReminderReceipt` guarda callback antecipado; `ReminderDispatch` só mostra
 entregue/lido com recibo. Timeout ou ausência de ID = desconhecido, sem repetição.
+
+### Termos antes de ativar confirmações pela Evolution
+
+A opção específica de confirmações QR exige modal com riscos, checkbox e nome
+do responsável. A prova (`clinicorpQrRiskAcceptance`) guarda usuário/data do
+servidor e texto/versão; o parser desliga flags sem prova válida. Cancelar não
+ativa; reativar pede novo aceite. Não muda as regras de canal e não libera
+Disparos/follow-up. Consentimento e deduplicação não eliminam bloqueio: Evolution
+por QR não utiliza a API oficial da Meta. API oficial também exige suas políticas.

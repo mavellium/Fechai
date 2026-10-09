@@ -1,16 +1,16 @@
 # Scheduling — leituras
 
-- `getScheduleConfig(agentId)`: agentId+chave, select config, parse; chamador valida ownership.
-- `loadClinicorpReminderTypesAction()`: requireTenant+flag → nomes únicos, sem teto de 12; erro {ok:false,error}.
-- `loadClinicorpDurationNamesAction()`: mesmo acesso, limite MAX_DURATIONS; não informa minutos.
-- `listClinicorpCategories(tenantId)`: getIntegration → /appointment/list_categories; id/nome.
-- `listClinicorpAgenda(tenantId,from,to,timezone,{fresh?})`: off/ok/error, ordenada, cache por período; worker fresh.
-- `listMonthAppointments(tenantId,year,month,timezone)`: intervalo local, início crescente, agrupa dia; contato/agente.
-- `hasConflictAnywhere(...)`: base local + Clinicorp; nunca considerar falha externa como agenda livre.
-- `getCalendarFeatures(tenantId)`: flags, desligadas na ausência/falha.
+- getScheduleConfig(agentId): chave/config → parse; chamador valida ownership.
+- parseScheduleConfig: termos ausentes/antigos/alterados/malformados tornam QR false; nenhuma assinatura inventada.
+- loadClinicorpReminderTypesAction: sessão/flag → nomes únicos, sem teto de 12.
+- loadClinicorpDurationNamesAction: mesmo acesso; MAX_DURATIONS, sem minutos.
+- listClinicorpCategories: getIntegration → list_categories; id/nome.
+- listClinicorpAgenda: off/ok/error, cache por período; worker fresh.
+- listMonthAppointments: intervalo local, início crescente, agrupa dia.
+- hasConflictAnywhere: base+Clinicorp; falha externa não significa vaga.
+- getCalendarFeatures: flags, off na ausência/falha.
 
-Auditoria sem dados pessoais: tipo_excluido/tipo_desconhecido. Conferir categoria na resposta real antes de reativar: exemplo público não garante campos.
-
-- Página/pulso: ReminderDispatch por tenant/mês; updatedAt muda versão, status sem dado sensível.
-- Antes do POST: revalida configuração ativa, consulta/horário/categoria/telefone e conexão; mudou → blocked.
-- `reconcileReminderReceipt`: tenant/provider/messageId, maior status prevalece, callback antecipado guardado.
+Página/pulso lê ReminderDispatch por tenant/mês; updatedAt muda versão. Antes
+do POST revalida config/consulta/categoria/telefone/conexão. Recibo reconciliado
+por tenant/provider/messageId; maior status prevalece. Prova do aceite é config;
+audit é best-effort. Categoria ausente restringe, notas não classificam.

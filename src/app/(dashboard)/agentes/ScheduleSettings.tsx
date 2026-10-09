@@ -1,5 +1,7 @@
 "use client";
 
+import { ClinicorpQrTermsDialog } from "./ClinicorpQrTermsDialog";
+import { errorToResult, isFrameworkSignal } from "@/components/ui/toast/save-service";
 import { startTransition, useActionState, useRef, useState } from "react";
 import { useSaveFeedback } from "@/components/ui/toast/use-save-feedback";
 import { testConfirmationMessage } from "../agenda/confirmation-test-action";
@@ -23,7 +25,7 @@ import { Input } from "@/components/ui/input";
 import { SelectMenu } from "@/components/ui/select-menu";
 import { Switch } from "@/components/ui/switch";
 import { Download } from "lucide-react";
-import { loadClinicorpDurationNamesAction, loadClinicorpReminderTypesAction, saveScheduleConfigAction } from "./actions";
+import { loadClinicorpDurationNamesAction, loadClinicorpReminderTypesAction, saveScheduleConfigAction, type Result } from "./actions";
 import { trackFormSubmission, UnsavedForm } from "@/components/ui/unsaved-changes";
 
 import { WeeklyAvailabilityGrid } from "./WeeklyAvailabilityGrid";
@@ -66,7 +68,35 @@ export function ScheduleSettings({
    */
   metaReminders?: boolean;
 }) {
-  const [state, formAction, pending] = useActionState(saveScheduleConfigAction, null);
+  const [clinicorpQrEnabled, setClinicorpQrEnabled] = useState(config.clinicorpQrEnabled);
+  const [clinicorpQrConsent, setClinicorpQrConsent] = useState(Boolean(config.clinicorpQrConsentAt));
+  const [qrTermsOpen, setQrTermsOpen] = useState(false);
+  const qrToggleRef = useRef<HTMLInputElement>(null);
+  const [state, formAction, pending] = useActionState(async (previous: Result | null, data: FormData): Promise<Result> => {
+    try {
+      const result = await saveScheduleConfigAction(previous, data);
+      if (result.ok && data.get("clinicorpQrRiskAccepted") === "true") {
+        setClinicorpQrEnabled(true);
+        setClinicorpQrConsent(true);
+        setQrTermsOpen(false);
+        const form = formRef.current;
+        if (form) {
+          // Snapshot the confirmed values before React renders them. The
+          // unsaved-form snapshot also reads controls disabled while pending.
+          for (const key of ["clinicorpQrEnabled", "clinicorpQrConsent"]) {
+            const input = form.elements.namedItem(key);
+            if (input instanceof HTMLInputElement) input.value = "true";
+          }
+          if (qrToggleRef.current) qrToggleRef.current.checked = true;
+          trackFormSubmission(form);
+        }
+      }
+      return result;
+    } catch (error) {
+      if (isFrameworkSignal(error)) throw error;
+      return { ...errorToResult(error), ok: false };
+    }
+  }, null);
   useActionToast(state, pending, { entity: "configuração de agendamento", gender: "f" });
   const [weeklyAvailability, setWeeklyAvailability] = useState(() => getWeeklyAvailability(config));
   // `minutes: null` é a linha em branco: existe enquanto a pessoa digita e é o
@@ -89,8 +119,6 @@ export function ScheduleSettings({
   const [reminderEnabled, setReminderEnabled] = useState(config.reminderEnabled);
   const [reminderAudience, setReminderAudience] = useState(config.reminderAudience);
   const [reminderTypes, setReminderTypes] = useState(config.reminderTypes);
-  const [clinicorpQrEnabled, setClinicorpQrEnabled] = useState(config.clinicorpQrEnabled);
-  const [clinicorpQrConsent, setClinicorpQrConsent] = useState(Boolean(config.clinicorpQrConsentAt));
   const [reminders, setReminders] = useState<ReminderDraft[]>(() => toDrafts(config.reminders));
   const [metaTemplate, setMetaTemplate] = useState<MetaReminderTemplate | null>(config.metaReminderTemplate ?? null);
   const [blockedDates, setBlockedDates] = useState(() => config.blockedDates);
@@ -184,6 +212,7 @@ export function ScheduleSettings({
   }
 
   return (
+    <>
     <UnsavedForm ref={formRef} result={state} label="Agendamento" onSubmit={(event) => {
       event.preventDefault();
       const data = new FormData(event.currentTarget);
@@ -380,14 +409,18 @@ export function ScheduleSettings({
           />
           {clinicorpConnected && <div className="mt-4 space-y-3 rounded-control border border-white/10 p-3">
             <label className="flex items-start gap-2 text-sm text-white/85">
-              <input type="checkbox" checked={clinicorpQrEnabled} onChange={(event) => setClinicorpQrEnabled(event.target.checked)} className="mt-1 accent-iris" />
+              <input ref={qrToggleRef} type="checkbox" checked={clinicorpQrEnabled} onChange={(event) => {
+                if (!event.target.checked) { setClinicorpQrEnabled(false); return; }
+                // The checkbox remains off until the acceptance is saved on the server.
+                if (formRef.current?.reportValidity()) setQrTermsOpen(true);
+              }} className="mt-1 accent-iris" />
               Confirmar pacientes do Clinicorp pelo WhatsApp conectado por QR, mesmo sem conversa anterior no Fechai
             </label>
             <p className="text-sm text-white/60">Escolha os tipos autorizados acima. A confirmação usa a categoria cadastrada no Clinicorp e o número conectado por QR. Contatos que falam pela Meta continuam nesse canal.</p>
-            {clinicorpQrEnabled && <label className="flex items-start gap-2 text-sm text-white/75">
-              <input type="checkbox" checked={clinicorpQrConsent} onChange={(event) => setClinicorpQrConsent(event.target.checked)} className="mt-1 accent-iris" />
-              Os pacientes dos tipos escolhidos autorizaram receber confirmações desta clínica pelo WhatsApp.
-            </label>}
+            <p className="text-xs text-white/55">A ativação exige leitura dos riscos, aceite dos termos e identificação do responsável.</p>
+            {clinicorpQrEnabled && config.clinicorpQrRiskAcceptance && <p className="text-xs text-white/65">
+              Aceite registrado por {config.clinicorpQrRiskAcceptance.responsibleName}.
+            </p>}
             {metaReminders && <MetaReminderTemplatePicker value={metaTemplate} onChange={setMetaTemplate} location={config.location} disabled={pending} />}
           </div>}
 
@@ -408,5 +441,16 @@ export function ScheduleSettings({
         Salvar configurações de agendamento
       </Button>
     </UnsavedForm>
+    {qrTermsOpen && <ClinicorpQrTermsDialog pending={pending} result={state} onClose={() => setQrTermsOpen(false)}
+      onAccept={(terms) => {
+        const form = formRef.current;
+        if (!form) return;
+        const data = new FormData(form);
+        for (const [key, value] of terms) data.set(key, value);
+        data.set("clinicorpQrEnabled", "true");
+        data.set("clinicorpQrConsent", "true");
+        startTransition(() => formAction(data));
+      }} />}
+    </>
   );
 }

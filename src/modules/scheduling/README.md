@@ -863,3 +863,26 @@ lê a agenda sem expor pacientes e testa a resposta no sandbox. A consulta
 sintética é removida; mensagens ficam para revisão. Entrega real exige número
 controlado e callback. Schema aditivo: `ReminderDispatch`/`ReminderReceipt`,
 `db push` e client gerado na imagem compartilhada web/worker.
+
+### Aceite dos riscos da Evolution (09/10/2026)
+
+Ao ligar a opção QR, `ClinicorpQrTermsDialog` apresenta termos sobre integração
+não oficial, restrição/suspensão/bloqueio do número, limites das proteções e
+alternativa pela API oficial. Exige checkbox e nome do responsável (3–120
+caracteres, com letras). Cancelar, Esc ou fechar mantém a opção desligada. A
+ativação só aparece após sucesso no servidor; erro fica inline no diálogo.
+
+`saveScheduleConfigAction` valida checkbox/versão/nome e ownership, resolve
+categorias e grava flag + `clinicorpQrRiskAcceptance` juntos no JSON da ação.
+O registro contém nome normalizado, texto integral/versão dos termos e usuário
+autenticado/data do servidor; ator/data não vêm do formulário.
+`scheduling.qr_risk_accepted` acrescenta auditoria não reversível (best-effort);
+a prova persistente é a configuração. Nenhuma migração de schema.
+
+`parseScheduleConfig` só libera QR com prova íntegra da versão atual. Flags
+antigas, declaração dos pacientes isolada e termos inválidos/antigos não
+autorizam envio. Desligar preserva o registro; reativar exige novo aceite.
+Aceitar não torna a Evolution oficial nem elimina risco de bloqueio.
+Regressões: `qr-risk-terms.test.ts`, `weekly-availability-action.test.ts` e
+`clinicorp-lembrete.test.ts`; UI isolada verifica cancelamento, validação, erro,
+ativação após sucesso e telas desktop/mobile sem mensagens externas.

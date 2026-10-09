@@ -45,6 +45,7 @@ export type AuditGroup = keyof typeof AUDIT_GROUPS;
  * aparecer como evento desconhecido.
  */
 export const AUDIT_EVENTS = {
+  "scheduling.qr_risk_accepted": { label: "Aceitou os riscos das confirmações pela Evolution", kind: "update", group: "integracoes" },
   "report.monthly_saved": { label: "Revisou as premissas do ROI mensal", kind: "update", group: "admin" },
   "report.lead_value_saved": { label: "Definiu ou corrigiu o valor do lead", kind: "update", group: "conta" },
   "report.monthly_finalized": { label: "Fechou o relatório mensal", kind: "update", group: "admin" },

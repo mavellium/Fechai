@@ -189,4 +189,25 @@ Verificações locais concluídas: **1.619 testes**, lint e build passaram.
 - A opção QR estava **desligada** na conta, sem declaração/categorias novas
   gravadas. Não se inventou autorização dos pacientes. Ativar em Agentes →
   Agendar horário → Lembretes: selecionar Avaliação, habilitar confirmação pelo
-  QR e registrar que a clínica já tem autorização, depois salvar.
+  QR, ler os termos, aceitar os riscos e informar o responsável no modal.
+  O botão “Aceitar e ativar confirmações” salva o aceite e a configuração.
+
+## Revisão: termos de risco antes da ativação
+
+Pedido de 09/10: modal para a opção Evolution, com texto sobre integração não
+oficial, restrição/suspensão/bloqueio do número, limites das proteções e API
+oficial como alternativa. Checkbox e nome obrigatórios; só ativa após gravação
+validada pelo servidor. Cancelar/Esc/fechar não ativa. Usuário/data/texto/versão
+ficam no JSON da ação e o evento vai à auditoria. Aceite antigo sem prova atual
+não libera QR; desligar preserva a prova, reativar pede novo aceite. Não se aceita
+em nome da clínica durante os testes. Sem mudança de schema.
+
+Teste local da interface utiliza o componente real em ambiente isolado: campos
+obrigatórios, cancelar/Esc, reabertura sem aceite automático, espera do servidor,
+erro inline, sucesso e layout desktop/mobile. Actions testam isolamento por
+conta, POST incompleto/forjado, normalização do nome e versão do texto.
+Verificação local: **1.644 testes**, lint e build passaram. A interface real
+`ScheduleSettings` + diálogo, em desktop/mobile com servidor simulado, validou
+também POST completo e saída após salvar sem falso aviso de rascunho. Nenhum
+aceite foi gravado para a clínica nem mensagem externa enviada.
+Resultado da publicação e teste posterior será registrado após execução.

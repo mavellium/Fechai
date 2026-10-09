@@ -43,6 +43,7 @@ vi.mock("@/modules/scheduling/reminder-dispatch", () => ({
 
 import { clinicorpWhatsappPhone, scanAndSendClinicorpReminders, sendClinicorpConfirmation } from "../workers/follow-up-worker/clinicorp-reminders";
 import { blockReminder, finishReminder } from "@/modules/scheduling/reminder-dispatch";
+import { createQrRiskAcceptance } from "@/modules/scheduling/qr-risk-terms";
 import { parseScheduleConfig } from "@/modules/scheduling/config";
 import { validateMetaReminderTemplate, type MetaReminderTemplate } from "@/modules/scheduling/meta-reminder";
 
@@ -405,6 +406,7 @@ describe("QR autorizado para avaliações externas", () => {
   beforeEach(() => {
     provider("evolution");
     config.clinicorpQrEnabled = true;
+    config.clinicorpQrRiskAcceptance = createQrRiskAcceptance("Responsável de teste", "user-test");
     config.clinicorpReminderCategoryIds = ["1"];
     config.reminderAudience = "selected_types";
     config.reminderTypes = ["Avaliação"];

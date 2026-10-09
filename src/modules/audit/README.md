@@ -50,3 +50,11 @@ Escrita: qualquer caminho autenticado (o próprio cliente gera logs ao mexer na 
 - Não substitui `LoginAttempt`: tentativa de login continua lá (caminho anônimo, volume e retenção próprios); o log só registra o **sucesso**, para a linha do tempo do admin ficar completa.
 - Não retém para sempre — ver `pruneAuditLogs()` em `query.ts`, chamado pelo daemon de manutenção.
 - Não faz o bloqueio/rate-limit de nada; só registra.
+
+## Aceite dos riscos de confirmações QR
+
+`scheduling.qr_risk_accepted` (grupo integrações, update, não reversível) registra
+a ativação após salvar configuração, com agente/tenant e texto, versão, nome,
+usuário e data do aceite. A identidade vem da sessão. A prova durável está no
+JSON `TenantAction.config.clinicorpQrRiskAcceptance`; log continua best-effort
+por contrato. Salvar novamente sem novo aceite não cria outra assinatura.

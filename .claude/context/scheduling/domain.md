@@ -1,17 +1,17 @@
 # Scheduling — domínio
 
-- `ScheduleConfig`: JSON de TenantAction (`schedule_meeting`); parse seguro e legado.
-- `ReminderRule`: minutesBefore/template/sendTime?; horário local, sem LLM.
-- Público: reminderAudience (all/selected_types) + reminderTypes; independente de duração. Ausência = all; inválido restringe.
-- `Appointment`: serviceType, remindersSent; override null segue conta, [] não envia, lista própria respeita público.
-- `ClinicorpAgendaItem`: leitura externa, categoryId/category opcionais; não cria Appointment.
-- `ClinicorpReminder`: controle por tenant/id/horário; Meta incerta não repete.
+- ScheduleConfig: JSON em TenantAction/schedule_meeting; parse seguro/legado.
+- ReminderRule: minutesBefore/template/sendTime; horário local, sem LLM.
+- Público: all/selected_types + reminderTypes, independente da duração; desconhecido excluído.
+- Appointment: override null segue conta, [] não envia; serviceType e remindersSent.
+- ClinicorpAgendaItem: só leitura; categoryId/category; não cria Appointment.
+- ClinicorpReminder: controle legado por tenant/id/horário.
+- ReminderDispatch: tenant/origem/horário/antecedência; queued/blocked/sending/sent/manual/unknown/skipped; token de posse.
+- ReminderReceipt: tenant/provedor/messageId/status; avanço monotônico.
 
-Tipos exatos sem caixa/acento: Avaliação ≠ Reavaliação. Sem tipo não envia na seleção restrita; notas não classificam. Evolution sem histórico exige opt-in específico; Meta exige template.
-
-`AvailabilityUnavailableError` impede reservar sem disponibilidade. IDs Clinicorp = strings; credenciais via getIntegration, nunca Prisma direto.
-
-`ReminderDispatch`: tenant/origem/horário/antecedência único; queued, blocked,
-sending, sent, manual, unknown, skipped. Token protege conclusão concorrente.
-`ReminderReceipt`: tenant/provedor/messageId/status único, avanço monotônico.
-QR opt-in: clinicorpQrEnabled (false), clinicorpReminderCategoryIds e consentAt.
+QR: clinicorpQrEnabled só true com QrRiskAcceptance atual e íntegro. Prova:
+version, termsText, responsibleName, acceptedByUserId, acceptedAt; nome 3–120
+caracteres com letras. Guarda no JSON, sem schema novo. Categorias por ID e
+clinicorpQrConsentAt continuam exigidos para envio. Aceite não elimina bloqueio.
+Meta exige template; canal conhecido não troca. AvailabilityUnavailableError
+impede reservar sem disponibilidade; IDs externos strings, credenciais cifradas.

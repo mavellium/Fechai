@@ -2,6 +2,16 @@
 
 Uma linha por milestone concluído (mais recente no topo).
 
+## Aceite dos riscos da Evolution antes de ativar — 2026-10-09
+
+Modal obrigatório nas confirmações QR do Clinicorp: riscos da conexão não
+oficial, checkbox e nome do responsável. Só ativa após validação/gravação de
+usuário/data/texto/versão no servidor; cancelar mantém desligado. Sem prova
+íntegra atual, flag antiga não libera envio. Audit não reversível, sem schema
+novo. Interface real verificada em desktop/mobile com servidor simulado;
+**1.644 testes**, lint e build passaram. Aceite não elimina risco de bloqueio.
+Publicação e conferência posterior: [plano](plans/2026-10-09-confirmacoes-avaliacoes-clinicorp.md).
+
 ## Confirmações Clinicorp pelo QR, agenda e teste — 2026-10-09
 
 QR opcional para categorias autorizadas por ID, confirmação manual na agenda,

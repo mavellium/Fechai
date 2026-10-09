@@ -135,7 +135,9 @@ Before touching affiliate/commission logic, read `src/modules/affiliates/README.
 
 Exceção aprovada à restrição de primeiro contato acima: só para confirmações de
 consultas do Clinicorp com `clinicorpQrEnabled` explícito, categorias autorizadas
-por ID e `clinicorpQrConsentAt` registrado ao salvar. Padrão desligado; não
+por ID, `clinicorpQrConsentAt` e `clinicorpQrRiskAcceptance` íntegro da versão atual.
+Antes de ativar: modal, checkbox e nome; ator/data/texto/versão vêm do servidor.
+Cancelar não ativa; reativar exige novo aceite. Padrão desligado; não
 ampliar a exceção a Disparos ou follow-up. Canal Meta conhecido não vira QR.
 Leia `scheduling/README.md`: manual/automático compartilham `ReminderDispatch`,
 claim antes do POST; `unknown` nunca repete automaticamente. Só recibo autenticado

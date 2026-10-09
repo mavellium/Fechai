@@ -98,3 +98,13 @@ A recepção registra confirmação manual na agenda para consumir a mesma inten
 automática. Claim SQL antes do POST, estado incerto sem repetição e recibos
 monotônicos substituem `ClinicorpReminder` como garantia de envio; os campos
 legados continuam compatíveis. Teste no sandbox não comprova entrega real.
+
+### Condição adicional: aceite dos riscos da Evolution — 09/10/2026
+
+Pedido do cliente: antes de ativar o QR, modal obrigatório com explicação de
+integração não oficial, possibilidade de restrição/suspensão/bloqueio, limites
+das proteções e alternativa oficial. Checkbox + nome do responsável; cancelar
+não ativa. Usuário autenticado/data/texto/versão são gravados junto da flag,
+com evento de auditoria não reversível. Sem registro íntegro da versão atual,
+parser e worker tratam QR como desligado; reativar pede novo aceite. O aceite
+não remove o risco nem transforma a integração em oficial. Sem schema novo.

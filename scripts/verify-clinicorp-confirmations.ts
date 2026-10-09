@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { prisma } from "@/lib/prisma";
 import { prepareConfirmationTest } from "@/modules/scheduling/confirmation-test";
 import { listClinicorpAgenda, listClinicorpCategories } from "@/modules/scheduling/clinicorp";
+import { parseScheduleConfig } from "@/modules/scheduling/config";
+import { createQrRiskAcceptance } from "@/modules/scheduling/qr-risk-terms";
 import { dayKeyInZone } from "@/modules/scheduling/time";
 import { runAgentTurn } from "@/modules/agent-engine/orchestrator";
 import { verifyReminderLedger } from "./lib/reminder-ledger-smoke";
@@ -18,7 +20,12 @@ async function main() {
   assert.ok(prepared.ok, prepared.ok ? undefined : prepared.error);
   assert.equal(prepared.lead.isTest, true); assert.equal(prepared.conversation.isTest, true);
   const { cfg } = prepared;
-  console.log(JSON.stringify({ qrEnabled: cfg.clinicorpQrEnabled, consentRecorded: Boolean(cfg.clinicorpQrConsentAt),
+  // Pure probes only: never accept terms or change the real account's setting.
+  assert.equal(parseScheduleConfig({ clinicorpQrEnabled: true, clinicorpQrConsentAt: new Date().toISOString() }).clinicorpQrEnabled, false);
+  assert.equal(parseScheduleConfig({ clinicorpQrEnabled: true,
+    clinicorpQrRiskAcceptance: createQrRiskAcceptance("Responsável de teste", "sandbox-validation") }).clinicorpQrEnabled, true);
+  console.log(JSON.stringify({ qrRiskGuardVerified: true, riskAcceptanceRecorded: Boolean(cfg.clinicorpQrRiskAcceptance),
+    qrEnabled: cfg.clinicorpQrEnabled, consentRecorded: Boolean(cfg.clinicorpQrConsentAt),
     categoryIds: cfg.clinicorpReminderCategoryIds, reminderCount: cfg.reminders.length, timezone: cfg.timezone }));
   const day = dayKeyInZone(prepared.startsAt, cfg.timezone);
   const [agenda, categories] = await Promise.all([listClinicorpAgenda(tenantId, day, day, cfg.timezone, { fresh: true }), listClinicorpCategories(tenantId)]);

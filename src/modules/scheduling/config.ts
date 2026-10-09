@@ -1,3 +1,4 @@
+import { parseQrRiskAcceptance, type QrRiskAcceptance } from "./qr-risk-terms";
 import { partsInZone } from "./time";
 import { parseMetaReminderTemplate, type MetaReminderTemplate } from "./meta-reminder";
 import { describeRanges, getWeeklyAvailability, mergeRanges, minuteLabel, parseWeeklyAvailability, type WeeklyAvailability } from "./weekly-availability";
@@ -71,6 +72,7 @@ export type ScheduleConfig = {
   /** Nomes exatos dos tipos permitidos, independentes da duração. */
   reminderTypes: string[];
   clinicorpQrEnabled: boolean;
+  clinicorpQrRiskAcceptance?: QrRiskAcceptance;
   clinicorpQrConsentAt?: string;
   clinicorpReminderCategoryIds: string[];
   /**
@@ -384,6 +386,7 @@ export function parseScheduleConfig(raw: unknown): ScheduleConfig {
   // uma linha pela metade viraria "sem nome · 60 min" no prompt, e o agente
   // ofereceria ao contato um tipo de atendimento que ninguém cadastrou.
   const metaReminderTemplate = parseMetaReminderTemplate(c.metaReminderTemplate);
+  const qrRiskAcceptance = parseQrRiskAcceptance(c.clinicorpQrRiskAcceptance);
   const seen = new Set<string>();
   const durations = Array.isArray(c.durations) ? c.durations.flatMap((raw) => {
     if (!raw || typeof raw !== "object") return [];
@@ -434,7 +437,8 @@ export function parseScheduleConfig(raw: unknown): ScheduleConfig {
     reminderAudience: c.reminderAudience === undefined || c.reminderAudience === "all"
       ? "all" : "selected_types",
     reminderTypes: parseReminderTypes(c.reminderTypes),
-    clinicorpQrEnabled: c.clinicorpQrEnabled === true,
+    clinicorpQrEnabled: c.clinicorpQrEnabled === true && Boolean(qrRiskAcceptance),
+    ...(qrRiskAcceptance ? { clinicorpQrRiskAcceptance: qrRiskAcceptance } : {}),
     ...(typeof c.clinicorpQrConsentAt === "string" ? { clinicorpQrConsentAt: c.clinicorpQrConsentAt } : {}),
     clinicorpReminderCategoryIds: Array.isArray(c.clinicorpReminderCategoryIds) ? [...new Set(c.clinicorpReminderCategoryIds.filter((id): id is string => typeof id === "string" && /^[1-9]\d*$/.test(id)))].slice(0, 100) : [],
     reminders: parseReminders(c),

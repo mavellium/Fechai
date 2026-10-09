@@ -10,6 +10,7 @@ import { planOf } from "@/modules/billing/plans";
 import { composeSystemPrompt, type PersonaAnswers } from "@/modules/agent-engine/persona";
 import { ACTION_BY_KEY, type ActionKey } from "@/modules/agent-engine/actions";
 import { createAgent, getAgentOwned, getAgentUsage } from "@/modules/agent-engine/agents";
+import { validateQrRiskConsent, createQrRiskAcceptance } from "@/modules/scheduling/qr-risk-terms";
 import { saveScheduleConfig } from "@/modules/scheduling/repository";
 import { parseWeeklyAvailability, validateWeeklyAvailability, type WeeklyAvailability } from "@/modules/scheduling/weekly-availability";
 import {
@@ -1085,7 +1086,19 @@ export async function saveScheduleConfigAction(
   const previousReminderSettings = parseScheduleConfig(existingReminderSettings?.config);
   const qrEnabled = formData.has("clinicorpQrEnabled") ? formData.get("clinicorpQrEnabled") === "true" : previousReminderSettings.clinicorpQrEnabled;
   let qrCategoryIds = previousReminderSettings.clinicorpReminderCategoryIds;
+  let qrRiskAcceptance = previousReminderSettings.clinicorpQrRiskAcceptance;
+  let newQrRiskAcceptance = false;
   if (qrEnabled) {
+    // A forged POST cannot activate without the current terms/name. Ordinary
+    // saves retain a valid acceptance; reactivation always requires a new one.
+    if (!previousReminderSettings.clinicorpQrEnabled || formData.has("clinicorpQrRiskAccepted")) {
+      const consent = validateQrRiskConsent(formData);
+      if (!consent.ok) return consent;
+      const { session } = await requireTenant();
+      if (!session.user.id) return { ok: false, error: "Entre novamente para registrar o aceite." };
+      qrRiskAcceptance = createQrRiskAcceptance(consent.responsibleName, session.user.id);
+      newQrRiskAcceptance = true;
+    }
     if (parsed.data.reminderAudience !== "selected_types" || !parsed.data.reminderTypes.length) {
       return { ok: false, error: "Para confirmar pacientes do Clinicorp pelo QR, escolha os tipos de consulta autorizados." };
     }
@@ -1101,6 +1114,7 @@ export async function saveScheduleConfigAction(
   await saveScheduleConfig(tenantId, agent.id, {
     ...parsed.data,
     clinicorpQrEnabled: qrEnabled,
+    ...(qrRiskAcceptance ? { clinicorpQrRiskAcceptance: qrRiskAcceptance } : {}),
     clinicorpReminderCategoryIds: qrCategoryIds,
     ...(qrEnabled ? { clinicorpQrConsentAt: previousReminderSettings.clinicorpQrConsentAt ?? new Date().toISOString() } : {}),
     ...(weeklyAvailability !== undefined ? { weeklyAvailability, breaks: [] } : {}),
@@ -1108,9 +1122,16 @@ export async function saveScheduleConfigAction(
     workdays,
     ...(metaTemplate.template ? { metaReminderTemplate: metaTemplate.template } : {}),
   });
+  if (newQrRiskAcceptance) {
+    await recordAudit({ event: "scheduling.qr_risk_accepted", tenantId,
+      target: { type: "Agent", id: agent.id, label: agent.name },
+      after: { clinicorpQrEnabled: true, clinicorpQrRiskAcceptance: qrRiskAcceptance },
+      meta: { agentId: agent.id, provider: "evolution" },
+    });
+  }
   revalidateAgent(agent.id);
   revalidatePath("/agenda");
-  return { ok: true, info: "Configurações de agendamento salvas." };
+  return { ok: true, info: newQrRiskAcceptance ? "Termos registrados e confirmações pelo QR ativadas." : "Configurações de agendamento salvas." };
 }
 
 /**
