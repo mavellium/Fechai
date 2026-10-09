@@ -6,7 +6,9 @@ Atualize ao alterar o módulo.
 
 qr-risk-terms, parser, action/modal, audit e testes. Checkbox/nome/versão
 obrigatórios; prova com ator/data/texto do servidor. Sem prova, QR fica off.
-Reativar exige novo aceite; cancelar não ativa. Sem schema novo.
+Reativar exige novo aceite; cancelar não ativa. Sem schema novo. ad77741
+publicado; 1.644 testes/lint/build, UI isolada e teste posterior em produção
+passaram. QR real off/sem aceite; runtime, SQL, Clinicorp e sandbox verificados.
 
 ### 2026-10-09 — Confirmações QR autorizadas
 

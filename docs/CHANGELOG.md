@@ -10,7 +10,9 @@ usuário/data/texto/versão no servidor; cancelar mantém desligado. Sem prova
 íntegra atual, flag antiga não libera envio. Audit não reversível, sem schema
 novo. Interface real verificada em desktop/mobile com servidor simulado;
 **1.644 testes**, lint e build passaram. Aceite não elimina risco de bloqueio.
-Publicação e conferência posterior: [plano](plans/2026-10-09-confirmacoes-avaliacoes-clinicorp.md).
+Publicação `ad77741` concluída; proteção dos termos, SQL e resposta no sandbox
+passaram em produção. QR permanece desligado sem aceite da clínica; nenhum
+WhatsApp real foi enviado. Resultados: [plano](plans/2026-10-09-confirmacoes-avaliacoes-clinicorp.md).
 
 ## Confirmações Clinicorp pelo QR, agenda e teste — 2026-10-09
 

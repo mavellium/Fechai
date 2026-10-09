@@ -210,4 +210,15 @@ Verificação local: **1.644 testes**, lint e build passaram. A interface real
 `ScheduleSettings` + diálogo, em desktop/mobile com servidor simulado, validou
 também POST completo e saída após salvar sem falso aviso de rascunho. Nenhum
 aceite foi gravado para a clínica nem mensagem externa enviada.
-Resultado da publicação e teste posterior será registrado após execução.
+Publicação funcional `ad77741`: [execução concluída](https://github.com/mavellium/Fechai/actions/runs/37949905017),
+web/worker saudáveis e HTTP 200 com banco/Redis OK. [Teste posterior](https://github.com/mavellium/Fechai/actions/runs/37950488018)
+passou às 12h16 de 09/10: proteção dos termos validada no runtime publicado,
+SQL de claim/recibos, leitura do Clinicorp e resposta do agente no sandbox salva
+(202 caracteres, nenhuma ferramenta/chamada bloqueada). A consulta sintética
+foi removida. QR continuou desligado, sem aceite ou consentimento registrados
+para a clínica; não houve envio WhatsApp nem escrita no Clinicorp.
+
+A interface foi testada localmente com os componentes reais e servidor simulado;
+o acesso de navegador ao painel de produção não foi verificado nesta execução.
+O teste no sandbox não comprova entrega no celular. A atualização documental
+posterior não altera o código funcional testado.
